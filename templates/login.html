@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZEUS • ورود</title><link rel="stylesheet" href="/static/app.css"></head>
+<body class="login-shell"><div class="ambient a1"></div><div class="ambient a2"></div><main class="login-card glass">
+  <div class="brand-mark">Z</div><h1>ZEUS</h1><p class="muted">پنل مدیریت Railway</p>
+  <form id="loginForm"><label>رمز عبور مدیر</label><div class="password-wrap"><input id="password" type="password" autocomplete="current-password" placeholder="رمز عبور را وارد کنید" autofocus><button type="button" id="show" class="icon-btn">◉</button></div><button class="primary" type="submit">ورود به پنل</button><div id="err" class="error"></div></form>
+  <div class="login-hint">رمز اولیه: <b>admin</b></div>
+</main><script>const f=document.getElementById('loginForm'),p=document.getElementById('password'),e=document.getElementById('err');document.getElementById('show').onclick=()=>p.type=p.type==='password'?'text':'password';f.onsubmit=async x=>{x.preventDefault();e.textContent='';try{let r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p.value})});let j=await r.json();if(!r.ok)throw Error(j.detail||'ورود ناموفق بود');location='/'}catch(err){e.textContent=err.message}}</script></body></html>

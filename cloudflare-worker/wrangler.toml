@@ -1,0 +1,7 @@
+name = "zeus-ws-front"
+main = "worker.js"
+compatibility_date = "2026-09-17"
+
+[vars]
+# Set this to your Railway public HTTPS URL, e.g. https://zeus-production.up.railway.app
+ZEUS_ORIGIN = ""

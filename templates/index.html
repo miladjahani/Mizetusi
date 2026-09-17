@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZEUS • Dashboard</title><link rel="stylesheet" href="/static/app.css"></head>
+<body class="app-shell">
+<div class="ambient a1"></div><div class="ambient a2"></div>
+<div class="app-layout">
+  <aside class="sidebar glass">
+    <div class="brand"><div class="brand-mark small">Z</div><div><b>ZEUS</b><span>Railway Control</span></div></div>
+    <nav><button class="nav active" data-section="dashboard">⌂ <span>داشبورد</span></button><button class="nav" data-section="nodes">◈ <span>نودها</span></button><button class="nav" data-section="users">♙ <span>کاربران</span></button><button class="nav" data-section="cloudflare">☁ <span>Cloudflare</span></button><button class="nav" data-section="settings">⚙ <span>تنظیمات</span></button></nav>
+    <div class="sidebar-bottom"><div class="online-dot"><i></i> سیستم آنلاین</div><button id="out" class="logout">خروج</button></div>
+  </aside>
+  <main class="content">
+    <header class="topbar glass"><div><div class="eyebrow">ZEUS CONTROL CENTER</div><h1 id="title">داشبورد</h1></div><div class="top-actions"><span class="status"><i></i> Online</span><button id="refresh" class="icon-btn">↻</button></div></header>
+    <section id="dashboard" class="section active">
+      <div class="hero glass"><div><span class="eyebrow">REAL-TIME NETWORK</span><h2>کنترل کامل زیرساخت در یک محیط شیشه‌ای</h2><p>وضعیت کاربران، نودهای Railway و Cloudflare و سلامت سرویس‌ها را از یکجا مدیریت کنید.</p></div><div class="hero-badge">Z</div></div>
+      <div class="stats"><div class="stat glass"><span>کاربران</span><b id="users">—</b><small>کل کاربران</small></div><div class="stat glass"><span>فعال</span><b id="active">—</b><small>کاربر فعال</small></div><div class="stat glass"><span>نودها</span><b id="nodes">—</b><small>در کاتالوگ</small></div><div class="stat glass"><span>CF IP</span><b id="cfips">—</b><small>IP سالم</small></div></div>
+      <div class="two-col"><div class="panel glass"><div class="panel-head"><h3>Proxy Core</h3><span id="coreState" class="tag">—</span></div><div class="metric"><span>VLESS / Trojan</span><b id="coreMode">WebSocket / TCP</b></div></div><div class="panel glass"><div class="panel-head"><h3>نودهای فعال</h3><button class="link-btn" data-section="nodes">مشاهده همه</button></div><div id="nodePreview" class="node-list"></div></div><div class="panel glass"><div class="panel-head"><h3>وضعیت Cloudflare</h3><span id="workerState" class="tag">—</span></div><p id="workerDesc" class="muted">در حال بررسی تنظیمات Worker...</p><div class="metric"><span>Worker URL</span><b id="workerHost">—</b></div></div></div>
+    </section>
+    <section id="nodes" class="section"><div class="panel glass"><div class="panel-head"><div><h2>Node Catalog</h2><p class="muted">Railway + Cloudflare سالم، همگام با Subscription Generator</p></div><button id="sync" class="primary compact">Sync Nodes</button></div><div id="nodeList" class="node-list"></div></div></section>
+    <section id="users" class="section"><div class="panel glass"><div class="panel-head"><div><h2>کاربران</h2><p class="muted">مدیریت کاربران و مصرف</p></div></div><div id="table" class="user-list"></div></div></section>
+    <section id="cloudflare" class="section"><div class="panel glass"><div class="panel-head"><div><h2>Cloudflare Worker</h2><p class="muted">Worker اختیاری است؛ Probe از سمت Railway انجام می‌شود.</p></div><span id="cfTag" class="tag">—</span></div><label>Worker URL</label><input id="workerUrl" placeholder="https://your-worker.workers.dev"><label>API Key <span class="muted">اختیاری</span></label><input id="workerKey" type="password" placeholder="Worker API key"><div class="actions"><button id="saveWorker" class="primary">ذخیره و Sync</button><button id="refreshCf" class="secondary">Probe Cloudflare</button></div></div></section>
+    <section id="settings" class="section"><div class="panel glass"><h2>تنظیمات</h2><div class="setting-row"><div><b>ورود مدیریت</b><p class="muted">رمز اولیه پنل در نصب جدید: <code>admin</code></p></div><span class="tag">Admin</span></div><div class="setting-row"><div><b>Subscription</b><p class="muted">هر درخواست از Node Catalog فعلی تولید می‌شود.</p></div><span class="tag success">LIVE</span></div></div></section>
+  </main>
+</div>
+<script>
+const $=id=>document.getElementById(id); const api=async(url,opt)=>{let r=await fetch(url,opt);let j=await r.json();if(!r.ok)throw Error(j.detail||'Request failed');return j};
+const titles={dashboard:'داشبورد',nodes:'نودها',users:'کاربران',cloudflare:'Cloudflare',settings:'تنظیمات'};
+function show(name){document.querySelectorAll('.section').forEach(x=>x.classList.toggle('active',x.id===name));document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x.dataset.section===name));$('title').textContent=titles[name];if(name==='nodes')loadNodes();if(name==='users')loadUsers();}
+document.querySelectorAll('[data-section]').forEach(b=>b.onclick=()=>show(b.dataset.section));
+async function loadStats(){let s=await api('/api/stats');$('users').textContent=s.users;$('active').textContent=s.active_users;$('nodes').textContent=s.nodes;$('cfips').textContent=s.cf_ips}
+async function loadCore(){try{let c=await api('/api/core/status');$('coreState').textContent=c.running?'Running':'Stopped';$('coreState').className='tag '+(c.running?'success':'');$('coreMode').textContent=c.protocols.join(' / ')+' · '+c.transport}catch(e){$('coreState').textContent='Unknown'}}
+async function loadWorker(){let w=await api('/api/settings/cloudflare-worker');$('workerUrl').value=w.url||'';$('workerState').textContent=w.configured?'Configured':'Railway only';$('workerState').className='tag '+(w.configured?'success':'');$('cfTag').textContent=w.configured?'Configured':'Optional';$('workerHost').textContent=w.url?new URL(w.url).hostname:'—';$('workerDesc').textContent=w.configured?'Worker متصل است و Node Catalog از IPهای سالم آن استفاده می‌کند.':'Worker تنظیم نشده؛ ZEUS در حالت Railway-only کار می‌کند.'}
+function nodeHtml(n){return `<div class="node"><div class="node-icon">${n.kind==='cloudflare'?'☁':'R'}</div><div class="node-main"><b>${n.name}</b><span>${n.kind} · ${n.server}:${n.port}${n.sni?' · SNI '+n.sni:''}</span></div><span class="latency ${n.latency_ms!=null?'good':''}">${n.latency_ms!=null?n.latency_ms+' ms':'—'}</span></div>`}
+async function loadNodes(){let n=await api('/api/nodes');$('nodeList').innerHTML=n.map(nodeHtml).join('')||'<div class="empty">No nodes</div>';$('nodePreview').innerHTML=n.slice(0,5).map(nodeHtml).join('')||'<div class="empty">No nodes</div>'}
+async function loadUsers(){let u=await api('/api/users');$('table').innerHTML=u.map(x=>`<div class="user-row"><div class="avatar">${x.username[0].toUpperCase()}</div><div><b>${x.username}</b><span>${x.protocol}</span></div><strong>${Number(x.used_gb||0).toFixed(3)} GB</strong><span class="tag ${x.is_active?'success':''}">${x.is_active?'Active':'Disabled'}</span></div>`).join('')||'<div class="empty">No users</div>'}
+async function refreshAll(){try{await Promise.all([loadStats(),loadCore(),loadWorker(),loadNodes()])}catch(e){console.error(e)}}
+$('refresh').onclick=refreshAll;$('sync').onclick=async()=>{try{await api('/api/nodes/sync',{method:'POST'});await refreshAll()}catch(e){alert(e.message)}};
+$('saveWorker').onclick=async()=>{try{await api('/api/settings/cloudflare-worker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('workerUrl').value,api_key:$('workerKey').value})});await refreshAll();show('cloudflare')}catch(e){alert(e.message)}};
+$('refreshCf').onclick=async()=>{try{await api('/api/cloudflare/refresh',{method:'POST'});await refreshAll()}catch(e){alert(e.message)}};$('out').onclick=async()=>{await fetch('/api/logout',{method:'POST'});location='/login'};refreshAll();
+</script></body></html>
