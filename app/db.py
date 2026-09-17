@@ -1,8 +1,17 @@
 import os, sqlite3, threading
 from contextlib import contextmanager
 
-DB_URL = os.getenv('DATABASE_URL') or os.getenv('database_url') or 'sqlite:////data/zeus.db'
-SQLITE_PATH = os.getenv('SQLITE_PATH', '/data/zeus.db')
+DEFAULT_SQLITE = '/data/nexus.db'
+LEGACY_SQLITE = '/data/zeus.db'
+
+def _default_sqlite():
+    # Keep reading the pre-rebrand database file so an existing Railway volume
+    # does not restart empty after the rename.
+    if not os.path.exists(DEFAULT_SQLITE) and os.path.exists(LEGACY_SQLITE): return LEGACY_SQLITE
+    return DEFAULT_SQLITE
+
+SQLITE_PATH = os.getenv('SQLITE_PATH') or _default_sqlite()
+DB_URL = os.getenv('DATABASE_URL') or os.getenv('database_url') or ('sqlite:///' + SQLITE_PATH)
 _LOCK = threading.RLock()
 
 def is_pg(): return DB_URL.startswith(('postgres://','postgresql://'))

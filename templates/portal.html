@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#05080f">
+<meta name="robots" content="noindex,nofollow">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="{{ brand.app_name or 'NEXUS' }}">
+<title>{{ p.username }} · {{ brand.app_name or 'NEXUS' }} — پنجره وضعیت سابلینک</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icons/nexus.svg" type="image/svg+xml">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<style>
+  .portal{max-width:1060px;margin:0 auto;padding:18px 15px 64px;display:grid;gap:15px;position:relative;z-index:1}
+  .p-head{display:flex;align-items:center;gap:13px;flex-wrap:wrap}
+  .p-head .who{flex:1;min-width:180px}
+  .p-head .who b{display:block;font-size:17px}
+  .p-head .who span{display:block;font-size:11px;color:var(--muted);margin-top:3px;font-family:var(--mono);direction:ltr;text-align:right}
+  .portal h2{font-size:14.5px;margin:2px 0 10px;display:flex;align-items:center;gap:8px}
+  .portal h2 .count{font-size:10.5px;color:var(--muted);font-family:var(--mono);font-weight:500}
+  .client-card{border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:4px}
+  .client-card .top{display:flex;align-items:center;gap:10px}
+  .client-card .top b{font-size:13.5px}
+  .client-card .plat{font-size:10px;color:var(--muted)}
+  .client-card .note{font-size:10.5px;color:var(--muted);line-height:1.7;margin:6px 0 0}
+  .acts{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+  .chips .copy-btn{padding:6px 9px;font-size:10.5px;display:inline-flex;gap:6px;align-items:center}
+  .notice{border-radius:16px;padding:13px 15px;font-size:12.5px;line-height:1.8;border:1px solid rgba(255,107,129,.28);background:rgba(255,107,129,.08);color:#ffc3cc}
+  .notice.info{border-color:rgba(90,209,255,.26);background:rgba(90,209,255,.07);color:#bfe2ff}
+  .node-row .kind{font-size:9.5px;padding:4px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .node-row .kind.cf{color:#ffc785;border-color:rgba(255,168,60,.28);background:rgba(255,168,60,.08)}
+  .node-row .kind.rw{color:#9fdcff;border-color:rgba(90,209,255,.26);background:rgba(90,209,255,.08)}
+  .node-acts{display:flex;gap:6px;flex:0 0 auto}
+  .usage-card{display:grid;gap:14px}
+  .usage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px}
+  .u-mini{border:1px solid var(--line);border-radius:15px;padding:12px;background:rgba(255,255,255,.025)}
+  .u-mini .lbl{font-size:10.5px;color:var(--muted)}
+  .u-mini .val{font-family:var(--mono);font-size:19px;font-weight:700;margin-top:7px;direction:ltr;text-align:right}
+  .u-mini .val small{font-family:Vazirmatn;font-size:11px;color:var(--muted);margin-inline-start:4px}
+  .big-bar{height:11px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden;border:1px solid var(--line)}
+  .big-bar i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,#5ad1ff,#8b7bff);transition:width .8s var(--ease)}
+  .big-bar.warn i{background:linear-gradient(90deg,#ffc85c,#ff9f5c)}
+  .big-bar.bad i{background:linear-gradient(90deg,#ff8b9c,#ff6b81)}
+  .portal-foot{text-align:center;color:var(--muted-2);font-size:10.5px;line-height:2}
+  .tbtn svg,.copy-btn svg,.icon-btn svg{width:13px;height:13px}
+</style>
+</head>
+<body>
+<svg class="sr" aria-hidden="true"><defs>
+  <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5.5 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v.5"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M4.5 19.5h15"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-13.7-5.3L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 13.7 5.3L20 16"/><path d="M20 20v-4h-4"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5.6c0 4.3 2.9 7.9 7 9.4 4.1-1.5 7-5.1 7-9.4V6z"/><path d="m9.2 12 2 2 3.6-4"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3 5.5 13.4h5L10 21l8.2-10.6h-5z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M12 7.6V12l3 1.8"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 13.4a3.6 3.6 0 0 0 5.1 0l3-3a3.6 3.6 0 0 0-5.1-5.1l-1 1"/><path d="M13.4 10.6a3.6 3.6 0 0 0-5.1 0l-3 3a3.6 3.6 0 0 0 5.1 5.1l1-1"/></symbol>
+</defs></svg>
+
+<div class="aurora"><span></span><span></span><span></span></div>
+<div class="grid-lines"></div>
+
+<main class="portal">
+  <header class="glass topbar">
+    <div class="brand-mark" style="width:44px;height:44px;flex:0 0 44px;border-radius:15px"><img src="/static/icons/nexus.svg" alt="{{ brand.app_name or 'NEXUS' }}" width="40" height="40"></div>
+    <div class="p-head" style="flex:1">
+      <div class="who">
+        <b>{{ p.username }}</b>
+        <span dir="ltr">{{ p.protocol|upper }} · {{ p.fingerprint }}{% if p.fragment %} · fragment {{ p.fragment }}{% endif %}</span>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span class="pill {% if p.allowed %}ok{% else %}bad{% endif %}" id="statusPill"><i class="dot{% if not p.allowed %} bad{% endif %}"></i> <span id="statusText">{{ p.reason_label }}</span></span>
+      <span class="pill info"><svg width="13" height="13"><use href="#i-clock"/></svg> <span id="clock">--:--:--</span></span>
+      <button class="tbtn" id="btnRefresh"><svg><use href="#i-refresh"/></svg> بروزرسانی</button>
+    </div>
+  </header>
+
+  {% if not p.allowed %}
+  <div class="notice">
+    این اشتراک در حال حاضر فعال نیست ({{ p.reason_label }}). برای ادامه با پشتیبانی تماس بگیرید یا از پنل مدیریت، کاربر را تمدید/فعال کنید.
+  </div>
+  {% endif %}
+
+  <section class="glass sub-card usage-card">
+    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-zap"/></svg> وضعیت مصرف</h2>
+    <div>
+      <div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-bottom:8px">
+        <span>مصرف‌شده <b id="usedText" style="font-family:var(--mono);color:#c6d8f2;direction:ltr">{{ '%.2f'|format(p.used_gb) }}</b> گیگابایت</span>
+        <span>{% if p.limit_gb %}سقف <b style="font-family:var(--mono);color:#c6d8f2;direction:ltr">{{ '%.2f'|format(p.limit_gb) }}</b> گیگابایت{% else %}حجم نامحدود{% endif %}</span>
+      </div>
+      <div class="big-bar" id="quotaBar"><i style="width:{{ p.quota_pct }}%"></i></div>
+    </div>
+    <div class="usage-grid">
+      <div class="u-mini"><div class="lbl">باقی‌مانده</div><div class="val" id="remainingText">{% if p.limit_gb %}{{ '%.2f'|format([p.limit_gb - p.used_gb, 0]|max) }}<small>گیگابایت</small>{% else %}نامحدود{% endif %}</div></div>
+      <div class="u-mini"><div class="lbl">اعتبار</div><div class="val" id="expiryText"{% if p.expires_at %} data-expiry="{{ p.expires_at }}"{% endif %}>{% if p.expires_at %}—{% else %}بدون انقضا{% endif %}</div></div>
+      <div class="u-mini"><div class="lbl">دستگاه‌های همزمان</div><div class="val">{{ p.ip_limit or '∞' }}</div></div>
+      <div class="u-mini"><div class="lbl">درخواست‌ها</div><div class="val">{{ p.used_req }}<small>از {{ p.limit_req or '∞' }}</small></div></div>
+      <div class="u-mini"><div class="lbl">نودهای آنلاین</div><div class="val"><span id="nodesOnline">{{ p.nodes_online }}</span><small>از {{ p.nodes_total }}</small></div></div>
+      <div class="u-mini"><div class="lbl">شروع از اولین اتصال</div><div class="val" style="font-size:13px">{{ 'فعال' if p.start_on_first_connect else 'خاموش' }}</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-link"/></svg> لینک اشتراک هوشمند <span class="count">سریع‌ترین نود بر اساس پینگ</span></h2>
+    <div class="link-box">
+      <div class="lb-main">
+        <b>اتصال هوشمند — همه کلاینت‌ها</b>
+        <code>{{ p.smart_url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ p.smart_url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+    </div>
+    <div class="link-box">
+      <div class="lb-main">
+        <b>لینک همین پنجره وضعیت (برای اشتراک‌گذاری یا بوکمارک)</b>
+        <code>{{ p.portal_url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ p.portal_url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+    </div>
+  </section>
+
+  <section>
+    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-shield"/></svg> سابلینک اختصاصی هر کلاینت <span class="count">{{ p.clients|length }} کلاینت</span></h2>
+    <div class="card-grid">
+      {% for c in p.clients %}
+      <div class="glass client-card">
+        <div class="top">
+          <b>{{ c.name }}</b>
+          <span class="plat">{{ c.platform }}</span>
+        </div>
+        <span class="pill info" style="align-self:flex-start">{{ c.format_label }}</span>
+        {% if c.note %}<p class="note">{{ c.note }}</p>{% endif %}
+        <div class="link-box">
+          <div class="lb-main"><code>{{ c.url }}</code></div>
+          <button class="copy-btn" data-copy="{{ c.url }}" title="کپی سابلینک"><svg><use href="#i-copy"/></svg></button>
+        </div>
+        <div class="acts">
+          {% if c.download %}<a class="tbtn" href="{{ c.download }}" target="_blank" rel="noopener"><svg><use href="#i-download"/></svg> دانلود کلاینت</a>{% endif %}
+        </div>
+        {% if c.alternatives %}
+        <div class="chips">
+          {% for alt in c.alternatives %}
+          <button class="copy-btn" data-copy="{{ alt.url }}"><svg><use href="#i-copy"/></svg> {{ alt.label }}</button>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section>
+    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-zap"/></svg> نودها <span class="count"><span id="nodesOnline2">{{ p.nodes_online }}</span> از {{ p.nodes_total }} آنلاین · مرتب‌شده بر اساس پینگ</span></h2>
+    <div class="glass sub-card" id="nodeList">
+      {% for n in p.nodes %}
+      <div class="node-row">
+        <div class="node-icon{% if n.kind == 'cloudflare' %} cf{% endif %}">{{ 'CF' if n.kind == 'cloudflare' else 'RW' }}</div>
+        <div class="node-main">
+          <b>{{ n.name }}</b>
+          <span>{{ n.server }}:{{ n.port }}</span>
+        </div>
+        <span class="kind {% if n.kind == 'cloudflare' %}cf{% else %}rw{% endif %}">{{ 'Cloudflare IP' if n.kind == 'cloudflare' else 'Railway' }}</span>
+        <span class="lat {% if not n.online %}off{% elif n.latency_ms < 120 %}good{% elif n.latency_ms < 320 %}mid{% else %}bad{% endif %}" data-latency="{{ n.name }}">
+          {% if n.online %}{{ '%.0f'|format(n.latency_ms) }} ms{% else %}قطع{% endif %}
+        </span>
+        <div class="node-acts">
+          <button class="copy-btn" data-copy="{{ n.subscription }}" title="سابلینک این نود"><svg><use href="#i-copy"/></svg></button>
+          <button class="copy-btn" data-copy="{{ n.subscription_all }}" title="سابلینک این نود — همه ترکیب‌ها"><svg><use href="#i-copy"/></svg> همه</button>
+        </div>
+      </div>
+      {% endfor %}
+      {% if not p.nodes %}<div class="empty">هنوز نودی ثبت نشده است.</div>{% endif %}
+    </div>
+  </section>
+
+  <footer class="portal-foot">
+    NEXUS · پنجره وضعیت سابلینک — این صفحه فقط برای شماست، لینک آن را با کسی که نمی‌شناسید به اشتراک نگذارید.<br>
+    آخرین بروزرسانی سرور: <span id="serverTime" dir="ltr">{{ p.server_time }}</span>
+  </footer>
+</main>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+(() => {
+  'use strict';
+  const TOKEN = {{ p.token|tojson }};
+  const toasts = document.getElementById('toasts');
+  const nf = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 2 });
+  const timeFmt = new Intl.DateTimeFormat('fa-IR-u-nu-latn', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Tehran' });
+
+  const toast = (message, kind = 'ok') => {
+    const el = document.createElement('div');
+    el.className = 'toast ' + kind;
+    el.textContent = message;
+    toasts.appendChild(el);
+    setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 320); }, 2400);
+  };
+
+  document.addEventListener('click', async (event) => {
+    const btn = event.target.closest('[data-copy]');
+    if (!btn) return;
+    const value = btn.dataset.copy;
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch (error) {
+      const area = document.createElement('textarea');
+      area.value = value; document.body.appendChild(area); area.select();
+      try { document.execCommand('copy'); } catch (e) { toast('کپی نشد؛ دستی انتخاب کنید', 'err'); }
+      area.remove();
+    }
+    btn.classList.add('done');
+    setTimeout(() => btn.classList.remove('done'), 1400);
+    toast('کپی شد');
+  });
+
+  const until = (seconds) => {
+    if (seconds === null || seconds === undefined) return 'بدون انقضا';
+    const total = Math.max(0, Math.round(seconds));
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor((total % 86400) / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    return days > 0 ? `${nf.format(days)} روز و ${nf.format(hours)} ساعت` : (hours > 0 ? `${nf.format(hours)} ساعت و ${nf.format(minutes)} دقیقه` : `${nf.format(minutes)} دقیقه`);
+  };
+
+  const tick = () => {
+    document.getElementById('clock').textContent = timeFmt.format(new Date());
+    const expiry = document.getElementById('expiryText');
+    if (expiry && expiry.dataset.expiry) expiry.textContent = until(Number(expiry.dataset.expiry) - Date.now() / 1000);
+    const online = document.getElementById('statusText');
+    if (online) online.textContent = online.textContent || '';
+  };
+
+  const refresh = async (silent = true) => {
+    try {
+      const response = await fetch('/portal/' + encodeURIComponent(TOKEN) + '/json', { headers: { 'accept': 'application/json' }, cache: 'no-store' });
+      if (!response.ok) throw new Error('status ' + response.status);
+      const data = await response.json();
+      document.getElementById('usedText').textContent = data.used_gb.toFixed(2);
+      const remaining = document.getElementById('remainingText');
+      remaining.innerHTML = data.limit_gb ? (Math.max(0, data.limit_gb - data.used_gb).toFixed(2) + '<small>گیگابایت</small>') : 'نامحدود';
+      const bar = document.getElementById('quotaBar');
+      bar.querySelector('i').style.width = (data.limit_gb ? Math.min(100, (data.used_gb / data.limit_gb) * 100) : 0) + '%';
+      bar.classList.toggle('warn', !!(data.limit_gb && data.used_gb / data.limit_gb >= 0.8));
+      bar.classList.toggle('bad', !!(!data.allowed && data.reason === 'quota'));
+      const expiry = document.getElementById('expiryText');
+      if (data.expires_at) { expiry.dataset.expiry = data.expires_at; expiry.textContent = until(data.expires_at - Date.now() / 1000); }
+      document.getElementById('nodesOnline').textContent = data.nodes_online;
+      document.getElementById('nodesOnline2').textContent = data.nodes_online;
+      document.getElementById('serverTime').textContent = String(data.server_time);
+      for (const node of data.nodes) {
+        const el = document.querySelector('[data-latency="' + CSS.escape(node.name) + '"]');
+        if (!el) continue;
+        el.textContent = node.online ? Math.round(node.latency_ms) + ' ms' : 'قطع';
+        el.className = 'lat ' + (!node.online ? 'off' : node.latency_ms < 120 ? 'good' : node.latency_ms < 320 ? 'mid' : 'bad');
+      }
+      const pill = document.getElementById('statusPill');
+      pill.className = 'pill ' + (data.allowed ? 'ok' : 'bad');
+      document.getElementById('statusText').textContent = data.reason_label;
+      if (!silent) toast('بروزرسانی شد');
+    } catch (error) {
+      if (!silent) toast('بروزرسانی ناموفق بود', 'err');
+    }
+  };
+
+  document.getElementById('btnRefresh').addEventListener('click', () => refresh(false));
+  tick();
+  setInterval(tick, 1000);
+  setInterval(() => refresh(true), 25000);
+
+  // Cache the shell so this window still opens offline.
+  if ('serviceWorker' in navigator) window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {}); });
+})();
+</script>
+</body>
+</html>

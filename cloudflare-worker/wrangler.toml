@@ -1,7 +1,11 @@
-name = "zeus-ws-front"
+name = "nexus-ws-front"
 main = "worker.js"
 compatibility_date = "2026-09-17"
 
 [vars]
-# Set this to your Railway public HTTPS URL, e.g. https://zeus-production.up.railway.app
-ZEUS_ORIGIN = ""
+# Your Railway public HTTPS URL, e.g. https://nexus-production.up.railway.app
+# The panel serves worker.js with this value already filled into ORIGIN_FALLBACK,
+# so setting it here is optional but recommended (the variable wins).
+NEXUS_ORIGIN = ""
+# Optional comma-separated Host allow-list; keeps the edge from being an open relay.
+ALLOWED_HOSTS = ""

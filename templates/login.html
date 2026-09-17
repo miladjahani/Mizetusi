@@ -1,7 +1,122 @@
 <!doctype html>
-<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZEUS • ورود</title><link rel="stylesheet" href="/static/app.css"></head>
-<body class="login-shell"><div class="ambient a1"></div><div class="ambient a2"></div><main class="login-card glass">
-  <div class="brand-mark">Z</div><h1>ZEUS</h1><p class="muted">پنل مدیریت Railway</p>
-  <form id="loginForm"><label>رمز عبور مدیر</label><div class="password-wrap"><input id="password" type="password" autocomplete="current-password" placeholder="رمز عبور را وارد کنید" autofocus><button type="button" id="show" class="icon-btn">◉</button></div><button class="primary" type="submit">ورود به پنل</button><div id="err" class="error"></div></form>
-  <div class="login-hint">رمز اولیه: <b>admin</b></div>
-</main><script>const f=document.getElementById('loginForm'),p=document.getElementById('password'),e=document.getElementById('err');document.getElementById('show').onclick=()=>p.type=p.type==='password'?'text':'password';f.onsubmit=async x=>{x.preventDefault();e.textContent='';try{let r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p.value})});let j=await r.json();if(!r.ok)throw Error(j.detail||'ورود ناموفق بود');location='/'}catch(err){e.textContent=err.message}}</script></body></html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#05080f">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="{{ brand.app_name or 'NEXUS' }}">
+<title>{{ brand.app_name or 'NEXUS' }} • ورود به مرکز کنترل</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icons/nexus.svg" type="image/svg+xml">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+</head>
+<body>
+<svg class="sr" aria-hidden="true"><defs>
+  <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 12S6 5.8 12 5.8 21.4 12 21.4 12 18 18.2 12 18.2 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.9"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5.6c0 4.3 2.9 7.9 7 9.4 4.1-1.5 7-5.1 7-9.4V6z"/><path d="m9.2 12 2 2 3.6-4"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3 5.5 13.4h5L10 21l8.2-10.6h-5z"/></symbol>
+</defs></svg>
+
+<div class="aurora"><span></span><span></span><span></span></div>
+<div class="grid-lines"></div>
+
+<main class="login-shell">
+  <div class="login-card glass">
+    <div class="brand-mark"><img src="/static/icons/nexus.svg" alt="{{ brand.app_name or 'NEXUS' }}" width="38" height="38"></div>
+    <h1>{{ brand.app_name or 'NEXUS' }}</h1>
+    <p class="sub">مرکز کنترل زیرساخت Railway · Xray · Cloudflare</p>
+    <form id="loginForm">
+      <label>رمز عبور مدیر</label>
+      <div class="pw-wrap">
+        <input id="password" type="password" autocomplete="current-password" placeholder="رمز عبور را وارد کنید" autofocus>
+        <button type="button" class="icon-btn" id="show" title="نمایش رمز"><svg width="17" height="17"><use href="#i-eye"/></svg></button>
+      </div>
+      <div class="switch-row" style="margin-top:12px">
+        <div class="txt"><b>این دستگاه را به خاطر بسپار</b><span>روی گوشی، ورود تا ۳۰ روز حفظ می‌شود</span></div>
+        <div class="switch on" id="remember"></div>
+      </div>
+      <button class="primary" type="submit" style="width:100%;margin-top:14px;padding:13px">ورود به پنل</button>
+      <div class="error" id="err"></div>
+    </form>
+    <div class="login-foot">
+      <span class="pill"><svg width="13" height="13"><use href="#i-shield"/></svg> نشست امن</span>
+      <span class="pill"><svg width="13" height="13"><use href="#i-zap"/></svg> پنل زنده</span>
+      <button class="tbtn" id="install" style="display:none">نصب برنامه</button>
+    </div>
+    <div class="login-hint">رمز اولیه در نصب جدید: <b>admin</b> — پس از ورود آن را تغییر دهید.</div>
+  </div>
+</main>
+
+<script>
+(() => {
+  // Reaching the login page always starts a fresh session for this tab.
+  try { sessionStorage.removeItem('nexus_session'); } catch (x) {}
+  const f = document.getElementById('loginForm');
+  const p = document.getElementById('password');
+  const e = document.getElementById('err');
+  const remember = document.getElementById('remember');
+  const btn = f.querySelector('button[type=submit]');
+  document.getElementById('show').onclick = () => { p.type = p.type === 'password' ? 'text' : 'password'; };
+  remember.onclick = () => remember.classList.toggle('on');
+
+  // The panel is installable straight from the login screen.
+  let deferred = null;
+  const installBtn = document.getElementById('install');
+  window.addEventListener('beforeinstallprompt', (ev) => { ev.preventDefault(); deferred = ev; installBtn.style.display = ''; });
+  window.addEventListener('appinstalled', () => { installBtn.style.display = 'none'; deferred = null; });
+  installBtn.onclick = async () => {
+    if (!deferred) {
+      e.textContent = /iphone|ipad|ipod/i.test(navigator.userAgent)
+        ? 'روی iOS: دکمه اشتراک‌گذاری → افزودن به صفحه اصلی'
+        : 'از منوی مرورگر گزینه Install app را بزنید';
+      return;
+    }
+    deferred.prompt();
+    await deferred.userChoice.catch(() => null);
+    deferred = null;
+    installBtn.style.display = 'none';
+  };
+  if ('serviceWorker' in navigator) window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {}); });
+
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    e.textContent = '';
+    btn.disabled = true;
+    const old = btn.textContent;
+    btn.textContent = 'در حال ورود…';
+    const keep = remember.classList.contains('on');
+    try {
+      const r = await fetch('/api/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: p.value, remember: keep }),
+      });
+      let j = null;
+      try { j = await r.json(); } catch (x) {}
+      if (!r.ok) throw new Error((j && j.detail) || 'ورود ناموفق بود');
+      btn.textContent = 'خوش آمدید…';
+      // The cookie is the primary session. The token is stored as well so the
+      // panel still works when the browser refuses the cookie (embedded preview
+      // pane, third-party-cookie blocking) — it is sent as a header instead.
+      if (j && j.token) {
+        try { sessionStorage.setItem('nexus_session', j.token); } catch (x) {}
+        if (keep) { try { localStorage.setItem('nexus_session', j.token); } catch (x) {} }
+      }
+      location.href = '/';
+    } catch (err) {
+      e.textContent = err.message;
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  };
+})();
+</script>
+</body>
+</html>

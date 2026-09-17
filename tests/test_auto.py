@@ -8,4 +8,4 @@ def test_monitor_import():
 
 def test_app_import():
     from app.main import app
-    assert app.title.startswith('ZEUS')
+    assert app.title.startswith('NEXUS')

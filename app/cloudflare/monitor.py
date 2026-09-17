@@ -7,7 +7,7 @@ CF_URLS = ["https://www.cloudflare.com/ips-v4", "https://www.cloudflare.com/ips-
 def fetch_cidr_lists():
     out=[]
     for url in CF_URLS:
-        req=Request(url, headers={"User-Agent":"ZEUS-Railway-Monitor/1.0"})
+        req=Request(url, headers={"User-Agent":"NEXUS-Railway-Monitor/1.0"})
         with urlopen(req, timeout=15) as r:
             text=r.read().decode("utf-8", "replace")
         for line in text.splitlines():

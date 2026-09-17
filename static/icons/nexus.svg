@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="NEXUS">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1527"/><stop offset="1" stop-color="#04070d"/>
+    </linearGradient>
+    <linearGradient id="n" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5ad1ff"/><stop offset="1" stop-color="#8b7bff"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.32" cy="0.24" r="0.78">
+      <stop offset="0" stop-color="#5ad1ff" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#5ad1ff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="120" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="120" fill="url(#glow)"/>
+  <g stroke="url(#n)" stroke-width="44" stroke-linecap="round" fill="none">
+    <path d="M157 391V121"/><path d="M355 391V121"/><path d="M157 121l198 270" stroke-width="39"/>
+  </g>
+  <rect x="2.5" y="2.5" width="507" height="507" rx="118" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="5"/>
+</svg>

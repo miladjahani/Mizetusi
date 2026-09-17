@@ -2,14 +2,16 @@ import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    app_name: str = 'ZEUS Railway Python Auto'
+    app_name: str = 'NEXUS Railway Python Auto'
     environment: str = 'production'
     admin_password: str = 'admin'
     jwt_secret: str = ''
-    database_url: str = 'sqlite:////data/zeus.db'
-    sqlite_path: str = '/data/zeus.db'
+    database_url: str = 'sqlite:////data/nexus.db'
+    sqlite_path: str = '/data/nexus.db'
     public_base_url: str = ''
-    session_ttl: int = 86400
+    # Sessions last a week by default: an admin who was logged out every day on
+    # a phone saw it as a broken panel. Overridable at runtime in Settings.
+    session_ttl: int = 604800
     auto_reset_interval: int = 60
     cf_probe_interval: int = 900
     cf_probe_limit: int = 256

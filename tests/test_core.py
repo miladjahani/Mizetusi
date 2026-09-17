@@ -1,5 +1,5 @@
 import os
-os.environ['ENVIRONMENT']='test'; os.environ['SQLITE_PATH']='/tmp/zeus-test.db'; os.environ['DATABASE_URL']='sqlite:////tmp/zeus-test.db'
+os.environ['ENVIRONMENT']='test'; os.environ['SQLITE_PATH']='/tmp/nexus-test.db'; os.environ['DATABASE_URL']='sqlite:////tmp/nexus-test.db'
 os.environ['ADMIN_PASSWORD']='x'*20; os.environ['JWT_SECRET']='y'*40
 from app.db import init_db
 init_db()
@@ -29,6 +29,26 @@ def test_subscription_contains_railway_and_cloudflare_nodes():
  assert 'railway.example.com' in text
  assert '104.16.1.1' in text
  assert 'cloudflare-01' in text
+
+def test_railway_baseline_survives_a_failed_probe():
+    # A single failed probe of the only Railway node used to empty every
+    # subscription; the baseline is always publishable.
+    from app.db import execute
+    from app.nodes import upsert, FAILED_LATENCY
+    from app.subscriptions.generator import active_nodes
+    execute("DELETE FROM nodes")
+    upsert('railway-direct', 'railway', 'railway.example.com', 443, True, 'railway.example.com', 'railway.example.com', 'railway', {})
+    upsert('cloudflare-01', 'cloudflare', '104.16.1.1', 443, True, 'worker.example.workers.dev', 'worker.example.workers.dev', 'cloudflare-probe', {})
+    execute('UPDATE nodes SET latency_ms=? WHERE name=?', (FAILED_LATENCY, 'railway-direct'))
+    execute('UPDATE nodes SET latency_ms=? WHERE name=?', (FAILED_LATENCY, 'cloudflare-01'))
+
+    names = [node['name'] for node in active_nodes()]
+    assert names == ['railway-direct']
+
+    execute('UPDATE nodes SET latency_ms=12.0 WHERE name=?', ('cloudflare-01',))
+    # Healthy nodes come first, the failed baseline still ships after them.
+    assert [node['name'] for node in active_nodes()] == ['cloudflare-01', 'railway-direct']
+
 
 def test_singbox_contains_all_nodes():
  from app.db import execute

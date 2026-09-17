@@ -1,4 +1,4 @@
-# Official Xray-core binary + ZEUS Python control plane in one Railway service.
+# Official Xray-core binary + NEXUS Python control plane in one Railway service.
 FROM ghcr.io/xtls/xray-core:26.9.9 AS xray
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1

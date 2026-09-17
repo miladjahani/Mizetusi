@@ -1,4 +1,4 @@
-"""ZEUS Xray-core supervisor.
+"""NEXUS Xray-core supervisor.
 
 Xray is the protocol engine; FastAPI remains the public HTTPS/WebSocket edge on
 Railway. The public edge terminates TLS, then bridges WebSocket streams to the
@@ -16,8 +16,8 @@ _last_hash = None
 
 def _config():
     users = rows("SELECT username,uuid,protocol,is_active FROM users")
-    vclients = [{"id": u["uuid"], "email": u["username"] + "@zeus.local", "level": 0} for u in users if u.get("protocol") == "vless" and u.get("is_active")]
-    tclients = [{"password": u["uuid"], "email": u["username"] + "@zeus.local", "level": 0} for u in users if u.get("protocol") == "trojan" and u.get("is_active")]
+    vclients = [{"id": u["uuid"], "email": u["username"] + "@nexus.local", "level": 0} for u in users if u.get("protocol") == "vless" and u.get("is_active")]
+    tclients = [{"password": u["uuid"], "email": u["username"] + "@nexus.local", "level": 0} for u in users if u.get("protocol") == "trojan" and u.get("is_active")]
     return {
         "log": {"loglevel": "warning"},
         "api": {"tag": "api", "listen": f"127.0.0.1:{settings.xray_api_port}", "services": ["StatsService"]},
@@ -100,7 +100,7 @@ async def sync_traffic_stats():
             if m:
                 email, direction = m.groups(); totals.setdefault(email, {})[direction] = int(item.get("value", 0))
         for u in rows("SELECT username,used_gb,limit_gb,is_active FROM users WHERE is_active=1"):
-            email = u["username"] + "@zeus.local"; t = totals.get(email)
+            email = u["username"] + "@nexus.local"; t = totals.get(email)
             if not t: continue
             total = int(t.get("uplink", 0)) + int(t.get("downlink", 0)); key = "xray_total:" + u["username"]
             old_row = row("SELECT value FROM settings WHERE key=?", (key,)); old = int(old_row["value"]) if old_row else total

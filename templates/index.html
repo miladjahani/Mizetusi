@@ -1,39 +1,404 @@
 <!doctype html>
-<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZEUS • Dashboard</title><link rel="stylesheet" href="/static/app.css"></head>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=yes">
+<meta name="theme-color" content="#05080f">
+<meta name="description" content="مرکز کنترل NEXUS: کاربران، نودهای Railway و Cloudflare، هسته Xray و سابلینک‌های اختصاصی.">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="{{ brand.app_name or 'NEXUS' }}">
+<title>{{ brand.app_name or 'NEXUS' }} • مرکز کنترل</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icons/nexus.svg" type="image/svg+xml">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+</head>
 <body class="app-shell">
-<div class="ambient a1"></div><div class="ambient a2"></div>
+
+<svg class="sr" aria-hidden="true"><defs>
+  <symbol id="i-dash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="8.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="2"/><rect x="3" y="14.5" width="7.5" height="6.5" rx="2"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="2"/></symbol>
+  <symbol id="i-nodes" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.6 20 6.8v8.4L12 19.4 4 15.2V6.8z"/><path d="M12 11.2 20 6.8M12 11.2v8.2M12 11.2 4 6.8"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.4"/><path d="M2.8 20c.6-3.4 3.1-5.4 6.2-5.4s5.6 2 6.2 5.4"/><path d="M16.2 5.2a3.2 3.2 0 0 1 0 6.2M18 14.9c2 .7 3.2 2.4 3.5 5.1"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18h9.6a4.2 4.2 0 0 0 .5-8.4A5.6 5.6 0 0 0 6.4 10 4 4 0 0 0 7 18z"/></symbol>
+  <symbol id="i-cog" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.6 14.5a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9 2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2 2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9 2 2 0 1 1 0 4 1.7 1.7 0 0 0-1.6 1.1z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5A8 8 0 0 0 6.3 6.3L4 8.5"/><path d="M4 4.5v4h4"/><path d="M4 12.5a8 8 0 0 0 13.7 5.2L20 15.5"/><path d="M20 19.5v-4h-4"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.4"/><path d="m16 16 4.2 4.2"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2.6"/><path d="M15 5.6A2.6 2.6 0 0 0 12.4 3H6.6A2.6 2.6 0 0 0 4 5.6v5.8A2.6 2.6 0 0 0 6.6 14"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15.6 4.3 19.7 8.4 8.9 19.2l-4.4.5.5-4.4z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V4.6h5V7M6.5 7l.9 13.1h9.2L17.5 7"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3.5v7.6"/><path d="M6.8 6.6a7.4 7.4 0 1 0 10.4 0"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.4 14.6a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14.6 9.4a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5.6c0 4.3 2.9 7.9 7 9.4 4.1-1.5 7-5.1 7-9.4V6z"/><path d="m9.2 12 2 2 3.6-4"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12.5h4l2.4-6.5 3.2 12 2.4-7 1.6 3.4h4.4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.6V12l3 2"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10.5M8 11l4 4 4-4M5 19h14"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3 5.5 13.4h5L10 21l8.2-10.6h-5z"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="6.4" rx="2"/><rect x="3.5" y="13.6" width="17" height="6.4" rx="2"/><path d="M7 7.2h.01M7 16.8h.01"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6c2.2 2.3 3.4 5.2 3.4 8.4S14.2 18.1 12 20.4c-2.2-2.3-3.4-5.2-3.4-8.4S9.8 5.9 12 3.6z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 16V11M12.5 16V7.5M17 16v-3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.6 4.5L19 7"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4.5 3 19.5h18z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-out" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4.5H7.5A1.5 1.5 0 0 0 6 6v12a1.5 1.5 0 0 0 1.5 1.5H15"/><path d="M14 12h7M18 8.6 21.4 12 18 15.4"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 12S6 5.8 12 5.8 21.4 12 21.4 12 18 18.2 12 18.2 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.9"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="12" r="4"/><path d="M12 12h8.5M18 12v3M15.5 12v2.4"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 6.5h12M8 12h12M8 17.5h12M4 6.5h.01M4 12h.01M4 17.5h.01"/></symbol>
+</defs></svg>
+
+<div class="aurora"><span></span><span></span><span></span></div>
+<div class="grid-lines"></div>
+
 <div class="app-layout">
   <aside class="sidebar glass">
-    <div class="brand"><div class="brand-mark small">Z</div><div><b>ZEUS</b><span>Railway Control</span></div></div>
-    <nav><button class="nav active" data-section="dashboard">⌂ <span>داشبورد</span></button><button class="nav" data-section="nodes">◈ <span>نودها</span></button><button class="nav" data-section="users">♙ <span>کاربران</span></button><button class="nav" data-section="cloudflare">☁ <span>Cloudflare</span></button><button class="nav" data-section="settings">⚙ <span>تنظیمات</span></button></nav>
-    <div class="sidebar-bottom"><div class="online-dot"><i></i> سیستم آنلاین</div><button id="out" class="logout">خروج</button></div>
+    <div class="brand">
+      <div class="brand-mark"><img src="/static/icons/nexus.svg" alt="{{ brand.app_name or 'NEXUS' }}" width="34" height="34"></div>
+      <div><b id="brandName">{{ brand.app_name or 'NEXUS' }}</b><span>RAILWAY CONTROL</span></div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="sidebar-bottom">
+      <div class="clock-card">
+        <div class="t" id="clockMain">--:--:--</div>
+        <div class="d" id="clockDate">—</div>
+        <div class="z"><span id="clockUtc">UTC --:--</span><span id="clockUptime">UP 0s</span></div>
+      </div>
+      <div class="online-pill"><i class="dot" id="sysDot"></i><span id="sysText">در حال اتصال…</span></div>
+      <button class="logout" id="logout">خروج از حساب</button>
+    </div>
   </aside>
+
   <main class="content">
-    <header class="topbar glass"><div><div class="eyebrow">ZEUS CONTROL CENTER</div><h1 id="title">داشبورد</h1></div><div class="top-actions"><span class="status"><i></i> Online</span><button id="refresh" class="icon-btn">↻</button></div></header>
-    <section id="dashboard" class="section active">
-      <div class="hero glass"><div><span class="eyebrow">REAL-TIME NETWORK</span><h2>کنترل کامل زیرساخت در یک محیط شیشه‌ای</h2><p>وضعیت کاربران، نودهای Railway و Cloudflare و سلامت سرویس‌ها را از یکجا مدیریت کنید.</p></div><div class="hero-badge">Z</div></div>
-      <div class="stats"><div class="stat glass"><span>کاربران</span><b id="users">—</b><small>کل کاربران</small></div><div class="stat glass"><span>فعال</span><b id="active">—</b><small>کاربر فعال</small></div><div class="stat glass"><span>نودها</span><b id="nodes">—</b><small>در کاتالوگ</small></div><div class="stat glass"><span>CF IP</span><b id="cfips">—</b><small>IP سالم</small></div></div>
-      <div class="two-col"><div class="panel glass"><div class="panel-head"><h3>Proxy Core</h3><span id="coreState" class="tag">—</span></div><div class="metric"><span>VLESS / Trojan</span><b id="coreMode">WebSocket / TCP</b></div></div><div class="panel glass"><div class="panel-head"><h3>نودهای فعال</h3><button class="link-btn" data-section="nodes">مشاهده همه</button></div><div id="nodePreview" class="node-list"></div></div><div class="panel glass"><div class="panel-head"><h3>وضعیت Cloudflare</h3><span id="workerState" class="tag">—</span></div><p id="workerDesc" class="muted">در حال بررسی تنظیمات Worker...</p><div class="metric"><span>Worker URL</span><b id="workerHost">—</b></div></div></div>
+    <header class="topbar glass">
+      <div class="tb-title">
+        <div class="eyebrow" id="crumb">NEXUS CONTROL CENTER</div>
+        <h1 id="pageTitle">داشبورد</h1>
+      </div>
+      <div class="top-actions">
+        <span class="pill" id="autoPill" title="بروزرسانی خودکار">⏱ ۰s</span>
+        <span class="pill ok" id="livePill"><i class="dot"></i> زنده</span>
+        <button class="tbtn" id="btnInstallBar" data-pwa-install="compact" title="نصب NEXUS روی این دستگاه">نصب برنامه</button>
+        <button class="icon-btn" id="btnRefresh" title="بروزرسانی"><svg><use href="#i-refresh"/></svg></button>
+      </div>
+    </header>
+
+    <!-- ================= DASHBOARD ================= -->
+    <section class="section active" id="section-dashboard">
+      <div class="hero glass">
+        <div>
+          <div class="mini-label">REAL-TIME NETWORK CONTROL</div>
+          <h2>مرکز کنترل زیرساخت پروکسی روی Railway</h2>
+          <p>کاربران، نودهای Railway و Cloudflare، هسته Xray و سابلینک‌ها را زنده و از یک‌جا مدیریت کنید. همه نمودارها و شمارنده‌ها بدون نیاز به رفرش صفحه بروزرسانی می‌شوند.</p>
+          <div class="chips" id="heroChips"></div>
+        </div>
+        <div class="pulse-wrap">
+          <div class="pulse-ring"></div><div class="pulse-ring"></div><div class="pulse-ring"></div>
+          <div class="pulse-core">N</div>
+        </div>
+      </div>
+
+      <div class="stats stagger" id="dashStats"></div>
+
+      <div class="grid-2">
+        <div class="panel glass">
+          <div class="chart-head">
+            <div>
+              <h3>ترافیک شبکه</h3>
+              <p class="sub" id="trafficSub">آخرین ۲۴ ساعت</p>
+            </div>
+            <div class="seg" id="trafficSeg">
+              <button class="on" data-range="24">۲۴ ساعت</button>
+              <button data-range="168">۷ روز</button>
+            </div>
+          </div>
+          <div class="chart" id="trafficChart"></div>
+          <div class="chart-legend" id="trafficLegend"></div>
+        </div>
+        <div class="panel glass">
+          <div class="chart-head">
+            <div><h3>ترکیب زیرساخت</h3><p class="sub">پروتکل کاربران و نوع نودها</p></div>
+          </div>
+          <div class="chart" id="mixDonut" style="display:grid;place-items:center"></div>
+          <div class="chart-legend" id="mixLegend" style="justify-content:center"></div>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <div class="panel glass">
+          <div class="panel-head"><div><h3>تاخیر نودها</h3><p class="sub">مرتب‌شده بر اساس سلامت</p></div></div>
+          <div class="bar-list" id="latencyBars"></div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h3>پرمصرف‌ترین کاربران</h3><p class="sub">بر اساس حجم مصرفی</p></div></div>
+          <div class="rank-list" id="topUsers"></div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h3>هسته پروکسی</h3><p class="sub">Xray-core</p></div><span class="pill" id="corePill">—</span></div>
+          <div class="kv-list" id="coreInfo"></div>
+        </div>
+      </div>
+
+      <div class="grid-2b">
+        <div class="panel glass">
+          <div class="panel-head"><div><h3>وضعیت Cloudflare</h3><p class="sub">Worker و IPهای سالم</p></div><span class="pill" id="cfPill">—</span></div>
+          <div id="cfSummary"></div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h3>آخرین رویدادها</h3><p class="sub">گزارش مدیریتی</p></div>
+            <button class="tbtn" data-goto="settings">همه رویدادها</button></div>
+          <div id="recentLogs"></div>
+        </div>
+      </div>
     </section>
-    <section id="nodes" class="section"><div class="panel glass"><div class="panel-head"><div><h2>Node Catalog</h2><p class="muted">Railway + Cloudflare سالم، همگام با Subscription Generator</p></div><button id="sync" class="primary compact">Sync Nodes</button></div><div id="nodeList" class="node-list"></div></div></section>
-    <section id="users" class="section"><div class="panel glass"><div class="panel-head"><div><h2>کاربران</h2><p class="muted">مدیریت کاربران و مصرف</p></div></div><div id="table" class="user-list"></div></div></section>
-    <section id="cloudflare" class="section"><div class="panel glass"><div class="panel-head"><div><h2>Cloudflare Worker</h2><p class="muted">Worker اختیاری است؛ Probe از سمت Railway انجام می‌شود.</p></div><span id="cfTag" class="tag">—</span></div><label>Worker URL</label><input id="workerUrl" placeholder="https://your-worker.workers.dev"><label>API Key <span class="muted">اختیاری</span></label><input id="workerKey" type="password" placeholder="Worker API key"><div class="actions"><button id="saveWorker" class="primary">ذخیره و Sync</button><button id="refreshCf" class="secondary">Probe Cloudflare</button></div></div></section>
-    <section id="settings" class="section"><div class="panel glass"><h2>تنظیمات</h2><div class="setting-row"><div><b>ورود مدیریت</b><p class="muted">رمز اولیه پنل در نصب جدید: <code>admin</code></p></div><span class="tag">Admin</span></div><div class="setting-row"><div><b>Subscription</b><p class="muted">هر درخواست از Node Catalog فعلی تولید می‌شود.</p></div><span class="tag success">LIVE</span></div></div></section>
+
+    <!-- ================= NODES ================= -->
+    <section class="section" id="section-nodes">
+      <div class="panel glass">
+        <div class="panel-head">
+          <div><h2>Node Catalog</h2><p class="sub">نودهای Railway و Cloudflare سالم، همگام با مولد سابلینک</p></div>
+          <div class="actions" style="margin:0">
+            <button class="secondary compact" id="btnSync"><svg width="14" height="14"><use href="#i-sync"/></svg> Sync نودها</button>
+            <button class="secondary compact" id="btnPingNodes"><svg width="14" height="14"><use href="#i-activity"/></svg> پینگ همه نودها</button>
+            <button class="primary compact" id="btnAddNode"><svg width="14" height="14"><use href="#i-plus"/></svg> نود جدید</button>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="search"><svg><use href="#i-search"/></svg><input id="nodeSearch" placeholder="جست‌وجوی نام، سرور یا SNI…"></div>
+          <div class="filters" id="nodeFilters"></div>
+          <select id="nodeSort" style="width:auto;min-width:150px">
+            <option value="latency">کم‌ترین تاخیر</option>
+            <option value="name">نام نود</option>
+            <option value="kind">نوع نود</option>
+          </select>
+        </div>
+        <div id="nodeList" class="stagger"></div>
+      </div>
+
+      <div class="grid-2b">
+        <div class="panel glass">
+          <div class="panel-head"><div><h3>پوشش ترکیب‌ها</h3><p class="sub">هر نود در برابر هر پروتکل و ترنسپورت</p></div></div>
+          <div id="coverage"></div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head">
+            <div><h3>کاوشگر سابلینک نود</h3><p class="sub">لینک هر نود را جداگانه بسازید</p></div>
+          </div>
+          <label>کاربر</label>
+          <select id="exploreUser"></select>
+          <div id="exploreLinks" style="margin-top:12px"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= USERS ================= -->
+    <section class="section" id="section-users">
+      <div class="panel glass">
+        <div class="panel-head">
+          <div><h2>کاربران</h2><p class="sub">ساخت پیشرفته، مصرف، سهمیه و سابلینک اختصاصی</p></div>
+          <div class="actions" style="margin:0">
+            <select id="quickPreset" style="width:auto;min-width:200px" title="پریست ساخت سریع"></select>
+            <button class="primary compact" id="btnQuickUser"><svg width="14" height="14"><use href="#i-zap"/></svg> ساخت سریع کاربر</button>
+            <button class="secondary compact" id="btnAddUser"><svg width="14" height="14"><use href="#i-plus"/></svg> کاربر جدید</button>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="search"><svg><use href="#i-search"/></svg><input id="userSearch" placeholder="جست‌وجوی نام کاربر…"></div>
+          <div class="filters" id="userFilters"></div>
+          <select id="userSort" style="width:auto;min-width:150px">
+            <option value="new">جدیدترین</option>
+            <option value="usage">بیشترین مصرف</option>
+            <option value="name">نام کاربر</option>
+            <option value="expiry">نزدیک‌ترین انقضا</option>
+          </select>
+        </div>
+        <div class="card-grid stagger" id="userList"></div>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head"><div><h3>سابلینک‌های سراسری</h3><p class="sub">آدرس اشتراک هر کاربر برای همه فرمت‌های پشتیبانی‌شده</p></div>
+          <span class="pill info" id="subCountPill">—</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>کاربر</th><th>پروتکل</th><th>وضعیت</th><th>سابلینک هوشمند</th><th>لینک‌ها</th></tr></thead>
+            <tbody id="subTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CLOUDFLARE ================= -->
+    <section class="section" id="section-cloudflare">
+      <div class="grid-2">
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>Cloudflare Worker</h2><p class="sub">پل WebSocket برای ورودی‌های CF</p></div><span class="pill" id="cfTag">—</span></div>
+          <label>Worker URL <span class="hint">— باید HTTPS باشد</span></label>
+          <input id="workerUrl" placeholder="https://nexus-edge.workers.dev" dir="ltr">
+          <label>API Key <span class="hint">— اختیاری</span></label>
+          <input id="workerKey" type="password" placeholder="کلید اختیاری Worker" dir="ltr">
+          <div class="actions">
+            <button class="primary" id="saveWorker">ذخیره و Sync</button>
+            <button class="secondary" id="clearWorker">حذف Worker</button>
+          </div>
+          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ در حالت Railway-only فقط نود مستقیم Railway منتشر می‌شود.</p></div></div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>Probe IPهای Cloudflare</h2><p class="sub">اسکن از سمت Railway</p></div></div>
+          <div class="stats" style="margin-top:0" id="cfStats"></div>
+          <div class="actions">
+            <button class="primary" id="btnProbe">اجرای Probe</button>
+            <button class="secondary" id="btnCfIps">بروزرسانی جدول</button>
+          </div>
+          <div id="cfProgress"></div>
+        </div>
+      </div>
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head">
+          <div><h2>کد ورکر Cloudflare (بهینه)</h2><p class="sub">آدرس Railway شما از قبل داخل کد نوشته شده — کپی یا دانلود کنید و مستقیم Deploy بزنید</p></div>
+          <div class="actions" style="margin:0">
+            <button class="secondary compact" id="btnWorkerCode"><svg width="14" height="14"><use href="#i-eye"/></svg> نمایش کد</button>
+            <button class="secondary compact" id="btnWorkerCopy"><svg width="14" height="14"><use href="#i-copy"/></svg> کپی</button>
+            <button class="secondary compact" id="btnWorkerDownload"><svg width="14" height="14"><use href="#i-download"/></svg> دانلود</button>
+            <button class="primary compact" id="btnWorkerTest"><svg width="14" height="14"><use href="#i-activity"/></svg> تست ورکر</button>
+          </div>
+        </div>
+        <div class="kv-list" id="workerGuide"></div>
+        <pre class="worker-code" id="workerCode" dir="ltr"><code>برای نمایش کد روی «نمایش کد» بزنید…</code></pre>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head">
+          <div><h3>IPهای Edge</h3><p class="sub">بر اساس تاخیر اندازه‌گیری‌شده</p></div>
+          <select id="cfLimit" style="width:auto"><option value="20">۲۰ ردیف</option><option value="50" selected>۵۰ ردیف</option><option value="120">۱۲۰ ردیف</option></select>
+        </div>
+        <div id="cfBars" class="bar-list" style="margin-bottom:12px"></div>
+        <div class="table-wrap">
+          <table><thead><tr><th>IP</th><th>منبع</th><th>تاخیر</th><th>وضعیت</th><th>آخرین Probe</th></tr></thead><tbody id="cfTable"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SETTINGS ================= -->
+    <section class="section" id="section-settings">
+      <div class="grid-2b">
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>امنیت پنل</h2><p class="sub">رمز مدیریت و نشست‌ها</p></div><span class="pill warn" id="secPill">—</span></div>
+          <div class="field-grid">
+            <div><label>رمز فعلی</label><input id="pwCurrent" type="password" autocomplete="current-password"></div>
+            <div><label>رمز جدید</label><input id="pwNew" type="password" autocomplete="new-password"></div>
+            <div><label>تکرار رمز جدید</label><input id="pwConfirm" type="password" autocomplete="new-password"></div>
+          </div>
+          <div class="meter"><i id="pwMeter"></i></div>
+          <div class="actions">
+            <button class="primary" id="btnPassword">تغییر رمز</button>
+            <button class="secondary" id="btnRotate">ابطال همه نشست‌ها</button>
+          </div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>سابلینک و پیش‌فرض‌ها</h2><p class="sub">آدرس پایه، پیشوند برچسب و مقادیر پیش‌فرض ساخت کاربر</p></div></div>
+          <label>آدرس پایه اشتراک <span class="hint">— خالی یعنی تشخیص خودکار از دامنه Railway</span></label>
+          <input id="setBaseUrl" placeholder="https://nexus-production.up.railway.app" dir="ltr">
+          <label>پیشوند برچسب لینک</label>
+          <input id="setPrefix" placeholder="NEXUS" dir="ltr">
+          <div class="field-grid">
+            <div><label>پروتکل پیش‌فرض</label><select id="setProtocol"><option value="vless">VLESS</option><option value="trojan">Trojan</option></select></div>
+            <div><label>سقف حجم پیش‌فرض (GB)</label><input id="setLimit" type="number" min="0" step="1" placeholder="50"></div>
+            <div><label>انقضای پیش‌فرض (روز)</label><input id="setExpiry" type="number" min="0" step="1" placeholder="30"></div>
+            <div><label>محدودیت IP پیش‌فرض</label><input id="setIpLimit" type="number" min="1" step="1" placeholder="2"></div>
+          </div>
+          <div class="actions">
+            <button class="primary" id="btnSaveSettings">ذخیره تنظیمات</button>
+            <button class="secondary" id="btnPreviewSub">پیش‌نمایش سابلینک</button>
+          </div>
+          <div id="subPreview"></div>
+        </div>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head">
+          <div><h2>لینک دانلود کلاینت‌ها</h2><p class="sub">همین لینک‌ها در پنجره وضعیت هر کاربر نمایش داده می‌شود؛ اگر صفحه دانلود یک کلاینت تغییر کرد، اینجا اصلاح کنید</p></div>
+          <div class="actions" style="margin:0">
+            <button class="secondary compact" id="btnClientLinksReset">بازگشت به پیش‌فرض</button>
+            <button class="primary compact" id="btnSaveClientLinks">ذخیره لینک‌ها</button>
+          </div>
+        </div>
+        <div class="field-grid" id="clientLinkFields"></div>
+      </div>
+
+      <div class="grid-2b" style="margin-top:13px">
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>نصب روی دستگاه (PWA)</h2><p class="sub">با آیکون اختصاصی NEXUS روی گوشی یا دسکتاپ نصب می‌شود و در حالت برنامه اجرا می‌گردد</p></div><span class="pill ok">Installable</span></div>
+          <div class="pwa-card">
+            <div class="pwa-logo"><img src="/static/icons/nexus.svg" alt="NEXUS" width="64" height="64"></div>
+            <div class="pwa-info">
+              <b>{{ brand.app_name or 'NEXUS' }} — مرکز کنترل</b>
+              <p id="pwaHint">برای نصب، دکمه «نصب برنامه» را بزنید.</p>
+              <div class="link-box">
+                <div class="lb-main"><b>فایل manifest</b><code>/manifest.webmanifest</code></div>
+                <a class="copy-btn" href="/manifest.webmanifest" target="_blank" rel="noopener" title="باز کردن"><svg><use href="#i-eye"/></svg></a>
+              </div>
+              <div class="chips">
+                <span class="chip">آیکون ۱۹۲ و ۵۱۲</span>
+                <span class="chip">آیکون maskable اندروید</span>
+                <span class="chip">سرویس‌ورکر آفلاین</span>
+              </div>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="primary" id="btnInstallPwa" data-pwa-install="full">نصب برنامه</button>
+          </div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>برند، نشست و پینگ</h2><p class="sub">نام برنامه، رنگ پوسته، مدت ورود و بازه پینگ خودکار نودها</p></div></div>
+          <div class="field-grid">
+            <div><label>نام برنامه <span class="hint">روی آیکون نصب‌شده</span></label><input id="setAppName" dir="ltr" placeholder="NEXUS"></div>
+            <div><label>مدت نشست (روز) <span class="hint">۱ تا ۳۶۵</span></label><input id="setSessionDays" type="number" min="1" max="365" step="1" dir="ltr" placeholder="7"></div>
+          </div>
+          <div class="field-grid">
+            <div><label>رنگ اصلی <span class="hint">مثلاً ‎#5ad1ff</span></label><input id="setAccent" dir="ltr" placeholder="#5ad1ff"></div>
+            <div><label>رنگ دوم <span class="hint">مثلاً ‎#8b7bff</span></label><input id="setAccent2" dir="ltr" placeholder="#8b7bff"></div>
+            <div><label>بازه پینگ نودها (دقیقه) <span class="hint">۱ تا ۱۴۴۰</span></label><input id="setPingInterval" type="number" min="1" max="1440" step="1" dir="ltr" placeholder="15"></div>
+          </div>
+          <p class="muted">مدت نشست روی ورود بعدی اعمال می‌شود؛ اگر روی گوشی زیاد از پنل خارج می‌شوید مقدار بیشتری بگذارید. بازه پینگ خودکار تعیین می‌کند هر چند دقیقه همه نودها دوباره اندازه‌گیری شوند.</p>
+        </div>
+      </div>
+
+      <div class="grid-2b">
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>اطلاعات سیستم</h2><p class="sub">نسخه، هسته و اندپوینت‌ها</p></div></div>
+          <div class="kv-list" id="sysInfo"></div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>پشتیبان‌گیری</h2><p class="sub">خروجی کامل کاربران، نودها و تنظیمات</p></div></div>
+          <p class="muted">فایل JSON شامل جدول کاربران، پروکسی‌ها و تنظیمات است. برای بازگردانی، مقادیر را در دیتابیس Railway ایمپورت کنید.</p>
+          <div class="actions">
+            <button class="secondary" id="btnBackup"><svg width="14" height="14"><use href="#i-download"/></svg> دانلود پشتیبان</button>
+            <button class="secondary" id="btnLogsRefresh">بروزرسانی رویدادها</button>
+          </div>
+          <div class="setting-row warn">
+            <div class="txt"><b>پاک‌سازی گزارش رویدادها</b><p>تمام رکوردهای audit_logs حذف می‌شوند. این عمل برگشت‌پذیر نیست.</p></div>
+            <button class="danger-btn compact" id="btnClearLogs">پاک‌سازی</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head"><div><h2>گزارش رویدادها</h2><p class="sub">آخرین اقدام‌های مدیریتی</p></div><span class="pill" id="logCount">—</span></div>
+        <div class="table-wrap">
+          <table><thead><tr><th>#</th><th>اقدام</th><th>جزئیات</th><th>زمان</th></tr></thead><tbody id="logTable"></tbody></table>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
-<script>
-const $=id=>document.getElementById(id); const api=async(url,opt)=>{let r=await fetch(url,opt);let j=await r.json();if(!r.ok)throw Error(j.detail||'Request failed');return j};
-const titles={dashboard:'داشبورد',nodes:'نودها',users:'کاربران',cloudflare:'Cloudflare',settings:'تنظیمات'};
-function show(name){document.querySelectorAll('.section').forEach(x=>x.classList.toggle('active',x.id===name));document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x.dataset.section===name));$('title').textContent=titles[name];if(name==='nodes')loadNodes();if(name==='users')loadUsers();}
-document.querySelectorAll('[data-section]').forEach(b=>b.onclick=()=>show(b.dataset.section));
-async function loadStats(){let s=await api('/api/stats');$('users').textContent=s.users;$('active').textContent=s.active_users;$('nodes').textContent=s.nodes;$('cfips').textContent=s.cf_ips}
-async function loadCore(){try{let c=await api('/api/core/status');$('coreState').textContent=c.running?'Running':'Stopped';$('coreState').className='tag '+(c.running?'success':'');$('coreMode').textContent=c.protocols.join(' / ')+' · '+c.transport}catch(e){$('coreState').textContent='Unknown'}}
-async function loadWorker(){let w=await api('/api/settings/cloudflare-worker');$('workerUrl').value=w.url||'';$('workerState').textContent=w.configured?'Configured':'Railway only';$('workerState').className='tag '+(w.configured?'success':'');$('cfTag').textContent=w.configured?'Configured':'Optional';$('workerHost').textContent=w.url?new URL(w.url).hostname:'—';$('workerDesc').textContent=w.configured?'Worker متصل است و Node Catalog از IPهای سالم آن استفاده می‌کند.':'Worker تنظیم نشده؛ ZEUS در حالت Railway-only کار می‌کند.'}
-function nodeHtml(n){return `<div class="node"><div class="node-icon">${n.kind==='cloudflare'?'☁':'R'}</div><div class="node-main"><b>${n.name}</b><span>${n.kind} · ${n.server}:${n.port}${n.sni?' · SNI '+n.sni:''}</span></div><span class="latency ${n.latency_ms!=null?'good':''}">${n.latency_ms!=null?n.latency_ms+' ms':'—'}</span></div>`}
-async function loadNodes(){let n=await api('/api/nodes');$('nodeList').innerHTML=n.map(nodeHtml).join('')||'<div class="empty">No nodes</div>';$('nodePreview').innerHTML=n.slice(0,5).map(nodeHtml).join('')||'<div class="empty">No nodes</div>'}
-async function loadUsers(){let u=await api('/api/users');$('table').innerHTML=u.map(x=>`<div class="user-row"><div class="avatar">${x.username[0].toUpperCase()}</div><div><b>${x.username}</b><span>${x.protocol}</span></div><strong>${Number(x.used_gb||0).toFixed(3)} GB</strong><span class="tag ${x.is_active?'success':''}">${x.is_active?'Active':'Disabled'}</span></div>`).join('')||'<div class="empty">No users</div>'}
-async function refreshAll(){try{await Promise.all([loadStats(),loadCore(),loadWorker(),loadNodes()])}catch(e){console.error(e)}}
-$('refresh').onclick=refreshAll;$('sync').onclick=async()=>{try{await api('/api/nodes/sync',{method:'POST'});await refreshAll()}catch(e){alert(e.message)}};
-$('saveWorker').onclick=async()=>{try{await api('/api/settings/cloudflare-worker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('workerUrl').value,api_key:$('workerKey').value})});await refreshAll();show('cloudflare')}catch(e){alert(e.message)}};
-$('refreshCf').onclick=async()=>{try{await api('/api/cloudflare/refresh',{method:'POST'});await refreshAll()}catch(e){alert(e.message)}};$('out').onclick=async()=>{await fetch('/api/logout',{method:'POST'});location='/login'};refreshAll();
-</script></body></html>
+
+<div class="toasts" id="toasts"></div>
+<div id="modalRoot"></div>
+<!-- The panel is a single ES-module entry point; it imports the core, API,
+     session, router and the four views as classes (no build step, no globals). -->
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
