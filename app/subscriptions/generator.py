@@ -1,3 +1,12 @@
+"""Subscription rendering.
+
+``active_nodes`` is the one rule the whole panel shares: a subscription hands
+out **enabled** nodes, ordered by the last measured ping. Measured health is a
+sorting and labelling signal, never a filter — the fallback path exists, so a
+transient probe failure can never empty a user's subscription or 404 their
+client's refresh. Nodes are generated automatically (Railway origin, Cloudflare
+clean IPs); an admin never has to build them by hand.
+"""
 import base64, json, urllib.parse
 from app.db import rows
 from app.subscriptions.clients import CLIENT_FORMATS, FORMATS
@@ -58,128 +67,97 @@ def _query(node, user):
 
 def vless(user, node, prefix=''):
     q = _query(node, user)
-    return f"vless://{user['uuid']}@{_node_host(node)}:{int(node.get('port') or 443)}?{urllib.parse.urlencode(q)}#{urllib.parse.quote(label(user, node, prefix))}"
+    params = urllib.parse.urlencode({k: v for k, v in q.items() if v}, safe='')
+    return f"vless://{user['uuid']}@{_node_host(node)}:{node['port']}?{params}#{urllib.parse.quote(label(user, node, prefix), safe='')}"
 
 
 def trojan(user, node, prefix=''):
-    q = {'security': 'tls', 'type': 'ws', 'host': node.get('host') or node.get('server') or '', 'path': '/ws/trojan'}
-    if node.get('sni'):
-        q['sni'] = node['sni']
-    return f"trojan://{user['uuid']}@{_node_host(node)}:{int(node.get('port') or 443)}?{urllib.parse.urlencode(q)}#{urllib.parse.quote(label(user, node, prefix))}"
+    q = _query(node, user)
+    params = urllib.parse.urlencode({k: v for k, v in q.items() if v}, safe='')
+    return f"trojan://{urllib.parse.quote(user['uuid'], safe='')}@{_node_host(node)}:{node['port']}?{params}#{urllib.parse.quote(label(user, node, prefix), safe='')}"
 
 
 def singbox(user, node, prefix=''):
-    protocol = user.get('protocol', 'vless')
-    p = {
-        'type': protocol,
+    tls = bool(int(node.get('tls') or 0))
+    return {
         'tag': label(user, node, prefix),
+        'type': 'vless' if (user.get('protocol') or 'vless') == 'vless' else 'trojan',
         'server': _node_host(node),
         'server_port': int(node.get('port') or 443),
+        'uuid': user['uuid'],
+        'flow': '',
+        'tls': {'enabled': tls, 'server_name': node.get('sni') or node.get('host') or _node_host(node),
+                'insecure': False, 'utls': {'enabled': bool(user.get('fingerprint')), 'fingerprint': user.get('fingerprint') or 'chrome'}},
+        'transport': {'type': 'ws', 'path': _path(user), 'headers': {'Host': node.get('host') or _node_host(node)}},
     }
-    if protocol == 'vless':
-        p['uuid'] = user['uuid']
-    else:
-        p['password'] = user['uuid']
-    p['tls'] = {'enabled': bool(int(node.get('tls') or 0)), 'server_name': node.get('sni') or node.get('host') or node.get('server')}
-    p['transport'] = {'type': 'ws', 'path': _path(user), 'headers': {'Host': node.get('host') or node.get('server') or ''}}
-    return p
 
 
 def clash(user, node, prefix=''):
-    protocol = user.get('protocol', 'vless')
-    p = {
+    tls = bool(int(node.get('tls') or 0))
+    return {
         'name': label(user, node, prefix),
-        'type': protocol,
+        'type': 'vless' if (user.get('protocol') or 'vless') == 'vless' else 'trojan',
         'server': _node_host(node),
         'port': int(node.get('port') or 443),
-        'uuid': user['uuid'] if protocol == 'vless' else None,
-        'password': user['uuid'] if protocol == 'trojan' else None,
-        'tls': bool(int(node.get('tls') or 0)),
+        'uuid': user['uuid'],
+        'password': user['uuid'],
+        'udp': True,
+        'tls': tls,
+        'servername': node.get('sni') or node.get('host') or _node_host(node),
         'network': 'ws',
-        'ws-opts': {'path': _path(user), 'headers': {'Host': node.get('host') or node.get('server') or ''}},
+        'ws-opts': {'path': _path(user), 'headers': {'Host': node.get('host') or _node_host(node)}},
+        'client-fingerprint': user.get('fingerprint') or 'chrome',
     }
-    if protocol == 'trojan': p.pop('uuid', None)
-    else: p.pop('password', None)
-    if node.get('sni'):
-        p['servername'] = node['sni']
-    return p
 
 
 def xray(user, node, prefix=''):
-    """Xray-core outbound object for this node, ready to paste into a config."""
-    protocol = user.get('protocol', 'vless')
-    host = node.get('host') or node.get('server') or ''
-    tls_on = bool(int(node.get('tls') or 0))
+    protocol = (user.get('protocol') or 'vless')
+    settings = (
+        {'vnext': [{'address': _node_host(node), 'port': int(node.get('port') or 443), 'users': [
+            {'id': user['uuid'], 'encryption': 'none', 'flow': '', 'level': 0}]}]}
+        if protocol == 'vless' else
+        {'servers': [{'address': _node_host(node), 'port': int(node.get('port') or 443), 'password': user['uuid'], 'level': 0}]}
+    )
     stream = {
         'network': 'ws',
-        'security': 'tls' if tls_on else 'none',
-        'wsSettings': {'path': _path(user), 'headers': {'Host': host}},
+        'security': 'tls' if int(node.get('tls') or 0) else 'none',
+        'wsSettings': {'path': _path(user), 'headers': {'Host': node.get('host') or _node_host(node)}},
     }
-    if tls_on:
-        stream['tlsSettings'] = {'serverName': node.get('sni') or host, 'allowInsecure': False}
-        if user.get('fingerprint'):
-            stream['tlsSettings']['fingerprint'] = user['fingerprint']
-    settings = (
-        {'vnext': [{'address': _node_host(node), 'port': int(node.get('port') or 443),
-                    'users': [{'id': user['uuid'], 'encryption': 'none', 'level': 0}]}]}
-        if protocol == 'vless' else
-        {'servers': [{'address': _node_host(node), 'port': int(node.get('port') or 443), 'password': user['uuid']}]}
-    )
-    out = {'tag': label(user, node, prefix), 'protocol': protocol, 'settings': settings, 'streamSettings': stream}
-    if user.get('frag_len'):
-        out['streamSettings']['sockopt'] = {'dialerProxy': 'fragment'}
-    return out
-
-
-def node_links(user, node, prefix=''):
-    """Every shareable representation of one user on one node."""
-    protocol = user.get('protocol', 'vless')
-    return {
-        'name': node['name'],
-        'kind': node.get('kind'),
-        'server': node.get('server'),
-        'port': int(node.get('port') or 443),
-        'sni': node.get('sni'),
-        'host': node.get('host'),
-        'latency_ms': node.get('latency_ms'),
-        'enabled': bool(int(node.get('enabled') or 0)),
-        'links': {
-            'vless': vless(user, node, prefix),
-            'trojan': trojan(user, node, prefix),
-            'singbox': singbox(user, node, prefix),
-            'clash': clash(user, node, prefix),
-            'xray': xray(user, node, prefix),
-            'primary': vless(user, node, prefix) if protocol == 'vless' else trojan(user, node, prefix),
-        },
-    }
+    if int(node.get('tls') or 0):
+        stream['tlsSettings'] = {'serverName': node.get('sni') or node.get('host') or _node_host(node),
+                                 'allowInsecure': False, 'fingerprint': user.get('fingerprint') or 'chrome'}
+    return {'tag': label(user, node, prefix) or 'proxy', 'protocol': protocol, 'settings': settings, 'streamSettings': stream}
 
 
 def active_nodes(include_unhealthy=False):
-    """Nodes a subscription may hand out, fastest first.
+    """Enabled nodes ordered by their last measured ping.
 
-    A probe writes the measured latency and marks a failure with -1, so NEXUS
-    orders by real ping and holds failed Cloudflare IPs back. Two deliberate
-    exceptions keep the panel from going dark:
+    Measured health is a *sort key*, not a filter — with one exception: a
+    clean-IP node whose probe failed is not published at all, because a client
+    would dial a dead address. The Railway origin keeps its hostname resolution
+    even after a transient probe failure, so it always stays published and
+    no subscription can ever come back empty.
 
-    * the Railway origin is always publishable — it is the baseline path, and a
-      single transient probe failure must not remove every user's only node;
-    * if nothing measured healthy at all, the enabled catalog is returned instead
-      of an empty subscription that would 404 on every client refresh.
+    * measured nodes come first, fastest ping first;
+    * unmeasured nodes follow, with the Railway origin ahead of fresh
+      Cloudflare IPs;
+    * failed Railway nodes go last; failed Cloudflare IPs are dropped.
     """
-    sql = ('SELECT * FROM nodes WHERE enabled=1 ORDER BY '
-           'CASE WHEN latency_ms IS NULL OR latency_ms < 0 THEN 1 ELSE 0 END, '
-           "latency_ms ASC, CASE WHEN kind='railway' THEN 0 ELSE 1 END, name ASC")
-    items = rows(sql)
-    if include_unhealthy or not items:
-        return items
-
-    def measured_ok(node):
-        return node['latency_ms'] is not None and float(node['latency_ms']) >= 0
-
-    healthy = [node for node in items if measured_ok(node)]
-    baseline = [node for node in items if node['kind'] == 'railway' and not measured_ok(node)]
-    picked = healthy + baseline
-    return picked or items
+    rows_ = rows("SELECT * FROM nodes WHERE enabled=1 ORDER BY "
+                 "CASE WHEN latency_ms IS NULL THEN 1 WHEN latency_ms < 0 THEN 2 ELSE 0 END, "
+                 "latency_ms ASC, CASE WHEN kind='railway' THEN 0 ELSE 1 END, name ASC")
+    if include_unhealthy:
+        return rows_
+    # The one health filter: never advertise a dead clean IP. The Railway
+    # origin keeps its hostname (DNS still resolves during a transient
+    # failure), so it always stays published.
+    keep = [n for n in rows_
+            if n['latency_ms'] is None or float(n['latency_ms']) >= 0 or n['kind'] == 'railway']
+    # Last resort: a catalog where everything measured bad still publishes the
+    # first entry so a client refresh never 404s.
+    if not keep:
+        keep = rows_[:1]
+    return keep
 
 
 def render(user, base, target, nodes=None, prefix=''):
@@ -217,3 +195,22 @@ def render(user, base, target, nodes=None, prefix=''):
             for n in nodes
         ]}, ensure_ascii=False, indent=2)
     raise ValueError('unsupported target')
+
+
+def node_links(user, node, prefix=''):
+    """Every raw link combination for ONE node (used by the panel drawers)."""
+    protocol = (user.get('protocol') or 'vless')
+    return {
+        'name': node.get('name'), 'kind': node.get('kind'), 'server': node.get('server'),
+        'port': int(node.get('port') or 443), 'tls': bool(node.get('tls')),
+        'sni': node.get('sni'), 'host': node.get('host'), 'latency_ms': node.get('latency_ms'),
+        'enabled': bool(node.get('enabled', 1)),
+        'links': {
+            'primary': vless(user, node, prefix) if protocol == 'vless' else trojan(user, node, prefix),
+            'vless': vless(user, node, prefix),
+            'trojan': trojan(user, node, prefix),
+            'singbox': singbox(user, node, prefix),
+            'clash': clash(user, node, prefix),
+            'xray': xray(user, node, prefix),
+        },
+    }

@@ -147,8 +147,46 @@ class NodeCatalog:
         self.upsert('railway-direct', 'railway', host, 443, True, host, host, 'railway', {'role': 'direct'})
         return self.get('railway-direct')
 
-    def sync(self, base_url=None, worker_url=None):
-        """Rebuild the catalog: Railway direct plus the healthy Cloudflare IPs."""
+    # Deployment-shape detection is a network probe; the result is cached so a
+    # sync storm (panel open, ping button, background loop) never hammers the
+    # edge more than once per TTL.
+    edge_cache = {'host': None, 'at': 0.0}
+    EDGE_TTL = 600.0
+
+    async def detect_edge(self, base_url=None, force=False):
+        """Find the hostname clients can already reach THROUGH Cloudflare.
+
+        Sources, in priority order: a configured Worker URL (checked by the
+        caller) and — with no user action at all — the panel's own public
+        domain when it is fronted by Cloudflare (custom-domain setups). The
+        check is one TLS handshake against a healthy clean IP carrying the
+        panel host as SNI, cached for ten minutes.
+        """
+        cache = NodeCatalog.edge_cache
+        now = time.time()
+        if not force and cache['host'] and now - cache['at'] < self.EDGE_TTL:
+            return cache['host']
+        host = None
+        origin = self.origin_host(base_url)
+        probe = self._probe
+        if origin and probe:
+            for item in best(3):
+                ms, _err = await NodeProbe.tcp(item['ip'], 443, timeout=3.0, tls=True,
+                                               server_hostname=origin)
+                if ms is not None:
+                    host = origin
+                    break
+        cache.update({'host': host, 'at': now})
+        return host
+
+    def sync(self, base_url=None, worker_url=None, edge_host=None):
+        """Rebuild the catalog: Railway direct plus the Cloudflare edge entries.
+
+        Everything here is automatic. The Worker host wins when configured;
+        otherwise a Cloudflare-fronted panel domain (detected by
+        :meth:`detect_edge`) serves as the SNI/Host for the clean-IP nodes, so
+        they appear with zero user interaction.
+        """
         self.ensure()
         created = 0
         if self.ensure_origin(base_url) is not None:
@@ -156,16 +194,19 @@ class NodeCatalog:
         # The previous Cloudflare catalog is disabled first so stale IPs never
         # survive a re-probe; Railway direct stays enabled as the baseline.
         execute("UPDATE nodes SET enabled=0, updated_at=? WHERE kind='cloudflare'", (int(time.time()),))
-        if worker_url:
-            whost = urllib.parse.urlparse(worker_url).hostname
-            if whost:
-                for i, item in enumerate(best(20), 1):
-                    name = f'cloudflare-{i:02d}'
-                    self.upsert(name, 'cloudflare', item['ip'], 443, True, whost, whost,
-                                'cloudflare-probe',
-                                {'probe_latency_ms': item.get('latency_ms'), 'worker_host': whost})
-                    self.update(name, {'enabled': 1, 'latency_ms': item.get('latency_ms')})
-                    created += 1
+        whost = urllib.parse.urlparse(worker_url).hostname if worker_url else None
+        source = 'cloudflare-probe' if whost else None
+        if not whost:
+            whost = edge_host or NodeCatalog.edge_cache.get('host')
+            source = 'cloudflare-edge'
+        if whost:
+            for i, item in enumerate(best(20), 1):
+                name = f'cloudflare-{i:02d}'
+                self.upsert(name, 'cloudflare', item['ip'], 443, True, whost, whost,
+                            source,
+                            {'probe_latency_ms': item.get('latency_ms'), 'edge_host': whost})
+                self.update(name, {'enabled': 1, 'latency_ms': item.get('latency_ms')})
+                created += 1
         return created
 
 
@@ -308,8 +349,28 @@ def upsert(name, kind, server, port=443, tls=True, sni=None, host=None, source=N
     return catalog.upsert(name, kind, server, port, tls, sni, host, source, metadata)
 
 
-def sync_from_sources(public_base, worker_url=None):
-    return catalog.sync(public_base, worker_url)
+def sync_from_sources(public_base, worker_url=None, edge_host=None):
+    return catalog.sync(public_base, worker_url, edge_host)
+
+
+async def detect_edge_host(public_base=None, force=False):
+    return await catalog.detect_edge(public_base, force=force)
+
+
+async def auto_sync(public_base=None, worker_url=None, force_edge=False):
+    """One call the routes use: detect the Cloudflare edge, then rebuild.
+
+    This is what makes the Node Catalog fully automatic — even on a deployment
+    where the admin never configured a Worker, a Cloudflare-fronted domain
+    produces the clean-IP nodes on the first panel open.
+    """
+    edge = NodeCatalog.edge_cache.get('host')
+    if worker_url:
+        edge = None  # the Worker host wins; no detection handshake needed
+    elif edge is None or force_edge:
+        edge = await detect_edge_host(public_base, force=force_edge)
+    count = catalog.sync(public_base, worker_url, edge)
+    return {'synced': count, 'edge_host': edge, 'nodes': catalog.list()}
 
 
 def ensure_origin_node(public_base=None):

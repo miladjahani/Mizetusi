@@ -30,6 +30,17 @@
 
 *{box-sizing:border-box}
 html,body{height:100%}
+/* Responsive hardening: without min-width:0 a grid/flex child grows to its
+   content's min-content width, which on RTL phones pushes whole panels past
+   the viewport (the horizontal-overflow screenshots). Every layout child is
+   therefore shrinkable, and long tokens wrap instead of blowing out. */
+.grid-2>*,.grid-2b>*,.grid-3>*,.stats>*,.card-grid>*,.field-grid>*,
+.toolbar>*,.panel-head>*,.top-actions>*,.actions>*,.chips>*,
+.node-row,.user-row,.node-main,.row-main,.lb-main,.link-box,.kv-line,
+.rank,.bar-row,.ucard,.panel,.sub-card,.setting-row{min-width:0}
+.link-box code,.kv-line b,.node-main span,.row-main span,
+.ucard .head .meta span,.rank .who b,.stat .foot{overflow-wrap:anywhere}
+.table-wrap{-webkit-overflow-scrolling:touch}
 body{
   margin:0;
   font-family:Vazirmatn,system-ui,-apple-system,'Segoe UI',sans-serif;
@@ -501,6 +512,25 @@ a.copy-btn{text-decoration:none}
   .grid-2,.grid-2b{grid-template-columns:1fr}
   .grid-3{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
 }
+/* Narrow phones: node rows wrap instead of overflowing — icon and name on the
+   first line, latency and the action buttons share the second. */
+@media (max-width:700px){
+  .node-row{flex-wrap:wrap;row-gap:8px;padding:11px}
+  .node-row .lat{order:3;margin-inline-start:auto}
+  .node-row .acts{order:4;flex:1 1 100%;display:flex;justify-content:flex-end;flex-wrap:wrap}
+  .ucard .acts{display:flex}
+  .kv-line{flex-wrap:wrap}
+  .link-box{flex-wrap:wrap}
+  .link-box .copy-btn{flex:1 1 auto;justify-content:center}
+  /* Table cells must wrap instead of forcing the whole grid wider than the
+     phone viewport (the horizontal-scroll screenshots). */
+  td{padding:9px 10px}
+  td,th{white-space:normal;overflow-wrap:anywhere}
+  table{table-layout:fixed}
+  .modal-head h3{font-size:14.5px}
+  .client-card .top{flex-wrap:wrap}
+  .sub-card code,.link-box code{font-size:9.5px}
+}
 @media (max-width:900px){
   .app-layout{grid-template-columns:1fr;padding:11px;gap:12px;padding-bottom:86px}
   .sidebar{
@@ -518,7 +548,11 @@ a.copy-btn{text-decoration:none}
   .nav:hover{transform:none}
   .nav.active::before{display:none}
   .sidebar-bottom{display:none}
-  .topbar{position:static;border-radius:19px;padding:12px 14px}
+  .topbar{position:static;border-radius:19px;padding:12px 14px;flex-wrap:wrap;gap:9px}
+  .topbar .tb-title{flex:1 1 auto}
+  .top-actions{flex-wrap:wrap;justify-content:flex-end;row-gap:6px}
+  .top-actions .pill{padding:5px 9px;font-size:10px}
+  .topbar h1{font-size:17px}
   .hero{grid-template-columns:1fr;padding:20px}
   .pulse-wrap{display:none}
   .hero h2{font-size:21px}
@@ -528,13 +562,33 @@ a.copy-btn{text-decoration:none}
   .stat .val{font-size:21px}
   .stat{padding:12px}
   .panel{padding:14px}
+  .panel-head{gap:9px}
+  .panel-head .actions{width:100%;justify-content:stretch}
+  .panel-head .actions .primary,.panel-head .actions .secondary,.panel-head .actions .compact{flex:1 1 auto;justify-content:center}
   .card-grid{grid-template-columns:1fr}
-  .modal{padding:16px;border-radius:20px;max-height:92vh}
+  .modal{padding:16px;border-radius:20px;max-height:92dvh}
+  .modal-back{padding:10px}
   .ucard .body{gap:11px}
   .ring-wrap{width:66px;height:66px;flex:0 0 66px}
   .toolbar{gap:7px}
+  .toolbar select{flex:1 1 100%}
   .actions{flex-direction:column}
   .actions .primary,.actions .secondary,.actions .danger-btn{width:100%}
   .toasts{inset-inline:11px;bottom:78px;max-width:none}
   .setting-row{flex-direction:column;align-items:stretch}
+  /* The topbar only keeps its icons on the smallest screens; install is still
+     one tap away in Settings and on the login page. */
+  #autoPill{display:none}
+  #btnInstallBar{font-size:0;gap:0;padding:8px 10px}
+  #btnInstallBar svg{width:15px;height:15px}
+  .kv-line{flex-direction:column;align-items:stretch;gap:5px}
+  .kv-line b{max-width:100%}
+}
+/* Notch / gesture-bar safe areas for the bottom navigation. */
+@supports (padding:env(safe-area-inset-bottom)){
+  @media (max-width:900px){
+    .sidebar{padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+    .app-layout{padding-bottom:calc(86px + env(safe-area-inset-bottom))}
+    .toasts{bottom:calc(78px + env(safe-area-inset-bottom))}
+  }
 }

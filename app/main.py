@@ -18,7 +18,7 @@ from app.dns.service import doh
 from app.services.backup import export_all
 from app.cloudflare.monitor import seed_ips, probe_all, best, loop as cf_loop
 from app.nodes import (ensure as ensure_nodes, list_nodes, upsert as upsert_node, sync_from_sources,
-    ping_all as ping_all_nodes, ping_loop, ensure_origin_node, catalog as node_catalog)
+    ping_all as ping_all_nodes, ping_loop, ensure_origin_node, catalog as node_catalog, auto_sync)
 from app.core.settings_store import store
 from app.core.security import SessionManager, LoginThrottle
 from app.services.audit import AuditLog
@@ -126,6 +126,24 @@ async def maintenance():
         except Exception: pass
         await asyncio.sleep(max(15,settings.auto_reset_interval))
 
+
+async def catalog_loop():
+    """Keep the Node Catalog self-building in the background.
+
+    The ping loop measures latency; this loop (every ~10 minutes, aligned with
+    the edge-detection cache TTL) rebuilds the catalog so healthy clean IPs and
+    the Railway origin exist without any admin action — including the very
+    first minutes of a fresh Railway deployment.
+    """
+    while True:
+        try:
+            base=(_setting('public_base_url') or settings.public_base_url or '').strip() or None
+            worker=(_setting('cloudflare_worker_url') or '').strip() or None
+            await auto_sync(base, worker)
+        except Exception:
+            pass
+        await asyncio.sleep(600)
+
 def bootstrap():
     # Secrets persist in the DB so Railway Variables are not required for first boot.
     if not _setting('jwt_secret'):
@@ -150,14 +168,29 @@ def bootstrap_nodes():
     except Exception:
         pass
 
+
+async def bootstrap_nodes_full():
+    """Startup pass that also detects a Cloudflare-fronted domain.
+
+    Runs once in the background of the lifespan, so even the Cloudflare nodes
+    exist before the admin ever opens the Node Catalog — the catalog becomes
+    self-building: Railway origin + clean-IP edge entries, zero user action.
+    """
+    try:
+        base=(_setting('public_base_url') or settings.public_base_url or '').strip() or None
+        worker=(_setting('cloudflare_worker_url') or '').strip() or None
+        await auto_sync(base, worker)
+    except Exception:
+        pass
+
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     init_db(); bootstrap(); ensure_nodes(); bootstrap_nodes()
     await xray.start_or_reload(force=True)
-    task=asyncio.create_task(maintenance()); cf_task=asyncio.create_task(cf_loop(settings.cf_probe_interval)); xray_task=asyncio.create_task(xray.loop()); ping_task=asyncio.create_task(ping_loop(settings.cf_probe_interval,_ping_interval))
+    task=asyncio.create_task(maintenance()); cf_task=asyncio.create_task(cf_loop(settings.cf_probe_interval)); xray_task=asyncio.create_task(xray.loop()); ping_task=asyncio.create_task(ping_loop(settings.cf_probe_interval,_ping_interval)); auto_task=asyncio.create_task(bootstrap_nodes_full()); cat_task=asyncio.create_task(catalog_loop())
     try: yield
     finally:
-        task.cancel(); cf_task.cancel(); xray_task.cancel(); ping_task.cancel()
+        task.cancel(); cf_task.cancel(); xray_task.cancel(); ping_task.cancel(); auto_task.cancel(); cat_task.cancel()
         try: await task
         except asyncio.CancelledError: pass
         try: await cf_task
@@ -165,6 +198,10 @@ async def lifespan(app:FastAPI):
         try: await xray_task
         except asyncio.CancelledError: pass
         try: await ping_task
+        except asyncio.CancelledError: pass
+        try: await auto_task
+        except asyncio.CancelledError: pass
+        try: await cat_task
         except asyncio.CancelledError: pass
         try: await xray._stop()
         except Exception: pass
@@ -552,8 +589,12 @@ def nodes(request:Request):
     auth(request); _ensure_catalog(request); return list_nodes()
 
 @app.post('/api/nodes/sync')
-def sync_nodes(request:Request):
-    auth(request); worker=_setting('cloudflare_worker_url'); count=sync_from_sources(public_base(request),worker); _audit('nodes.sync',f'{count} nodes'); return {'success':True,'synced':count,'nodes':list_nodes()}
+async def sync_nodes(request:Request):
+    """Auto-rebuild: Worker host if configured, else a detected CF-fronted domain."""
+    auth(request)
+    result=await auto_sync(public_base(request), _setting('cloudflare_worker_url') or None, force_edge=True)
+    _audit('nodes.sync',f"{result['synced']} nodes · edge {result['edge_host'] or '-'}")
+    return {'success':True,'synced':result['synced'],'edge_host':result['edge_host'],'nodes':result['nodes']}
 
 @app.post('/api/nodes/ping')
 async def ping_nodes(request:Request):
@@ -583,7 +624,7 @@ def cloudflare_ips(request:Request,limit:int=50):
 
 @app.post('/api/cloudflare/refresh')
 async def cloudflare_refresh(request:Request):
-    auth(request); count=seed_ips(settings.cf_probe_limit); results=await probe_all(limit=settings.cf_probe_limit); sync_from_sources(public_base(request), _setting('cloudflare_worker_url')); return {'seeded':count,'probed':len(results),'best':best(20),'nodes':list_nodes()}
+    auth(request); count=seed_ips(settings.cf_probe_limit); results=await probe_all(limit=settings.cf_probe_limit); result=await auto_sync(public_base(request), _setting('cloudflare_worker_url') or None, force_edge=True); return {'seeded':count,'probed':len(results),'best':best(20),'edge_host':result['edge_host'],'nodes':result['nodes']}
 
 WORKER_STEPS=[
     'کد زیر را کپی یا دانلود کنید؛ آدرس Railway شما از قبل داخلش قرار گرفته است.',

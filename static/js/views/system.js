@@ -16,22 +16,31 @@ export class CloudflareView {
 
   get toasts() { return this.app.toasts; }
 
-  get modals() { return this.app.modals; }
-
-  render() {
+  get modals() { return this.app.modals; }  render() {
     const worker = this.app.workerSettings();
+    const nodes = this.store.get('nodes') || [];
+    const cfNodes = nodes.filter((node) => node.kind === 'cloudflare' && node.enabled).length;
+    // A Cloudflare-fronted panel domain feeds the catalog automatically, so the
+    // section must not claim "Railway-only" while CF nodes are live.
+    const mode = worker.configured ? 'worker' : cfNodes > 0 ? 'edge' : 'railway';
     const url = $('#workerUrl');
     if (url && document.activeElement !== url) url.value = worker.url || '';
     const tag = $('#cfTag');
     if (tag) {
-      tag.className = `pill ${worker.configured ? 'ok' : 'warn'}`;
-      tag.innerHTML = worker.configured ? '<i class="dot"></i> متصل' : 'Railway-only';
+      tag.className = `pill ${mode === 'railway' ? 'warn' : 'ok'}`;
+      tag.innerHTML = mode === 'worker' ? '<i class="dot"></i> Worker فعال'
+        : mode === 'edge' ? '<i class="dot"></i> حالت خودکار (Edge)'
+        : 'Railway-only';
     }
     const stateBox = $('#workerState');
     if (stateBox) {
-      stateBox.innerHTML = `<div class="txt"><b>${worker.configured ? 'Worker فعال است' : 'Worker تنظیم نشده'}</b>
-        <p>${worker.configured ? 'Node Catalog از IPهای سالم Cloudflare و از طریق Worker منتشر می‌شود.' : 'برای انتشار نودهای Cloudflare، آدرس Worker را ذخیره کنید. تا آن زمان فقط نود مستقیم Railway منتشر می‌شود.'}</p></div>
-        <span class="pill ${worker.configured ? 'ok' : 'warn'}">${esc((worker.url || '').replace(/^https?:\/\//, '') || '—')}</span>`;
+      const copy = {
+        worker: ['Worker فعال است', 'Node Catalog از IPهای سالم Cloudflare و از طریق Worker منتشر می‌شود.'],
+        edge: ['حالت خودکار — بدون Worker', `دامنه پنل از طریق Cloudflare جلوه‌گذاری شده است؛ ${Fmt.num(cfNodes)} نود تمیز به‌صورت خودکار ساخته و پینگ شدند. اگر Worker هم مستقر کنید، همان آدرس اینجا ذخیره می‌شود.`],
+        railway: ['Worker تنظیم نشده', 'در این حالت نود مستقیم Railway منتشر می‌شود؛ اگر دامنه پنل را روی Cloudflare ببرید، نودهای تمیز بدون هیچ تنظیمی خودکار اضافه می‌شوند.'],
+      }[mode];
+      stateBox.innerHTML = `<div class="txt"><b>${copy[0]}</b><p>${copy[1]}</p></div>
+        <span class="pill ${mode === 'railway' ? 'warn' : 'ok'}">${esc((worker.url || '').replace(/^https?:\/\//, '') || (mode === 'edge' ? 'auto-detect' : '—'))}</span>`;
     }
 
     const ips = this.store.get('cfIps') || [];

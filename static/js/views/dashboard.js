@@ -198,16 +198,19 @@ export class DashboardView {
     const metrics = this.store.get('metrics');
     const worker = this.store.get('worker');
     const totals = metrics ? metrics.totals : null;
+    const nodes = this.store.get('nodes') || [];
+    const cfNodes = nodes.filter((node) => node.kind === 'cloudflare' && node.enabled).length;
     const pill = $('#cfPill');
     if (pill) {
-      if (worker?.configured) { pill.className = 'pill ok'; pill.innerHTML = '<i class="dot"></i> متصل'; }
+      if (worker?.configured) { pill.className = 'pill ok'; pill.innerHTML = '<i class="dot"></i> Worker فعال'; }
+      else if (cfNodes > 0) { pill.className = 'pill ok'; pill.innerHTML = '<i class="dot"></i> حالت خودکار'; }
       else { pill.className = 'pill warn'; pill.innerHTML = 'Railway-only'; }
     }
     const rows = [
-      ['Worker', worker?.configured ? 'پیکربندی‌شده' : 'تنظیم نشده'],
+      ['حالت لبه', worker?.configured ? 'Worker' : cfNodes > 0 ? 'خودکار (دامنه پشت Cloudflare)' : 'فقط Railway'],
       ['آدرس Worker', worker?.url ? worker.url.replace(/^https?:\/\//, '') : '—'],
       ['IP سالم', totals ? `${Fmt.num(totals.cf_ips_ok)} از ${Fmt.num(totals.cf_ips_total)}` : '—'],
-      ['نود CF منتشرشده', totals ? Fmt.num(totals.cloudflare_nodes) : '—'],
+      ['نود CF منتشرشده', totals ? `${Fmt.num(Math.max(totals.cloudflare_nodes, cfNodes))}` : '—'],
       ['پروکسی خارجی', totals ? Fmt.num(totals.proxies) : '—'],
     ];
     host.innerHTML = `<div class="kv-list">${rows.map(([key, value]) => `<div class="kv-line"><span>${esc(key)}</span><b>${esc(value)}</b></div>`).join('')}</div>`;

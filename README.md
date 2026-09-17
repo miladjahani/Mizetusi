@@ -75,11 +75,20 @@ the edge terminates TLS and bridges WebSocket streams to the loopback Xray liste
 
 ## Nodes and probing
 
+The Node Catalog is fully self-building — no admin action is ever required:
+
 - `railway-direct` is created automatically from `PUBLIC_BASE_URL`,
   `RAILWAY_PUBLIC_DOMAIN`/`RAILWAY_STATIC_URL`, or the saved base URL.
-- Cloudflare nodes are rebuilt from probed clean IPs once a Worker URL is configured.
-- Latency convention: `NULL` never probed, `>= 0` measured, `-1` last probe failed. Failed
-  and unprobed nodes are held back from subscriptions, which are ordered fastest-first.
+- Cloudflare clean-IP nodes are rebuilt automatically too. The Worker host wins when a
+  Worker URL is configured; otherwise, if the panel's own domain is served through
+  Cloudflare (custom-domain setups), NEXUS detects that with one TLS handshake against a
+  healthy clean IP (SNI = panel host) and publishes the CF nodes with no user input.
+- The catalog rebuild runs at startup, on every panel open, on «Sync نودها», and on a
+  ~10-minute background loop; the ping loop keeps every latency fresh.
+- Latency convention: `NULL` never probed, `>= 0` measured, `-1` last probe failed.
+  Subscriptions are ordered fastest-first; a failed clean-IP node is dropped, but the
+  Railway origin always stays published (DNS still resolves during a transient failure),
+  so a subscription can never come back empty.
 - Probes run on demand («پینگ همه نودها», or per node) and on a background loop whose
   interval is the `ping_interval` setting.
 
