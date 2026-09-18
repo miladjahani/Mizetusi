@@ -249,16 +249,22 @@ export class SettingsView {
 
     const core = this.store.get('core') || {};
     const metrics = this.store.get('metrics');
+    const version = this.store.get('version');
+    // The build hash is what tells an admin whether a phone is showing the
+    // freshly deployed panel or a service-worker copy of the previous one.
+    if (!version) this.app.safe(() => this.loadVersion());
     const count = metrics ? `${Fmt.num(metrics.totals.users)} کل · ${Fmt.num(metrics.totals.active_users)} فعال` : '—';
     const rows = [
-      ['نسخه پنل', 'NEXUS 7.0'],
+      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 7.1.0'],
       ['آدرس پایه', settings.resolved_base_url || location.origin],
       ['کاربران', count],
       ['نودهای فعال', metrics ? `${Fmt.num(metrics.totals.nodes_enabled)} از ${Fmt.num(metrics.totals.nodes)}` : '—'],
       ['هسته Xray', core.running ? `Running${core.pid ? ` · PID ${core.pid}` : ''}` : 'متوقف'],
       ['ترنسپورت', core.transport || 'WebSocket + TLS'],
-      ['اندپوینت VLESS', '/ws/vless'],
-      ['اندپوینت Trojan', '/ws/trojan'],
+      ['پروتکل‌های منتشرشده', (core.protocols || []).join(' · ')],
+      ['اندپوینت‌های WebSocket', (core.endpoints || []).join(' · ')],
+      ['ترکیب‌های نود × پروتکل', (settings.subscription?.transports || []).map((item) => item.label).join(' · ')],
+      ['حالت Reality', (core.transports || []).includes('vless-reality') ? 'فعال (پورت مستقیم)' : 'نیازمند پورت TCP اختصاصی'],
       ['فرمت‌های سابلینک', (settings.subscription?.targets || []).join(' · ')],
       ['مدت نشست', `${Fmt.num(security.session_days || 7)} روز`],
       ['برنامه نصب‌شدنی (PWA)', settings.pwa?.installable ? 'فعال' : 'غیرفعال'],
@@ -269,6 +275,57 @@ export class SettingsView {
 
     this.renderClientLinks(settings.clients || []);
     this.renderLogs();
+    this.app.safe(() => this.renderWarp());
+  }
+
+  async loadVersion() {
+    const data = await this.api.get('/api/version');
+    this.store.set('version', data);
+    if (this.store.get('section') === 'settings') this.render();
+  }
+
+  /* ------------------------------------------------------------- WARP exit node */
+  async renderWarp() {
+    const tag = $('#warpTag');
+    if (!tag) return;
+    const data = await this.api.get('/api/warp');
+    this.store.set('warp', data);
+    tag.className = `pill ${data.enabled ? 'ok' : data.registered ? 'info' : 'warn'}`;
+    tag.textContent = data.enabled ? 'روشن' : data.registered ? 'ثبت‌شده، خاموش' : 'ثبت نشده';
+    const box = $('#warpState');
+    if (box) {
+      box.innerHTML = `<div class="txt"><b>${data.registered ? esc(data.endpoint || 'WARP') : 'هنوز ثبت نشده است'}</b>
+        <p>${esc(data.note || '')}${data.address ? ` · آدرس داخلی ${esc(data.address)}` : ''}${data.key_ready ? '' : ' · باینری Xray در دسترس نیست'}</p></div>`;
+    }
+    const toggle = $('#btnWarpToggle');
+    if (toggle) toggle.textContent = data.enabled ? 'غیرفعال‌سازی' : 'فعال‌سازی';
+    this.bindWarp();
+  }
+
+  bindWarp() {
+    const actions = [
+      ['#btnWarpRegister', 'register', 'WARP ثبت شد؛ برای انتشار نود، فعالش کنید'],
+      ['#btnWarpToggle', this.store.get('warp')?.enabled ? 'disable' : 'enable', 'حالت WARP تغییر کرد'],
+      ['#btnWarpDiscard', 'discard', 'WARP حذف شد'],
+    ];
+    actions.forEach(([selector, action, message]) => {
+      const button = $(selector);
+      if (!button) return;
+      button.onclick = () => this.app.safe(async () => {
+        const original = button.innerHTML;
+        button.disabled = true;
+        button.innerHTML = '<span class="spin-inline"></span>';
+        try {
+          await this.api.post('/api/warp', { action });
+          this.toasts.ok(message);
+          await this.renderWarp();
+          await this.app.loadMetrics();
+        } finally {
+          button.disabled = false;
+          button.innerHTML = original;
+        }
+      });
+    });
   }
 
   renderLogs() {

@@ -96,10 +96,22 @@ export class NodesView {
     });
   }
 
+  async loadTransports() {
+    const data = await this.api.get('/api/transports');
+    this.store.set('transports', data);
+    this.renderCoverage();
+  }
+
   renderCoverage() {
     const host = $('#coverage');
     if (!host) return;
+    // The transport matrix comes from the engine, so this card can never claim a
+    // protocol the server would not actually serve.
+    if (!this.store.get('transports')) this.app.safe(() => this.loadTransports());
     const nodes = this.store.get('nodes');
+    const matrix = this.store.get('transports') || {};
+    const profiles = matrix.profiles || [];
+    const planned = matrix.planned || [];
     if (!nodes.length) {
       host.innerHTML = `<div class="empty">${ico('nodes', 32)}<div>نودی برای بررسی پوشش نیست</div></div>`;
       return;
@@ -108,25 +120,26 @@ export class NodesView {
     const users = this.store.get('users');
     const vless = users.filter((user) => (user.protocol || 'vless') === 'vless').length;
     const trojan = users.filter((user) => user.protocol === 'trojan').length;
-    const clients = this.store.get('settings')?.clients?.length
-      || this.store.get('clientCount') || 15;
+    const enabled = nodes.filter((node) => node.enabled).length;
+    const clients = this.store.get('settings')?.clients?.length || this.store.get('clientCount') || 16;
     host.innerHTML = `
       <div class="kv-list" style="margin-bottom:12px">
-        <div class="kv-line"><span>ترکیب‌های قابل انتشار</span><b>${Fmt.num(nodes.filter((node) => node.enabled).length * 2)} لینک (نود × ۲ پروتکل)</b></div>
-        <div class="kv-line"><span>سابلینک اختصاصی هر کلاینت</span><b>${Fmt.num(clients)} کلاینت × ${Fmt.num(nodes.filter((node) => node.enabled).length)} نود</b></div>
+        <div class="kv-line"><span>ترکیب‌های قابل انتشار</span><b>${Fmt.num(enabled * profiles.length)} لینک (${Fmt.num(enabled)} نود × ${Fmt.num(profiles.length)} پروتکل/ترنسپورت)</b></div>
+        <div class="kv-line"><span>سابلینک اختصاصی هر کلاینت</span><b>${Fmt.num(clients)} کلاینت × ${Fmt.num(enabled)} نود</b></div>
         <div class="kv-line"><span>کاربرهای VLESS / Trojan</span><b>${Fmt.num(vless)} / ${Fmt.num(trojan)}</b></div>
+        <div class="kv-line"><span>وضعیت هسته</span><b>${matrix.xray?.running ? 'Running' : 'متوقف'}${matrix.xray?.warning ? ' · هشدار کانفیگ' : ''}</b></div>
       </div>
       ${nodes.slice(0, 12).map((node) => `
         <div class="node-row" style="padding:9px 11px">
           <span class="node-icon ${node.kind === 'cloudflare' ? 'cf' : ''}" style="width:28px;height:28px;flex:0 0 28px;font-size:11px">${node.kind === 'cloudflare' ? '☁' : 'R'}</span>
           <div class="node-main"><b style="font-size:12px">${esc(node.name)}</b></div>
           <div class="acts">
-            ${badge(true, 'VLESS', 'VLESS روی WebSocket')}
-            ${badge(true, 'Trojan', 'Trojan روی WebSocket')}
+            ${profiles.slice(0, 8).map((profile) => badge(true, profile.tag, `${profile.protocol.toUpperCase()} روی ${profile.network}`)).join('')}
             ${badge(!!node.tls, 'TLS', 'رمزنگاری TLS لبه')}
             ${badge(!!node.host, 'Host', node.host || 'بدون هدر Host')}
           </div>
-        </div>`).join('')}`;
+        </div>`).join('')}
+      ${planned.length ? `<div class="kv-line" style="margin-top:10px"><span>در انتظار پورت اختصاصی</span><b style="font-size:11px">${planned.map((item) => esc(item.tag)).join(' · ')}</b></div>` : ''}`;
   }
 
   /* ------------------------------------------------------------- explorer */
@@ -333,9 +346,12 @@ export class NodesView {
         ['لینک مستقیم پروتکل کاربر', item.links.primary],
         ['VLESS', item.links.vless],
         ['Trojan', item.links.trojan],
-        ...item.subscriptions.map((sub) => [`سابلینک — ${sub.label}`, sub.url]),
+        ['VMess', item.links.vmess],
+        // One subscription per protocol/transport pair on this single node.
+        ...(item.transport_subscriptions || []).map((sub) => [`سابلینک ترنسپورت — ${sub.label}`, sub.url]),
+        ...item.subscriptions.map((sub) => [`سابلینک فرمت — ${sub.label}`, sub.url]),
         ...(item.clients || []).map((client) => [`سابلینک ${client.name} — همین نود`, client.url]),
-      ];
+      ].filter(([, value]) => value);
       body.innerHTML = rows.map(([label, value]) => `
         <div class="link-box">
           <div class="lb-main"><b>${esc(label)}</b><code>${esc(value)}</code></div>

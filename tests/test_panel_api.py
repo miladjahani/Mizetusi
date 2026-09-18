@@ -55,6 +55,18 @@ def test_static_assets_are_served():
         assert client.get(f'/static/{name}').status_code == 404, name
 
 
+def test_stylesheet_keeps_the_layout_inside_a_phone_viewport():
+    # The RTL phone screenshots came from grid/flex children that could not
+    # shrink, plus subscription URLs that refused to wrap. Both guards are
+    # part of the shipped design system, so they are asserted here.
+    css = client.get('/static/app.css').text
+    assert 'min-width:0' in css
+    assert 'overflow-wrap:anywhere' in css
+    assert '-webkit-line-clamp:2' in css
+    assert '@media (max-width:700px)' in css
+    assert 'max-width:900px' in css
+
+
 def test_every_module_import_resolves():
     # An ES module that imports a missing file fails at load time in the browser,
     # so the module graph is verified here as well.
@@ -116,7 +128,14 @@ def test_pwa_assets_are_installable():
     assert 'javascript' in worker.headers['content-type']
     # Scope / requires the worker to be served from the origin root.
     assert worker.headers.get('service-worker-allowed') == '/'
-    assert 'nexus-v' in worker.text
+    # The build token is injected per deployment: without it an installed phone
+    # would keep serving the previous shell (the stale-CSS symptom).
+    assert "const VERSION = 'nexus-" in worker.text
+    assert 'nexus-dev' not in worker.text
+    token = worker.headers.get('x-nexus-build')
+    assert token and len(token) == 12
+    assert f"const VERSION = 'nexus-{token}';" in worker.text
+    assert client.get('/api/version').json()['build'] == token
 
     for name in ('icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png', 'favicon-32.png'):
         icon = client.get(f'/static/icons/{name}')
@@ -203,14 +222,38 @@ def test_user_links_cover_every_target_and_node():
     data = client.get('/api/users/linksuser/links', headers=h()).json()
 
     targets = {s['target'] for s in data['subscriptions']}
-    assert {'auto', 'all', 'vless', 'trojan', 'base64', 'singbox', 'clash', 'xray', 'json'} <= targets
+    assert {'auto', 'all', 'vless', 'trojan', 'vmess', 'ss', 'base64', 'singbox', 'clash', 'xray', 'json'} <= targets
     assert data['node_count'] == 2
+    # The panel offers one subscription per published transport, per node.
+    transport_ids = {t['target'] for t in data['transports']}
+    assert {'vless-ws', 'vless-cdn', 'vmess-ws', 'trojan-ws', 'ss-ws'} <= transport_ids
     hit = [n for n in data['nodes'] if n['name'] == 'cloudflare-01'][0]
-    assert {'vless', 'trojan', 'singbox', 'clash', 'xray', 'primary'} <= set(hit['links'])
+    assert {'vless', 'trojan', 'vmess', 'singbox', 'clash', 'xray', 'primary'} <= set(hit['links'])
     assert hit['links']['primary'].startswith('vless://')
     assert 'node=cloudflare-01' in hit['subscription']
-    assert {s['target'] for s in hit['subscriptions']} == {'vless', 'trojan', 'base64', 'singbox', 'clash', 'xray'}
+    assert {s['target'] for s in hit['subscriptions']} == {'vless', 'trojan', 'vmess', 'base64', 'singbox', 'clash', 'xray'}
+    assert transport_ids == {s['target'] for s in hit['transport_subscriptions']}
+    # Every profile on that node carries a real link plus the JSON variants.
+    assert {p['id'] for p in hit['profiles']} >= {'vless-ws', 'vmess-ws', 'ss-ws'}
+    for profile in hit['profiles']:
+        assert profile['singbox']['type'] and profile['clash']['type'] and profile['xray']['protocol']
+        if profile['protocol'] in ('vless', 'trojan', 'vmess'):
+            assert '://' in profile['link']
     assert client.get('/api/users/ghost/links', headers=h()).status_code == 404
+
+
+def test_transport_catalog_endpoint_describes_the_matrix():
+    _seed_nodes()
+    data = client.get('/api/transports', headers=h()).json()
+    ids = {p['id'] for p in data['profiles']}
+    assert {'vless-ws', 'vless-cdn', 'vmess-ws', 'vmess-cdn', 'trojan-ws', 'trojan-cdn', 'ss-ws'} <= ids
+    assert {'vless', 'vmess', 'trojan', 'ss'} <= set(data['protocols'])
+    # gRPC / XHTTP / HTTPUpgrade cannot ride an HTTPS-only edge, so they are
+    # advertised as planned (with the reason) instead of as broken links.
+    assert {p['id'] for p in data['planned']} >= {'vless-grpc', 'vless-xhttp'}
+    assert all(p['needs'] for p in data['planned'])
+    assert data['nodes'] and all(node['transports'] for node in data['nodes'])
+    assert data['xray']['vless_listener'] == cfg.xray_vless_port
 
 
 def test_subscription_targets_and_per_node_links():
@@ -235,12 +278,20 @@ def test_subscription_targets_and_per_node_links():
     payload = json.loads(client.get(f'/sub/{uuid_value}?target=xray').text)
     assert payload['outbounds'][0]['protocol'] == 'vless'
     assert payload['outbounds'][0]['streamSettings']['network'] == 'ws'
+    # One entry per node and transport: 2 nodes × (ws + cdn) for VMess.
+    assert client.get(f'/sub/{uuid_value}?target=vmess').text.count('vmess://') == 4
+    # target=ws keeps the WebSocket transports only: 2 nodes × 2 VLESS paths.
+    assert client.get(f'/sub/{uuid_value}?target=ws').text.count('vless://') == 4
 
     aliases = json.loads(client.get(f'/sub/{uuid_value}?target=sing-box').text)
-    assert len(aliases['outbounds']) == 2
+    assert len(aliases['outbounds']) == 2 * len(transport_ids())
 
     assert client.get(f'/sub/{uuid_value}?target=unknown').status_code == 400
     assert client.get(f'/sub/{uuid_value}?node=does-not-exist').status_code == 404
+
+
+def transport_ids():
+    return [p['id'] for p in client.get('/api/transports', headers=h()).json()['profiles']]
 
 
 def test_settings_roundtrip_and_prefix_reaches_links():
@@ -426,7 +477,7 @@ def test_per_client_subscription_formats():
     assert '104.16.1.1' in base64.b64decode(exclusive.text).decode()
 
     nekobox = client.get(f'/sub/{uuid_value}?target=nekoboxplus')
-    assert len(json.loads(nekobox.text)['outbounds']) == 2
+    assert len(json.loads(nekobox.text)['outbounds']) == 2 * len(transport_ids())
 
     assert client.get(f'/sub/{uuid_value}?target=unknown-client').status_code == 400
 
@@ -522,3 +573,52 @@ def test_user_links_expose_portal_and_client_targets():
         assert 'node=' + item['name'] in item['clients'][0]['url']
         assert 'target=all' in item['subscription_all'] and 'node=' + item['name'] in item['subscription_all']
         assert item['subscription_all'] != item['subscription']
+
+
+def test_every_transport_path_is_bridged_to_its_xray_listener():
+    """Each published transport has a WebSocket route on the edge, wired to the
+    local Xray listener that speaks that protocol.
+
+    A stub listener stands in for Xray: it echoes the payload reversed, so a
+    route pointed at the wrong port (or a missing route) fails here instead of
+    in a user's client.
+    """
+    import asyncio
+    import threading
+
+    import websockets
+
+    from app.main import EDGE_ROUTES
+    from app.subscriptions import transports as tp
+
+    assert EDGE_ROUTES == {p['path']: getattr(cfg, p['port_setting']) for p in tp.EDGE_PROFILES} | {
+        '/ws/warp': cfg.xray_warp_port}
+
+    def serve(port, ready, stop):
+        async def echo(connection):
+            async for message in connection:
+                data = message if isinstance(message, bytes) else message.encode()
+                await connection.send(data[::-1])
+
+        async def run():
+            async with websockets.serve(echo, '127.0.0.1', port):
+                ready.set()
+                while not stop.is_set():
+                    await asyncio.sleep(0.05)
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run())
+
+    for path, port in EDGE_ROUTES.items():
+        ready, stop = threading.Event(), threading.Event()
+        thread = threading.Thread(target=serve, args=(port, ready, stop), daemon=True)
+        thread.start()
+        assert ready.wait(5), f'stub listener for {path} did not start'
+        try:
+            with client.websocket_connect(path) as ws:
+                ws.send_bytes(b'nexus')
+                assert ws.receive_bytes() == b'suxen', path  # b'nexus'[::-1]
+        finally:
+            stop.set()
+            thread.join(5)

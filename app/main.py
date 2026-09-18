@@ -1,7 +1,7 @@
-import asyncio, json, os, re, secrets, time, urllib.parse
+import asyncio, hashlib, json, os, re, secrets, time, urllib.parse
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,9 +10,11 @@ from app.config import settings
 from app.db import init_db, row, rows, execute
 from app.core.models import UserCreate, TrafficEvent
 from app.users.service import list_users, get_user, get_by_token, create_user, delete_user, toggle_user, reset_user, track, allowed, reset_due
-from app.subscriptions.generator import render, active_nodes, node_links, normalize_target, TARGETS as SUB_TARGETS
+from app.subscriptions.generator import render, active_nodes, node_links, normalize_target, profiles_for, TARGETS as SUB_TARGETS
 from app.subscriptions.clients import (CLIENTS, PRESETS, FORMAT_LABELS, DEFAULT_PRESET, catalog as client_catalog,
     client_links, download_overrides, preset as get_preset, subscription_url as client_subscription_url)
+from app.subscriptions import transports as transports
+from app import warp as warp_service
 from app.proxy.manager import add as add_proxy, list_all as list_proxies, check as check_proxy
 from app.dns.service import doh
 from app.services.backup import export_all
@@ -42,6 +44,29 @@ PWA_ICONS={'192':'/static/icons/icon-192.png','512':'/static/icons/icon-512.png'
 # One label per accepted target: subscription formats plus client ids.
 SUB_LABELS={**FORMAT_LABELS, **{c['id']:f"{c['name']} · {c['platform']}" for c in CLIENTS}}
 WORKER_PATH=os.path.join(BASE_DIR,'cloudflare-worker','worker.js')
+APP_VERSION='7.1.0'
+
+def _asset_fingerprint():
+    """Content hash of the shipped front-end.
+
+    The service worker's cache name is derived from it, so editing any asset
+    automatically invalidates the cached app shell on the next visit. Without
+    this an installed phone could keep painting the previous CSS/JS forever and
+    no amount of "hard refresh" would help.
+    """
+    digest=hashlib.sha1()
+    root=os.path.join(BASE_DIR,'static')
+    for folder,_,files in os.walk(root):
+        for name in sorted(files):
+            path=os.path.join(folder,name)
+            digest.update(os.path.relpath(path,root).encode('utf-8'))
+            try:
+                with open(path,'rb') as fh: digest.update(fh.read())
+            except OSError: pass
+    digest.update(APP_VERSION.encode('utf-8'))
+    return digest.hexdigest()[:12]
+
+BUILD_TOKEN=_asset_fingerprint()
 REASON_LABELS={'ok':'فعال','disabled':'غیرفعال','expired':'منقضی‌شده','quota':'حجم تمام شده','requests':'سقف درخواست'}
 
 def _setting(key):
@@ -177,6 +202,13 @@ async def bootstrap_nodes_full():
     self-building: Railway origin + clean-IP edge entries, zero user action.
     """
     try:
+        # A brand-new deployment has no clean-IP rows at all. Seeding them here
+        # (one HTTPS fetch of Cloudflare's published ranges) is what lets the
+        # very first pass detect the edge and build the Cloudflare nodes with
+        # zero admin action; the background loop would otherwise race it.
+        if not rows('SELECT ip FROM cf_ips LIMIT 1'):
+            try: seed_ips(settings.cf_probe_limit)
+            except Exception: pass
         base=(_setting('public_base_url') or settings.public_base_url or '').strip() or None
         worker=(_setting('cloudflare_worker_url') or '').strip() or None
         await auto_sync(base, worker)
@@ -270,6 +302,19 @@ def _preset_summary(fields):
     if fields.get('block_ads'): bits.append('بلاک تبلیغات')
     return bits
 
+def _target_label(target):
+    """Label for a subscription target: a transport profile, a format or a client."""
+    profile=transports.find(target)
+    return profile['tag'] if profile else SUB_LABELS.get(target,target)
+
+def _transport_targets():
+    """One subscription URL per published transport profile."""
+    return [{'target':p['id'],'label':p['tag'],'protocol':p['protocol'],'network':p['network'],
+             'group':p['group'],'security':p.get('security') or 'tls',
+             # Shadowsocks has no single-line sharing URI: its subscription is
+             # the sing-box JSON, and the panel says so instead of hiding it.
+             'uri':p['protocol'] in transports.URI_PROTOCOLS} for p in transports.available_profiles()]
+
 def _share_payload(request:Request,u,node=''):
     """Everything an end user needs: status window, per-client subs, formats."""
     base=public_base(request); token=urllib.parse.quote(u['uuid'],safe='')
@@ -278,7 +323,8 @@ def _share_payload(request:Request,u,node=''):
         'portal_url':_portal_url(base,token),
         'smart_url':client_subscription_url(base,token,'auto',node),
         'clients':client_links(base,token,node,None),
-        'targets':[{'target':t,'label':SUB_LABELS.get(t,t),'url':client_subscription_url(base,token,t,node)} for t in SUB_TARGETS],
+        'transports':_transport_targets(),
+        'targets':[{'target':t,'label':_target_label(t),'url':client_subscription_url(base,token,t,node)} for t in SUB_TARGETS],
     }
 
 @app.get('/api/presets')
@@ -295,7 +341,47 @@ def get_presets(request:Request):
 def get_clients(request:Request):
     """Client catalog: import format, download link and notes."""
     auth(request)
-    return {'clients':client_catalog(),'targets':SUB_TARGETS,'labels':SUB_LABELS,'base_url':public_base(request)}
+    return {'clients':client_catalog(),'targets':SUB_TARGETS,'labels':SUB_LABELS,'base_url':public_base(request),
+            'transports':_transport_targets()}
+
+@app.get('/api/transports')
+def get_transports(request:Request):
+    """The published protocol/transport matrix: what every node offers right now."""
+    auth(request)
+    payload=transports.catalog()
+    payload['nodes']=[{'name':n['name'],'kind':n['kind'],'latency_ms':n['latency_ms'],
+                       'transports':[p['id'] for p in transports.available_profiles()]} for n in active_nodes()]
+    payload['xray']=xray.status()
+    payload['warp']=warp_service.status()
+    return payload
+
+@app.get('/api/warp')
+def get_warp(request:Request):
+    auth(request); return warp_service.status()
+
+@app.post('/api/warp')
+async def manage_warp(request:Request):
+    """Register / enable / disable the opt-in WARP exit node."""
+    auth(request)
+    try: body=await request.json()
+    except Exception: body=None
+    body=body if isinstance(body,dict) else {}
+    action=str(body.get('action') or 'status').strip().lower()
+    if action=='register':
+        try: await asyncio.to_thread(warp_service.register)
+        except Exception as exc: raise HTTPException(400,f'ثبت WARP ناموفق بود: {exc}')
+        _audit('warp.register','peer registered')
+    elif action in ('enable','disable'):
+        if action=='enable' and not warp_service.status()['registered']:
+            raise HTTPException(400,'ابتدا WARP را ثبت کنید')
+        warp_service.enable() if action=='enable' else warp_service.disable()
+        _audit('warp.'+action,'warp exit node')
+    elif action=='discard':
+        warp_service.discard(); _audit('warp.discard','peer removed')
+    else:
+        raise HTTPException(400,'unknown action')
+    await xray.start_or_reload(force=True)
+    return {'success':True,'warp':warp_service.status(),'xray':xray.status()}
 
 def _quick_username():
     for _ in range(25):
@@ -375,7 +461,10 @@ def subscription(request:Request,token:str,target:str='auto',node:str=''):
     # refresh automatically receives the current Railway + healthy Cloudflare nodes.
     try: text=render(u,public_base(request),target,nodes,_sub_prefix())
     except ValueError as e: raise HTTPException(400,str(e))
-    headers={'Cache-Control':'no-store, max-age=0','X-Content-Type-Options':'nosniff','X-NEXUS-Node-Count':str(len(nodes)),'X-NEXUS-Target':normalize_target(target)}
+    headers={'Cache-Control':'no-store, max-age=0','X-Content-Type-Options':'nosniff',
+             'X-NEXUS-Node-Count':str(len(nodes)),'X-NEXUS-Target':normalize_target(target),
+             'X-NEXUS-Format':'singbox' if text.lstrip().startswith('{') else 'lines',
+             'X-NEXUS-Transports':str(len(transports.available_profiles()))}
     return PlainTextResponse(text,headers=headers)
 @app.get('/sub/{token}/{node_name}')
 def subscription_node(request:Request,token:str,node_name:str,target:str='auto'):
@@ -441,10 +530,20 @@ def _trojan_request(data: bytes):
     return password.decode(errors='ignore'),host,port,rest[pos:]
 
 
+# Every WebSocket path the edge exposes, mapped to the local Xray listener that
+# speaks the matching protocol/transport. One bridge function serves them all.
+EDGE_ROUTES = xray.edge_routes()
+
+
 async def _bridge_ws(ws: WebSocket, upstream_path: str):
     await ws.accept()
+    port = EDGE_ROUTES.get(upstream_path)
+    if not port:
+        try: await ws.close(code=1011, reason='transport not available')
+        except Exception: pass
+        return
     try:
-        async with websockets.connect(f"ws://127.0.0.1:{settings.xray_vless_port if upstream_path == '/ws/vless' else settings.xray_trojan_port}{upstream_path}", max_size=None, ping_interval=20, ping_timeout=20) as upstream:
+        async with websockets.connect(f"ws://127.0.0.1:{port}{upstream_path}", max_size=None, ping_interval=20, ping_timeout=20) as upstream:
             async def client_to_xray():
                 while True:
                     msg = await ws.receive()
@@ -478,6 +577,36 @@ async def trojan_ws(ws: WebSocket):
     await _bridge_ws(ws, '/ws/trojan')
 
 
+@app.websocket('/ws/vmess')
+async def vmess_ws(ws: WebSocket):
+    await _bridge_ws(ws, '/ws/vmess')
+
+
+@app.websocket('/ws/ss')
+async def shadowsocks_ws(ws: WebSocket):
+    await _bridge_ws(ws, '/ws/ss')
+
+
+@app.websocket('/cdn/vless')
+async def vless_cdn_ws(ws: WebSocket):
+    await _bridge_ws(ws, '/cdn/vless')
+
+
+@app.websocket('/cdn/vmess')
+async def vmess_cdn_ws(ws: WebSocket):
+    await _bridge_ws(ws, '/cdn/vmess')
+
+
+@app.websocket('/cdn/trojan')
+async def trojan_cdn_ws(ws: WebSocket):
+    await _bridge_ws(ws, '/cdn/trojan')
+
+
+@app.websocket('/ws/warp')
+async def warp_ws(ws: WebSocket):
+    await _bridge_ws(ws, '/ws/warp')
+
+
 @app.websocket('/ws')
 async def legacy_ws(ws: WebSocket):
     # Backward-compatible endpoint: VLESS clients using the old /ws path are
@@ -501,6 +630,10 @@ def _portal_data(request:Request,u):
             'latency_ms':latency,'online':bool(latency is not None and float(latency)>=0),'tls_ok':bool(meta.get('ping_tls')),
             'subscription':client_subscription_url(base,token,u.get('protocol') or 'vless',n['name']),
             'subscription_all':client_subscription_url(base,token,'all',n['name']),
+            'transport_count':len(transports.available_profiles()),
+            'transports':[{'target':p['id'],'label':p['tag'],'protocol':p['protocol'],
+                           'url':client_subscription_url(base,token,p['id'],n['name'])}
+                          for p in transports.available_profiles()],
         })
     return {
         'brand':'NEXUS','token':u['uuid'],'username':u['username'],'protocol':(u.get('protocol') or 'vless'),
@@ -514,6 +647,7 @@ def _portal_data(request:Request,u):
         'portal_url':_portal_url(base,token),
         'smart_url':client_subscription_url(base,token,'auto'),
         'clients':client_links(base,token,'',None),
+        'transports':_transport_targets(),
         'nodes':nodes,'nodes_total':len(nodes),'nodes_online':sum(1 for n in nodes if n['online']),
     }
 
@@ -679,7 +813,14 @@ async def cloudflare_worker_test(request:Request):
 @app.get('/api/core/status')
 def core_status(request:Request):
     auth(request)
-    return {**xray.status(), 'transport':'WebSocket edge + Xray-core', 'protocols':['VLESS','Trojan'], 'endpoints':['/ws/vless','/ws/trojan'], 'features':['Xray protocol engine','UDP tunnelling via supported client transports','live user config reload','Railway TLS/WebSocket edge']}
+    profiles=transports.available_profiles()
+    return {**xray.status(),
+            'transport':'WebSocket edge + Xray-core (Reality on the direct port)',
+            'protocols':sorted({p['protocol'].upper() for p in profiles}),
+            'endpoints':[p['path'] for p in profiles if p['network']=='ws'],
+            'profiles':[{'id':p['id'],'tag':p['tag'],'protocol':p['protocol'],'network':p['network'],'group':p['group']} for p in profiles],
+            'planned':transports.catalog()['planned'],
+            'features':['Xray protocol engine','VLESS · VMess · Trojan · Shadowsocks over WebSocket','Reality on a direct TCP port','live user config reload','Railway TLS/WebSocket edge']}
 
 @app.get('/api/client-config/{username}')
 def client_config(request:Request,username:str,target:str='singbox'):
@@ -755,7 +896,10 @@ def user_links(request:Request,username:str,node:str=''):
     items=[]
     for n in nodes:
         item=node_links(u,n,prefix)
-        item['subscriptions']=[{'target':t,'label':SUB_LABELS.get(t,t),'url':sub(t,item['name'])} for t in ('vless','trojan','base64','singbox','clash','xray')]
+        item['subscriptions']=[{'target':t,'label':_target_label(t),'url':sub(t,item['name'])} for t in ('vless','trojan','vmess','base64','singbox','clash','xray')]
+        # One subscription per published transport for this single node.
+        item['transport_subscriptions']=[{'target':p['id'],'label':p['tag'],'url':sub(p['id'],item['name'])}
+                                         for p in transports.available_profiles()]
         item['subscription']=sub(u.get('protocol') or 'vless',item['name'])
         item['subscription_all']=sub('all',item['name'])
         item['clients']=client_links(base,token,item['name'],{})
@@ -769,7 +913,9 @@ def user_links(request:Request,username:str,node:str=''):
         'portal_url':_portal_url(base,token),
         'subscription':sub(u.get('protocol') or 'vless'),
         'smart_url':sub('auto'),
-        'subscriptions':[{'target':t,'label':SUB_LABELS.get(t,t),'url':sub(t)} for t in SUB_TARGETS],
+        'subscriptions':[{'target':t,'label':_target_label(t),'url':sub(t)} for t in SUB_TARGETS],
+        'transports':_transport_targets(),
+        'profiles':profiles_for('auto'),
         'clients':client_links(base,token,'',None),
         'nodes':items,
     }
@@ -809,7 +955,9 @@ def get_settings(request:Request):
     payload['resolved_base_url']=public_base(request)
     payload['defaults']=defaults
     payload['worker']={'url':worker,'configured':bool(worker)}
-    payload['subscription']={'targets':SUB_TARGETS,'prefix':_sub_prefix(),'node_count':len(active_nodes()),'protocols':['VLESS','Trojan'],'transport':'WebSocket + TLS'}
+    payload['subscription']={'targets':SUB_TARGETS,'prefix':_sub_prefix(),'node_count':len(active_nodes()),
+        'protocols':sorted({p['protocol'].upper() for p in transports.available_profiles()}),
+        'transport':'WebSocket edge + Reality','transports':_transport_targets()}
     payload['clients']=client_catalog()
     payload['brand']=_brand()
     payload['pwa']={'manifest':'/manifest.webmanifest','service_worker':'/sw.js','icons':PWA_ICONS,
@@ -828,8 +976,8 @@ async def save_settings(request:Request):
         if url and not (url.startswith(('http://','https://')) and urllib.parse.urlparse(url).hostname):
             raise HTTPException(400,'Base URL must be a valid http(s) URL')
         _set('public_base_url',url); changed.append('public_base_url')
-    if 'default_protocol' in b and str(b['default_protocol']) not in {'vless','trojan'}:
-        raise HTTPException(400,'default_protocol must be vless or trojan')
+    if 'default_protocol' in b and str(b['default_protocol']) not in {'vless','trojan','vmess','ss'}:
+        raise HTTPException(400,'default_protocol must be vless, trojan, vmess or ss')
     for key in ('sub_prefix','default_protocol','default_limit_gb','default_expiry_days','default_ip_limit'):
         if key in b: _set(key,str(b[key]).strip()); changed.append(key)
     # Presentation + session lifetime: validated so a bad value cannot lock the
@@ -928,12 +1076,18 @@ def manifest():
 
 @app.get('/sw.js')
 def service_worker():
-    """Served from the root so the worker's scope can cover the whole panel."""
-    return FileResponse(os.path.join(BASE_DIR,'static','sw.js'),media_type='text/javascript',
-                        headers={'Service-Worker-Allowed':'/','Cache-Control':'no-cache'})
+    """Served from the root so the worker's scope can cover the whole panel.
+
+    The build token is injected here, which is what makes the browser install a
+    fresh worker (and drop the old cache) after every deploy.
+    """
+    with open(os.path.join(BASE_DIR,'static','sw.js'),'r',encoding='utf-8') as fh: source=fh.read()
+    source=source.replace("const VERSION = 'nexus-dev';",f"const VERSION = 'nexus-{BUILD_TOKEN}';",1)
+    return Response(source,media_type='text/javascript',
+                    headers={'Service-Worker-Allowed':'/','Cache-Control':'no-cache','X-Nexus-Build':BUILD_TOKEN})
 
 @app.get('/api/version')
-def version(): return {'version':'7.0.0','python':os.sys.version.split()[0]}
+def version(): return {'version':APP_VERSION,'build':BUILD_TOKEN,'python':os.sys.version.split()[0]}
 
 @app.exception_handler(Exception)
 async def unhandled_error(request:Request,exc:Exception):

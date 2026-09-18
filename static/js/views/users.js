@@ -259,6 +259,11 @@ export class UsersView {
           ${this.portalBox(data.portal_url)}
         </div>
         <div class="sub-card" style="margin-top:11px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><b style="font-size:13px">سابلینک به تفکیک پروتکل و ترنسپورت</b><span class="pill info">${Fmt.num((data.transports || []).length)} ترکیب</span></div>
+          ${this.transportRows(data.transports, 8)}
+          <p class="muted" style="margin:11px 0 0;line-height:1.9">هر ترکیب نود × پروتکل یک سابلینک جدا دارد (مثلاً فقط Reality یا فقط مسیر CDN). حالت «هوشمند» همه‌ی نودها و پروتکل‌ها را یکجا می‌دهد.</p>
+        </div>
+        <div class="sub-card" style="margin-top:11px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><b style="font-size:13px">سابلینک اختصاصی هر کلاینت</b><span class="pill info">${Fmt.num((data.clients || []).length)} کلاینت</span></div>
           ${this.clientLinkRows(data.clients)}
         </div>`,
@@ -472,6 +477,8 @@ export class UsersView {
                 <button class="copy-btn" data-copy="${esc(node.subscription)}">${ico('copy', 14)}</button></div>
               <div class="link-box" style="margin-top:6px"><div class="lb-main"><b>سابلینک همه ترکیب‌ها روی این نود</b><code>${esc(node.subscription_all || node.subscription)}</code></div>
                 <button class="copy-btn" data-copy="${esc(node.subscription_all || node.subscription)}">${ico('copy', 14)}</button></div>
+              ${(node.transport_subscriptions || []).slice(0, 4).map((item) => `<div class="link-box" style="margin-top:6px"><div class="lb-main"><b>${esc(item.label)} روی همین نود</b><code>${esc(item.url)}</code></div>
+                <button class="copy-btn" data-copy="${esc(item.url)}">${ico('copy', 14)}</button></div>`).join('')}
               ${this.clientChips(node.clients)}
             </div>`).join('') || '<div class="empty">نود فعالی برای انتشار وجود ندارد</div>'}
         </div>`;
@@ -479,6 +486,16 @@ export class UsersView {
     } catch (error) {
       body.innerHTML = `<div class="empty">${ico('alert', 28)}<div>${esc(error.message)}</div></div>`;
     }
+  }
+
+  /* One copy-ready subscription per protocol/transport pair. */
+  transportRows(transports, limit = 0) {
+    const list = limit ? (transports || []).slice(0, limit) : (transports || []);
+    if (!list.length) return '<div class="empty">ترنسپورتی برای انتشار نیست</div>';
+    return list.map((item) => `<div class="link-box">
+        <div class="lb-main"><b>${esc(item.label)} <span class="muted" style="font-weight:400">· ${esc((item.protocol || '').toUpperCase())} / ${esc(item.network || '')}</span></b><code>${esc(item.url)}</code></div>
+        <button class="copy-btn" data-copy="${esc(item.url)}" title="کپی سابلینک ${esc(item.label)}">${ico('copy', 14)}</button>
+      </div>`).join('');
   }
 
   clientLinkRows(clients) {

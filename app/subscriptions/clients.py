@@ -14,19 +14,31 @@ release pages move over time.
 import json, urllib.parse
 from app.db import row
 
-# Subscription formats the generator can render.
-FORMATS = ('auto', 'all', 'vless', 'trojan', 'base64', 'singbox', 'clash', 'xray', 'json')
+# Subscription formats the generator can render. The last group filters by
+# transport instead of by protocol, so a client can subscribe to just the
+# Reality node set or just the plain WebSocket paths.
+FORMATS = ('auto', 'all', 'vless', 'trojan', 'vmess', 'ss', 'base64', 'singbox', 'clash', 'xray', 'json',
+           'ws', 'cdn', 'reality', 'warp')
 
 FORMAT_LABELS = {
-    'auto': 'اتصال هوشمند',
-    'all': 'همه ترکیب‌ها (VLESS + Trojan)',
-    'vless': 'VLESS',
+    'auto': 'اتصال هوشمند (همه نودها × همه پروتکل‌ها)',
+    'all': 'همه ترکیب‌ها (VLESS + VMess + Trojan)',
+    'vless': 'VLESS (WS · CDN · Reality)',
     'trojan': 'Trojan',
+    'vmess': 'VMess',
+    'ss': 'Shadowsocks',
     'base64': 'Base64 (V2Ray)',
     'singbox': 'sing-box JSON',
     'clash': 'Clash / Mihomo',
     'xray': 'Xray outbound JSON',
-    'json': 'Node Catalog JSON',
+    'json': 'کاتالوگ نودها و پروتکل‌ها JSON',
+    'ws': 'فقط WebSocket',
+    'cdn': 'مسیرهای CDN',
+    'reality': 'Reality (TCP)',
+    'warp': 'WARP',
+    'grpc': 'gRPC (نیازمند پورت اختصاصی)',
+    'xhttp': 'XHTTP (نیازمند پورت اختصاصی)',
+    'httpupgrade': 'HTTPUpgrade (نیازمند پورت اختصاصی)',
 }
 
 # One row per client. ``format`` is what the client imports best, ``alt`` lists
@@ -56,6 +68,11 @@ CLIENTS = [
         'id': 'nekoboxplus', 'name': 'NekoBoxPlus', 'platform': 'Android', 'format': 'singbox', 'alt': ['base64', 'all'],
         'download': 'https://github.com/search?q=nekoboxplus&type=repositories',
         'note': 'هسته sing-box؛ خروجی sing-box JSON یا سابلینک Base64.',
+    },
+    {
+        'id': 'amnezia', 'name': 'Amnezia VPN', 'platform': 'Android · iOS · دسکتاپ', 'format': 'base64', 'alt': ['all', 'reality'],
+        'download': 'https://github.com/amnezia-vpn/amnezia-client/releases/latest',
+        'note': 'کلاینت Amnezia؛ پروفایل VLESS/Reality و سابلینک Base64 را ایمپورت می‌کند.',
     },
     {
         'id': 'nekobox', 'name': 'NekoBox', 'platform': 'Android', 'format': 'singbox', 'alt': ['base64'],

@@ -1,15 +1,19 @@
 """Subscription rendering.
 
-``active_nodes`` is the one rule the whole panel shares: a subscription hands
-out **enabled** nodes, ordered by the last measured ping. Measured health is a
-sorting and labelling signal, never a filter — the fallback path exists, so a
-transient probe failure can never empty a user's subscription or 404 their
-client's refresh. Nodes are generated automatically (Railway origin, Cloudflare
-clean IPs); an admin never has to build them by hand.
+One subscription entry is a **(node × transport profile)** pair, so a user's
+default subscription already carries every protocol this deployment serves —
+VLESS, VMess, Trojan and (in the JSON formats) Shadowsocks — on every node, in
+the fastest-first order the ping loop measured.
+
+``active_nodes`` stays the one rule the whole panel shares: a subscription hands
+out **enabled** nodes ordered by the last measured ping, and measured health is
+a sorting signal, never a filter. Nodes are generated automatically (Railway
+origin, Cloudflare clean IPs); an admin never has to build them by hand.
 """
 import base64, json, urllib.parse
 from app.db import rows
 from app.subscriptions.clients import CLIENT_FORMATS, FORMATS
+from app.subscriptions import transports as tp
 
 # Every client format NEXUS can emit, plus one target per known client id so a
 # client can subscribe with the exact name it is listed under in the panel.
@@ -20,115 +24,244 @@ ALIASES = {
     'mihomo': 'clash', 'clash-meta': 'clash', 'yaml': 'clash',
     'xray-json': 'xray', 'xray-outbound': 'xray',
     'vless-all': 'vless', 'trojan-all': 'trojan',
+    'mix': 'all', 'full': 'all', 'everything': 'all',
+    'shadowsocks': 'ss', 'shadow-socks': 'ss',
+    'websocket': 'ws', 'httpupgrade': 'httpupgrade', 'xhttp': 'xhttp',
 }
 # client id -> format (e.g. nekoboxplus -> singbox, bettbox -> base64)
 ALIASES.update({cid: fmt for cid, fmt in CLIENT_FORMATS.items() if cid not in FORMATS})
+
+# Targets that pick profiles by protocol or by transport instead of by format.
+PROTOCOL_TARGETS = ('vless', 'trojan', 'vmess', 'ss')
+TRANSPORT_TARGETS = ('ws', 'cdn', 'reality', 'grpc', 'httpupgrade', 'xhttp', 'warp')
+LINE_FORMATS = ('auto', 'all', 'base64', 'vless', 'trojan', 'vmess')
 
 
 def normalize_target(target):
     value = (target or 'auto').strip().lower()
     value = ALIASES.get(value, value)
-    if value not in TARGETS:
+    # A transport profile id is a valid target too, so "just the Reality node" or
+    # "just this CDN path" is a normal subscription URL.
+    if value not in TARGETS and not tp.find(value):
         raise ValueError('unsupported target: ' + str(target))
     return value
 
 
-def label(user, node, prefix=''):
-    parts = [p for p in (prefix or '', user.get('username', ''), node.get('name', '')) if p]
+def label(user, node, profile=None, prefix=''):
+    parts = [p for p in (prefix or '', node.get('name', '')) if p]
+    if profile and profile.get('tag'):
+        parts.append(profile['tag'])
     return ' · '.join(parts)
 
 
-def _node_host(node):
-    return node.get('server') or ''
+def _profile_for(profile_id):
+    found = tp.find(profile_id)
+    if not found:
+        raise ValueError('transport not available: ' + str(profile_id))
+    return found
 
 
-def _path(user):
-    return '/ws/vless' if (user.get('protocol') or 'vless') == 'vless' else '/ws/trojan'
-
-
-def _query(node, user):
-    q = {
-        'encryption': 'none',
-        'security': 'tls' if int(node.get('tls') or 0) else 'none',
-        'type': 'ws',
-        'host': node.get('host') or node.get('server') or '',
-        'path': _path(user),
+# --------------------------------------------------------------- line protocols
+def _reality_query(node, profile, user):
+    keys = tp.reality_keys() or {}
+    query = {
+        'encryption': 'none', 'security': 'reality', 'sni': tp.REALITY_SNI,
+        'fp': (user.get('fingerprint') or 'chrome'), 'pbk': keys.get('public_key', ''),
+        'sid': keys.get('short_id', ''), 'type': 'tcp', 'headerType': 'none',
     }
-    if node.get('sni'):
-        q['sni'] = node['sni']
     if user.get('frag_len'):
-        q['fragment'] = user['frag_len']
+        query['fragment'] = user['frag_len']
+    return query
+
+
+def _ws_query(node, profile, user):
+    query = {
+        'encryption': 'none', 'security': 'tls' if node.get('tls') else 'none',
+        'type': 'ws', 'host': tp.node_host_header(node), 'path': profile['path'],
+    }
+    sni = tp.node_sni(node)
+    if sni:
+        query['sni'] = sni
+    if user.get('frag_len'):
+        query['fragment'] = user['frag_len']
     if user.get('fingerprint'):
-        q['fp'] = user['fingerprint']
+        query['fp'] = user['fingerprint']
     if user.get('tls_mask'):
-        q['tlsMask'] = user['tls_mask']
-    return q
+        query['tlsMask'] = user['tls_mask']
+    return query
 
 
-def vless(user, node, prefix=''):
-    q = _query(node, user)
-    params = urllib.parse.urlencode({k: v for k, v in q.items() if v}, safe='')
-    return f"vless://{user['uuid']}@{_node_host(node)}:{node['port']}?{params}#{urllib.parse.quote(label(user, node, prefix), safe='')}"
+def profile_query(node, profile, user):
+    """The share-link query string for one profile."""
+    if profile.get('security') == 'reality':
+        return _reality_query(node, profile, user)
+    return _ws_query(node, profile, user)
 
 
-def trojan(user, node, prefix=''):
-    q = _query(node, user)
-    params = urllib.parse.urlencode({k: v for k, v in q.items() if v}, safe='')
-    return f"trojan://{urllib.parse.quote(user['uuid'], safe='')}@{_node_host(node)}:{node['port']}?{params}#{urllib.parse.quote(label(user, node, prefix), safe='')}"
+def _params(query):
+    return urllib.parse.urlencode({k: v for k, v in query.items() if v not in (None, '')}, safe='')
 
 
-def singbox(user, node, prefix=''):
-    tls = bool(int(node.get('tls') or 0))
-    return {
-        'tag': label(user, node, prefix),
-        'type': 'vless' if (user.get('protocol') or 'vless') == 'vless' else 'trojan',
-        'server': _node_host(node),
-        'server_port': int(node.get('port') or 443),
-        'uuid': user['uuid'],
-        'flow': '',
-        'tls': {'enabled': tls, 'server_name': node.get('sni') or node.get('host') or _node_host(node),
-                'insecure': False, 'utls': {'enabled': bool(user.get('fingerprint')), 'fingerprint': user.get('fingerprint') or 'chrome'}},
-        'transport': {'type': 'ws', 'path': _path(user), 'headers': {'Host': node.get('host') or _node_host(node)}},
+def vless_uri(user, node, profile, prefix=''):
+    address, port = tp.node_address(node, profile)
+    name = urllib.parse.quote(label(user, node, profile, prefix), safe='')
+    return f"vless://{user['uuid']}@{address}:{port}?{_params(profile_query(node, profile, user))}#{name}"
+
+
+def trojan_uri(user, node, profile, prefix=''):
+    address, port = tp.node_address(node, profile)
+    name = urllib.parse.quote(label(user, node, profile, prefix), safe='')
+    return f"trojan://{urllib.parse.quote(user['uuid'], safe='')}@{address}:{port}?{_params(profile_query(node, profile, user))}#{name}"
+
+
+def vmess_uri(user, node, profile, prefix=''):
+    """VMess has no parameterised URI: it is one base64 JSON blob."""
+    address, port = tp.node_address(node, profile)
+    reality = profile.get('security') == 'reality'
+    keys = tp.reality_keys() or {}
+    payload = {
+        'v': '2', 'ps': label(user, node, profile, prefix), 'add': address, 'port': str(port),
+        'id': user['uuid'], 'aid': '0', 'scy': 'auto', 'type': 'none',
+        'net': 'tcp' if reality else 'ws', 'host': tp.node_host_header(node) if not reality else '',
+        'path': '' if reality else profile['path'],
+        'tls': 'reality' if reality else 'tls',
+        'sni': tp.REALITY_SNI if reality else tp.node_sni(node),
+        'fp': user.get('fingerprint') or 'chrome',
     }
+    if reality:
+        payload['pbk'] = keys.get('public_key', '')
+        payload['sid'] = keys.get('short_id', '')
+    if user.get('frag_len'):
+        payload['fragment'] = user['frag_len']
+    return 'vmess://' + base64.b64encode(json.dumps(payload, ensure_ascii=False).encode()).decode()
 
 
-def clash(user, node, prefix=''):
-    tls = bool(int(node.get('tls') or 0))
-    return {
-        'name': label(user, node, prefix),
-        'type': 'vless' if (user.get('protocol') or 'vless') == 'vless' else 'trojan',
-        'server': _node_host(node),
-        'port': int(node.get('port') or 443),
-        'uuid': user['uuid'],
-        'password': user['uuid'],
-        'udp': True,
-        'tls': tls,
-        'servername': node.get('sni') or node.get('host') or _node_host(node),
-        'network': 'ws',
-        'ws-opts': {'path': _path(user), 'headers': {'Host': node.get('host') or _node_host(node)}},
-        'client-fingerprint': user.get('fingerprint') or 'chrome',
-    }
+URI_BUILDERS = {'vless': vless_uri, 'trojan': trojan_uri, 'vmess': vmess_uri}
 
 
-def xray(user, node, prefix=''):
-    protocol = (user.get('protocol') or 'vless')
-    settings = (
-        {'vnext': [{'address': _node_host(node), 'port': int(node.get('port') or 443), 'users': [
+def uri(user, node, profile, prefix=''):
+    builder = URI_BUILDERS.get(profile['protocol'])
+    if not builder:
+        raise ValueError('no share link for transport: ' + profile['id'])
+    return builder(user, node, profile, prefix)
+
+
+# ------------------------------------------------------------------ json formats
+def _tls_block(node, profile, user):
+    if profile.get('security') == 'reality':
+        keys = tp.reality_keys() or {}
+        return {'enabled': True, 'server_name': tp.REALITY_SNI, 'insecure': False,
+                'utls': {'enabled': True, 'fingerprint': user.get('fingerprint') or 'chrome'},
+                'reality': {'enabled': True, 'public_key': keys.get('public_key', ''),
+                            'short_id': keys.get('short_id', '')}}
+    return {'enabled': bool(node.get('tls')), 'server_name': tp.node_sni(node), 'insecure': False,
+            'utls': {'enabled': True, 'fingerprint': user.get('fingerprint') or 'chrome'}}
+
+
+def _transport(node, profile):
+    network = profile['network']
+    if network == 'ws':
+        return {'type': 'ws', 'path': profile['path'], 'headers': {'Host': tp.node_host_header(node)}}
+    if network == 'grpc':
+        return {'type': 'grpc', 'service_name': profile['path'].lstrip('/')}
+    if network == 'httpupgrade':
+        return {'type': 'httpupgrade', 'path': profile['path'], 'host': tp.node_host_header(node)}
+    if network == 'xhttp':
+        return {'type': 'xhttp', 'path': profile['path'], 'mode': 'auto'}
+    return None
+
+
+def singbox(user, node, profile, prefix=''):
+    address, port = tp.node_address(node, profile)
+    entry = {'tag': label(user, node, profile, prefix), 'server': address, 'server_port': port,
+             'tls': _tls_block(node, profile, user)}
+    transport = _transport(node, profile)
+    if transport:
+        entry['transport'] = transport
+    protocol = profile['protocol']
+    if protocol == 'vless':
+        entry.update({'type': 'vless', 'uuid': user['uuid'], 'flow': ''})
+    elif protocol == 'vmess':
+        entry.update({'type': 'vmess', 'uuid': user['uuid'], 'alter_id': 0, 'security': 'auto'})
+    elif protocol == 'trojan':
+        entry.update({'type': 'trojan', 'password': user['uuid']})
+    elif protocol == 'ss':
+        entry.update({'type': 'shadowsocks', 'method': tp.SS_METHOD, 'password': tp.ss_key(user)})
+    else:
+        raise ValueError('unsupported protocol: ' + protocol)
+    return entry
+
+
+def clash(user, node, profile, prefix=''):
+    address, port = tp.node_address(node, profile)
+    reality = profile.get('security') == 'reality'
+    keys = tp.reality_keys() or {}
+    entry = {'name': label(user, node, profile, prefix), 'server': address, 'port': port,
+             'udp': True, 'client-fingerprint': user.get('fingerprint') or 'chrome'}
+    if reality:
+        entry.update({'tls': True, 'servername': tp.REALITY_SNI, 'network': profile['network'],
+                      'reality-opts': {'public-key': keys.get('public_key', ''), 'short-id': keys.get('short_id', '')}})
+    else:
+        entry.update({'tls': bool(node.get('tls')), 'servername': tp.node_sni(node),
+                      'network': 'ws', 'ws-opts': {'path': profile['path'],
+                                                   'headers': {'Host': tp.node_host_header(node)}}})
+    protocol = profile['protocol']
+    if protocol == 'vless':
+        entry.update({'type': 'vless', 'uuid': user['uuid']})
+    elif protocol == 'vmess':
+        entry.update({'type': 'vmess', 'uuid': user['uuid'], 'alterId': 0, 'cipher': 'auto'})
+    elif protocol == 'trojan':
+        entry.update({'type': 'trojan', 'password': user['uuid']})
+    elif protocol == 'ss':
+        entry.update({'type': 'ss', 'cipher': tp.SS_METHOD, 'password': tp.ss_key(user)})
+    else:
+        raise ValueError('unsupported protocol: ' + protocol)
+    return entry
+
+
+def xray(user, node, profile, prefix=''):
+    address, port = tp.node_address(node, profile)
+    protocol = profile['protocol']
+    if protocol == 'vless':
+        settings = {'vnext': [{'address': address, 'port': port, 'users': [
             {'id': user['uuid'], 'encryption': 'none', 'flow': '', 'level': 0}]}]}
-        if protocol == 'vless' else
-        {'servers': [{'address': _node_host(node), 'port': int(node.get('port') or 443), 'password': user['uuid'], 'level': 0}]}
-    )
-    stream = {
-        'network': 'ws',
-        'security': 'tls' if int(node.get('tls') or 0) else 'none',
-        'wsSettings': {'path': _path(user), 'headers': {'Host': node.get('host') or _node_host(node)}},
-    }
-    if int(node.get('tls') or 0):
-        stream['tlsSettings'] = {'serverName': node.get('sni') or node.get('host') or _node_host(node),
-                                 'allowInsecure': False, 'fingerprint': user.get('fingerprint') or 'chrome'}
-    return {'tag': label(user, node, prefix) or 'proxy', 'protocol': protocol, 'settings': settings, 'streamSettings': stream}
+    elif protocol == 'vmess':
+        settings = {'vnext': [{'address': address, 'port': port, 'users': [
+            {'id': user['uuid'], 'alterId': 0, 'security': 'auto', 'level': 0}]}]}
+    elif protocol == 'trojan':
+        settings = {'servers': [{'address': address, 'port': port, 'password': user['uuid'], 'level': 0}]}
+    elif protocol == 'ss':
+        settings = {'servers': [{'address': address, 'port': port, 'method': tp.SS_METHOD,
+                                 'password': tp.ss_key(user), 'level': 0}]}
+    else:
+        raise ValueError('unsupported protocol: ' + protocol)
+    stream = {'network': profile['network'], 'security': profile.get('security') or 'none'}
+    transport = _transport(node, profile)
+    if profile['network'] == 'tcp':
+        stream['tcpSettings'] = {}
+    elif profile['network'] == 'ws':
+        stream['wsSettings'] = transport and {'path': profile['path'],
+                                             'headers': {'Host': tp.node_host_header(node)}}
+    elif profile['network'] == 'grpc':
+        stream['grpcSettings'] = {'serviceName': profile['path'].lstrip('/')}
+    elif profile['network'] == 'httpupgrade':
+        stream['httpupgradeSettings'] = {'path': profile['path'], 'host': tp.node_host_header(node)}
+    elif profile['network'] == 'xhttp':
+        stream['xhttpSettings'] = {'path': profile['path'], 'mode': 'auto'}
+    if profile.get('security') == 'reality':
+        keys = tp.reality_keys() or {}
+        stream['realitySettings'] = {'serverName': tp.REALITY_SNI, 'publicKey': keys.get('public_key', ''),
+                                     'shortId': keys.get('short_id', ''),
+                                     'fingerprint': user.get('fingerprint') or 'chrome', 'spiderX': '/'}
+    elif node.get('tls'):
+        stream['tlsSettings'] = {'serverName': tp.node_sni(node), 'allowInsecure': False,
+                                 'fingerprint': user.get('fingerprint') or 'chrome'}
+    return {'tag': label(user, node, profile, prefix) or profile['id'],
+            'protocol': {'ss': 'shadowsocks'}.get(protocol, protocol),
+            'settings': settings, 'streamSettings': stream}
 
 
+# ------------------------------------------------------------------------ nodes
 def active_nodes(include_unhealthy=False):
     """Enabled nodes ordered by their last measured ping.
 
@@ -160,57 +293,102 @@ def active_nodes(include_unhealthy=False):
     return keep
 
 
+def profiles_for(target):
+    """Which transport profiles a target asks for."""
+    exact = tp.find(target)
+    if exact:
+        return [exact]
+    available = tp.available_profiles()
+    if target in ('auto', 'all'):
+        return available
+    if target in PROTOCOL_TARGETS:
+        return [p for p in available if p['protocol'] == target]
+    if target in TRANSPORT_TARGETS:
+        if target == 'ws':
+            return [p for p in available if p['network'] == 'ws' and p['group'] == tp.EDGE]
+        if target == 'cdn':
+            return [p for p in available if p['id'].endswith('-cdn')]
+        if target == 'reality':
+            return [p for p in available if p['group'] == tp.DIRECT]
+        if target == 'warp':
+            return [p for p in available if p['group'] == tp.WARP]
+        return [p for p in available if p['network'] == target]
+    raise ValueError('unsupported target: ' + str(target))
+
+
+def _json_subscription(user, nodes, profiles, kind, prefix=''):
+    builder = {'singbox': singbox, 'clash': clash, 'xray': xray}[kind]
+    key = 'proxies' if kind == 'clash' else 'outbounds'
+    return json.dumps({key: [builder(user, n, p, prefix) for n in nodes for p in profiles]},
+                      ensure_ascii=False, indent=2)
+
+
 def render(user, base, target, nodes=None, prefix=''):
     target = normalize_target(target)
-    if target == 'auto':
-        target = user.get('protocol', 'vless')
     nodes = nodes if nodes is not None else active_nodes()
     if not nodes:
         raise ValueError('no enabled nodes available')
 
-    if target == 'vless':
-        return '\n'.join(vless(user, n, prefix) for n in nodes) + '\n'
-    if target == 'trojan':
-        return '\n'.join(trojan(user, n, prefix) for n in nodes) + '\n'
-    if target == 'all':
-        # Both protocols for every node: Xray accepts the same UUID as the
-        # Trojan password, so every node/protocol combination is usable.
-        lines = []
-        for n in nodes:
-            lines.append(vless(user, n, prefix))
-            lines.append(trojan(user, n, prefix))
-        return '\n'.join(lines) + '\n'
-    if target in {'base64', 'vless-base64'}:
-        payload = '\n'.join(vless(user, n, prefix) for n in nodes) + '\n'
-        return base64.b64encode(payload.encode()).decode()
-    if target == 'singbox':
-        return json.dumps({'outbounds': [singbox(user, n, prefix) for n in nodes]}, ensure_ascii=False, indent=2)
-    if target == 'clash':
-        return json.dumps({'proxies': [clash(user, n, prefix) for n in nodes]}, ensure_ascii=False, indent=2)
-    if target == 'xray':
-        return json.dumps({'outbounds': [xray(user, n, prefix) for n in nodes]}, ensure_ascii=False, indent=2)
-    if target == 'json':
-        return json.dumps({'nodes': [
-            {'name': n['name'], 'kind': n['kind'], 'server': n['server'], 'port': n['port'], 'tls': bool(n['tls']), 'sni': n['sni'], 'host': n['host'], 'latency_ms': n['latency_ms']}
-            for n in nodes
-        ]}, ensure_ascii=False, indent=2)
-    raise ValueError('unsupported target')
+    # A client id resolves to the format that client imports best.
+    resolved = CLIENT_FORMATS.get(target, target)
+    if resolved in ('singbox', 'clash', 'xray'):
+        return _json_subscription(user, nodes, profiles_for('all'), resolved, prefix)
+    if resolved == 'json':
+        return json.dumps({'transports': [{'id': p['id'], 'tag': p['tag'], 'protocol': p['protocol'],
+                                          'network': p['network'], 'group': p['group']}
+                                         for p in tp.available_profiles()],
+                           'nodes': [{'name': n['name'], 'kind': n['kind'], 'server': n['server'],
+                                      'port': n['port'], 'tls': bool(n['tls']), 'sni': n['sni'],
+                                      'host': n['host'], 'latency_ms': n['latency_ms']} for n in nodes]},
+                          ensure_ascii=False, indent=2)
+
+    profiles = profiles_for('auto' if resolved in ('base64', 'auto', 'all') else resolved)
+    line_profiles = [p for p in profiles if p['protocol'] in tp.URI_PROTOCOLS]
+    if not line_profiles:
+        if profiles:
+            # Shadowsocks-over-WebSocket has no sharing-URI form at all, so a
+            # subscription that asks for exactly that still returns something a
+            # client can import instead of a 400 who reads as "broken".
+            return _json_subscription(user, nodes, profiles, 'singbox', prefix)
+        raise ValueError(f"{target}: روی این نصب هنوز منتشر نشده است "
+                         f"(نیازمند پورت TCP اختصاصی یا فعال‌سازی WARP)")
+    # Node-major and fastest-first: the first entries of the subscription are the
+    # fastest node's full transport set, which is what a client shows on top.
+    lines = [uri(user, n, p, prefix) for n in nodes for p in line_profiles]
+    body = '\n'.join(lines) + '\n'
+    if resolved == 'base64':
+        return base64.b64encode(body.encode()).decode()
+    return body
 
 
 def node_links(user, node, prefix=''):
     """Every raw link combination for ONE node (used by the panel drawers)."""
-    protocol = (user.get('protocol') or 'vless')
+    profiles = tp.available_profiles()
+    entries = []
+    for profile in profiles:
+        entry = {'id': profile['id'], 'tag': profile['tag'], 'protocol': profile['protocol'],
+                 'network': profile['network'], 'group': profile['group'],
+                 'security': profile.get('security') or 'tls'}
+        if profile['protocol'] in tp.URI_PROTOCOLS:
+            entry['link'] = uri(user, node, profile, prefix)
+        entry['singbox'] = singbox(user, node, profile, prefix)
+        entry['clash'] = clash(user, node, profile, prefix)
+        entry['xray'] = xray(user, node, profile, prefix)
+        entries.append(entry)
+    primary = next((p for p in entries if p['id'] == 'vless-ws'), entries[0] if entries else None)
     return {
         'name': node.get('name'), 'kind': node.get('kind'), 'server': node.get('server'),
         'port': int(node.get('port') or 443), 'tls': bool(node.get('tls')),
         'sni': node.get('sni'), 'host': node.get('host'), 'latency_ms': node.get('latency_ms'),
         'enabled': bool(node.get('enabled', 1)),
+        'profiles': entries,
         'links': {
-            'primary': vless(user, node, prefix) if protocol == 'vless' else trojan(user, node, prefix),
-            'vless': vless(user, node, prefix),
-            'trojan': trojan(user, node, prefix),
-            'singbox': singbox(user, node, prefix),
-            'clash': clash(user, node, prefix),
-            'xray': xray(user, node, prefix),
+            'primary': primary and primary.get('link') or '',
+            'vless': next((e['link'] for e in entries if e['id'] == 'vless-ws' and e.get('link')), ''),
+            'trojan': next((e['link'] for e in entries if e['id'] == 'trojan-ws' and e.get('link')), ''),
+            'vmess': next((e['link'] for e in entries if e['id'] == 'vmess-ws' and e.get('link')), ''),
+            'singbox': primary and primary['singbox'],
+            'clash': primary and primary['clash'],
+            'xray': primary and primary['xray'],
         },
     }

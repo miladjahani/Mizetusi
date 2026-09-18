@@ -8,7 +8,9 @@
  *   · subscriptions, the status window and the protocol sockets are never
  *     touched, because a cached subscription would hand out a dead node.
  */
-const VERSION = 'nexus-v7';
+// Replaced by the server with a content hash of the shipped assets, so every
+// deploy installs a new worker and the stale shell cache is dropped.
+const VERSION = 'nexus-dev';
 const SHELL = `${VERSION}-shell`;
 const OFFLINE_URL = '/login';
 
@@ -51,6 +53,10 @@ self.addEventListener('activate', (event) => {
     const keys = await caches.keys();
     await Promise.all(keys.filter((key) => key !== SHELL).map((key) => caches.delete(key)));
     await self.clients.claim();
+    // Tell the open panel that a newer build took over, so it can reload once
+    // instead of showing the previous CSS/JS until the next manual refresh.
+    const clients = await self.clients.matchAll({ type: 'window' });
+    clients.forEach((client) => client.postMessage({ type: 'NEXUS_ACTIVATED', version: VERSION }));
   })());
 });
 

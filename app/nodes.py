@@ -170,7 +170,7 @@ class NodeCatalog:
         origin = self.origin_host(base_url)
         probe = self._probe
         if origin and probe:
-            for item in best(3):
+            for item in self.clean_candidates(3):
                 ms, _err = await NodeProbe.tcp(item['ip'], 443, timeout=3.0, tls=True,
                                                server_hostname=origin)
                 if ms is not None:
@@ -178,6 +178,25 @@ class NodeCatalog:
                     break
         cache.update({'host': host, 'at': now})
         return host
+
+    @staticmethod
+    def clean_candidates(limit=3):
+        """Clean IPs to test the edge against.
+
+        Measured-healthy IPs come first, but a deployment that has not probed
+        anything yet (``ok`` still 0) must not end up with an empty Cloudflare
+        catalog, so unprobed entries are used as the fallback.
+        """
+        chosen = best(limit)
+        if len(chosen) < limit:
+            seen = {item['ip'] for item in chosen}
+            # Top up with entries that have not been measured yet: the ping loop
+            # immediately probes them, so nothing unverified stays published for
+            # long, and a fresh deployment still gets a full catalog.
+            extra = rows('SELECT * FROM cf_ips WHERE enabled=1 '
+                         'ORDER BY COALESCE(latency_ms,999999) ASC LIMIT ?', (limit,))
+            chosen += [item for item in extra if item['ip'] not in seen]
+        return chosen[:limit]
 
     def sync(self, base_url=None, worker_url=None, edge_host=None):
         """Rebuild the catalog: Railway direct plus the Cloudflare edge entries.
@@ -200,7 +219,7 @@ class NodeCatalog:
             whost = edge_host or NodeCatalog.edge_cache.get('host')
             source = 'cloudflare-edge'
         if whost:
-            for i, item in enumerate(best(20), 1):
+            for i, item in enumerate(self.clean_candidates(20), 1):
                 name = f'cloudflare-{i:02d}'
                 self.upsert(name, 'cloudflare', item['ip'], 443, True, whost, whost,
                             source,

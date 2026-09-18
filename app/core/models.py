@@ -3,7 +3,7 @@ from typing import Optional, Any
 class UserCreate(BaseModel):
     model_config=ConfigDict(extra='ignore')
     username:str=Field(min_length=1,max_length=80,pattern=r'^[A-Za-z0-9_.-]+$')
-    protocol:str=Field(default='vless',pattern=r'^(vless|trojan)$')
+    protocol:str=Field(default='vless',pattern=r'^(vless|trojan|vmess|ss)$')
     limit_gb:Optional[float]=Field(default=None,ge=0)
     expiry_days:Optional[int]=Field(default=None,ge=0)
     limit_req:Optional[int]=Field(default=None,ge=0)

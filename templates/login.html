@@ -82,7 +82,12 @@
     deferred = null;
     installBtn.style.display = 'none';
   };
-  if ('serviceWorker' in navigator) window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {}); });
+  // updateViaCache:'none' + update() means a new deploy is picked up here too,
+  // instead of the installed app serving yesterday's shell forever.
+  if ('serviceWorker' in navigator) window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' })
+      .then((registration) => registration.update()).catch(() => {});
+  });
 
   f.onsubmit = async (ev) => {
     ev.preventDefault();

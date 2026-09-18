@@ -68,15 +68,16 @@ async def loop(interval=900):
             if not rows('SELECT ip FROM cf_ips LIMIT 1'):
                 seed_ips()
             await probe_all()
-            # Keep the Node Catalog synchronized with the latest healthy CF results.
+            # Keep the Node Catalog synchronized with the latest healthy CF
+            # results — with a Worker when one is configured, and otherwise via
+            # the automatic edge detection (a Cloudflare-fronted panel domain).
             try:
                 from app.config import settings
                 from app.db import row as db_row
-                from app.nodes import sync_from_sources
+                from app.nodes import auto_sync
                 worker = db_row('SELECT value FROM settings WHERE key=?', ('cloudflare_worker_url',))
                 worker_url = worker['value'] if worker else None
-                if worker_url:
-                    sync_from_sources(settings.public_base_url, worker_url)
+                await auto_sync(settings.public_base_url, worker_url)
             except Exception:
                 pass
         except Exception:

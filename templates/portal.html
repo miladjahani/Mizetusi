@@ -102,6 +102,7 @@
       <div class="u-mini"><div class="lbl">دستگاه‌های همزمان</div><div class="val">{{ p.ip_limit or '∞' }}</div></div>
       <div class="u-mini"><div class="lbl">درخواست‌ها</div><div class="val">{{ p.used_req }}<small>از {{ p.limit_req or '∞' }}</small></div></div>
       <div class="u-mini"><div class="lbl">نودهای آنلاین</div><div class="val"><span id="nodesOnline">{{ p.nodes_online }}</span><small>از {{ p.nodes_total }}</small></div></div>
+      <div class="u-mini"><div class="lbl">پروتکل‌های فعال</div><div class="val">{{ p.transports|length }}<small>ترکیب نود × پروتکل</small></div></div>
       <div class="u-mini"><div class="lbl">شروع از اولین اتصال</div><div class="val" style="font-size:13px">{{ 'فعال' if p.start_on_first_connect else 'خاموش' }}</div></div>
     </div>
   </section>
@@ -151,6 +152,19 @@
         {% endif %}
       </div>
       {% endfor %}
+    </div>
+  </section>
+
+  <section>
+    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-link"/></svg> سابلینک به تفکیک پروتکل و ترنسپورت <span class="count">{{ p.transports|length }} ترکیب</span></h2>
+    <div class="glass sub-card">
+      {% for t in p.transports %}
+      <div class="link-box">
+        <div class="lb-main"><b>{{ t.label }} <span class="muted" style="font-weight:400">{{ t.protocol|upper }} · {{ t.network }}</span></b><code>{{ t.url }}</code></div>
+        <button class="copy-btn" data-copy="{{ t.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+      </div>
+      {% endfor %}
+      <p class="note">هر لینک فقط همان پروتکل را روی همه نودهای سالم منتشر می‌کند؛ «اتصال هوشمند» همه ترکیب‌ها را یکجا می‌دهد. کلاینت با هر بار بروزرسانی، نودها و حجم را تازه می‌گیرد.</p>
     </div>
   </section>
 
@@ -274,7 +288,10 @@
   setInterval(() => refresh(true), 25000);
 
   // Cache the shell so this window still opens offline.
-  if ('serviceWorker' in navigator) window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {}); });
+  if ('serviceWorker' in navigator) window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' })
+      .then((registration) => registration.update()).catch(() => {});
+  });
 })();
 </script>
 </body>

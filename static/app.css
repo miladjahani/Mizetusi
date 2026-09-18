@@ -529,7 +529,16 @@ a.copy-btn{text-decoration:none}
   table{table-layout:fixed}
   .modal-head h3{font-size:14.5px}
   .client-card .top{flex-wrap:wrap}
+  /* A subscription URL is far longer than any phone. Wrapping it over two
+     lines keeps the copy button usable and makes horizontal overflow
+     structurally impossible, whatever the URL contains. */
   .sub-card code,.link-box code{font-size:9.5px}
+  .link-box .lb-main code,.sub-card code,.kv-line b{
+    white-space:normal;overflow-wrap:anywhere;word-break:break-all;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+    overflow:hidden;max-height:3em;text-overflow:clip
+  }
+  .link-box .lb-main,.sub-card{overflow:hidden}
 }
 @media (max-width:900px){
   .app-layout{grid-template-columns:1fr;padding:11px;gap:12px;padding-bottom:86px}

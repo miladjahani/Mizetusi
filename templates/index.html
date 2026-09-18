@@ -366,9 +366,23 @@
         </div>
       </div>
 
-      <div class="grid-2b">
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head">
+          <div><h2>نود WARP (WireGuard)</h2><p class="sub">ترافیک نود WARP از داخل شبکه Cloudflare خارج می‌شود؛ برای سرویس‌هایی که IP دیتاسنتر را بلاک می‌کنند مفید است</p></div>
+          <span class="pill" id="warpTag">—</span>
+        </div>
+        <div class="setting-row" id="warpState"></div>
+        <div class="actions">
+          <button class="primary compact" id="btnWarpRegister">ثبت WARP</button>
+          <button class="secondary compact" id="btnWarpToggle">فعال‌سازی</button>
+          <button class="secondary compact" id="btnWarpDiscard">حذف</button>
+        </div>
+        <p class="muted">پس از فعال‌سازی، هسته دوباره بارگذاری می‌شود و نود <b>WARP</b> به سابلینک همه کاربران اضافه می‌گردد. اگر شبکه‌ی میزبان ترافیک WireGuard/UDP را مسدود کند این نود کار نمی‌کند، پس عمداً اختیاری است.</p>
+      </div>
+
+      <div class="grid-2b" style="margin-top:13px">
         <div class="panel glass">
-          <div class="panel-head"><div><h2>اطلاعات سیستم</h2><p class="sub">نسخه، هسته و اندپوینت‌ها</p></div></div>
+          <div class="panel-head"><div><h2>اطلاعات سیستم</h2><p class="sub">نسخه، هسته، پروتکل‌ها و اندپوینت‌ها</p></div></div>
           <div class="kv-list" id="sysInfo"></div>
         </div>
         <div class="panel glass">
