@@ -298,7 +298,7 @@ def xray(user, node, profile, prefix=''):
 
 
 # ------------------------------------------------------------------------ nodes
-def active_nodes(include_unhealthy=False):
+def active_nodes(include_unhealthy=False, location=''):
     """Enabled nodes ordered by their last measured ping.
 
     Measured health is a *sort key*, not a filter — with one exception: a
@@ -315,6 +315,11 @@ def active_nodes(include_unhealthy=False):
     rows_ = rows("SELECT * FROM nodes WHERE enabled=1 ORDER BY "
                  "CASE WHEN latency_ms IS NULL THEN 1 WHEN latency_ms < 0 THEN 2 ELSE 0 END, "
                  "latency_ms ASC, CASE WHEN kind='railway' THEN 0 ELSE 1 END, name ASC")
+    # Multi-location: a subscription can ask for one location only, which is what
+    # makes "just the German edge" (or "just the Iranian one") a normal URL.
+    wanted_location = str(location or '').strip().lower()
+    if wanted_location:
+        rows_ = [n for n in rows_ if tp.node_location(n) == wanted_location]
     if include_unhealthy:
         return rows_
     # The one health filter: never advertise a dead clean IP. The Railway
@@ -434,6 +439,9 @@ def node_links(user, node, prefix=''):
         'port': int(node.get('port') or 443), 'tls': bool(node.get('tls')),
         'sni': node.get('sni'), 'host': node.get('host'), 'latency_ms': node.get('latency_ms'),
         'enabled': bool(node.get('enabled', 1)),
+        # Which edge source (location/provider) this node belongs to, so a user can
+        # be handed "just the German edge" and the panel can group the nodes.
+        'location': tp.node_location(node), 'provider': tp.node_provider(node),
         'profiles': entries,
         'links': {
             'primary': primary and primary.get('link') or '',

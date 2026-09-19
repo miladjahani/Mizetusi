@@ -76,6 +76,8 @@ const checks = [
   [typeof loaded.pwa.PwaManager === 'function', 'PwaManager'],
   [typeof loaded['views/dashboard'].DashboardView === 'function', 'DashboardView'],
   [typeof loaded['views/nodes'].NodesView === 'function', 'NodesView'],
+  [typeof loaded['views/nodes'].NodesView.prototype.samplesModal === 'function', 'node samples modal'],
+  [typeof loaded['views/nodes'].NodesView.prototype.addSamples === 'function', 'node samples add'],
   [typeof loaded['views/users'].UsersView === 'function', 'UsersView'],
   [typeof loaded['views/system'].CloudflareView === 'function', 'CloudflareView'],
   [typeof loaded['views/system'].SettingsView === 'function', 'SettingsView'],
@@ -148,6 +150,30 @@ try {
   window.nexus.store.set('settings', catalog);
 } catch (error) {
   failures.push(`protocol chips threw: ${error.message}`);
+}
+
+// The edge/locations card renders the runtime info, every configured location and
+// the provider summary — it must work with data and when nothing is configured.
+try {
+  window.nexus.store.set('edge', null);
+  window.nexus.cloudflare.fillProviders();
+  window.nexus.cloudflare.renderEdge();
+  window.nexus.store.set('edge', {
+    runtime: { id: 'docker', label: 'VPS / Docker', host: 'nexus.example.com', has_tcp: true,
+      direct: { host: '203.0.113.5', port: 8443 }, data_dir: '/data', notes: ['یادداشت'] },
+    sources: [{ id: 'de-cf', location: 'de', label: 'آلمان · کلودفلر', kind: 'ip', provider: 'cloudflare',
+      host: 'cdn.example.com', port: 443, enabled: 1 },
+      { id: 'nl-vps', location: 'nl', label: 'هلند · دامنه تمیز', kind: 'domain', provider: 'domain',
+        host: 'nl.example.com', port: 443, enabled: 0 }],
+    providers: [{ id: 'cloudflare', label: 'Cloudflare', total: 8, healthy: 3, scannable: true },
+      { id: 'custom', label: 'آی‌پی دستی', total: 1, healthy: 0, scannable: false }],
+    nodes: [{ name: 'de-cf-01', location: 'de', provider: 'cloudflare', enabled: 1 }],
+    locations: ['de', 'nl'],
+  });
+  window.nexus.cloudflare.renderEdge();
+  try { await window.nexus.cloudflare.loadEdge(); } catch (error) { /* offline smoke test */ }
+} catch (error) {
+  failures.push(`edge card threw: ${error.message}`);
 }
 
 await new Promise((resolve) => setTimeout(resolve, 50));

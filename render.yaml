@@ -1,0 +1,43 @@
+# Render Blueprint — NEXUS as a managed web service.
+#
+#   Render → New → Blueprint → pick this repository.
+#
+# Notes that matter for Render specifically:
+#   * Render gives the container one HTTPS port through $PORT; every WebSocket
+#     transport works through it, which is why the panel and the whole
+#     VLESS/VMess/Trojan/Shadowsocks matrix are live with no extra setup.
+#   * A raw TCP port (what Reality needs) is not part of the free plan, so the
+#     direct transports stay unpublished here instead of pointing at nothing.
+#     Add a TCP port (or move to a VPS) and Reality appears by itself.
+#   * The disk below needs a paid instance type. Without it the app detects the
+#     missing volume and stores the sqlite file in a local directory, so it still
+#     boots — the data just does not survive a redeploy.
+services:
+  - type: web
+    name: nexus
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: frankfurt
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NEXUS_PLATFORM
+        value: render
+      - key: XRAY_ENABLED
+        value: 'true'
+      - key: SQLITE_PATH
+        value: /data/nexus.db
+      # Render injects RENDER_EXTERNAL_URL itself, so the origin node and every
+      # subscription URL are built from it. Set PUBLIC_BASE_URL only to force a
+      # custom domain.
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+    disk:
+      name: nexus-data
+      mountPath: /data
+      sizeGB: 1

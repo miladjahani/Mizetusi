@@ -20,7 +20,11 @@ from app.dns.service import doh
 from app.services.backup import export_all
 from app.cloudflare.monitor import seed_ips, probe_all, best, loop as cf_loop
 from app.nodes import (ensure as ensure_nodes, list_nodes, upsert as upsert_node, sync_from_sources,
-    ping_all as ping_all_nodes, ping_loop, ensure_origin_node, catalog as node_catalog, auto_sync)
+    ping_all as ping_all_nodes, ping_loop, ensure_origin_node, catalog as node_catalog, auto_sync,
+    origin_node_name)
+from app.edge import sources as edge_sources
+from app.edge import samples as edge_samples
+from app import runtime
 from app.core.settings_store import store
 from app.core.security import SessionManager, LoginThrottle
 from app.services.audit import AuditLog
@@ -44,7 +48,7 @@ PWA_ICONS={'192':'/static/icons/icon-192.png','512':'/static/icons/icon-512.png'
 # One label per accepted target: subscription formats plus client ids.
 SUB_LABELS={**FORMAT_LABELS, **{c['id']:f"{c['name']} · {c['platform']}" for c in CLIENTS}}
 WORKER_PATH=os.path.join(BASE_DIR,'cloudflare-worker','worker.js')
-APP_VERSION='8.2.0'
+APP_VERSION='9.1.0'
 
 def _asset_fingerprint():
     """Content hash of the shipped front-end.
@@ -492,29 +496,31 @@ def traffic(request:Request,username:str,e:TrafficEvent):
     auth(request); result=track(username,e.bytes,e.requests,e.ip)
     if not result: raise HTTPException(404,'user not found')
     return result
-def _sub_nodes(node:str=''):
-    items=active_nodes()
+def _sub_nodes(node:str='',location:str=''):
+    items=active_nodes(location=location)
     if node:
         wanted={x.strip().lower() for x in str(node).split(',') if x.strip()}
         items=[n for n in items if str(n['name']).lower() in wanted]
     return items
 
 @app.get('/sub/{token}')
-def subscription(request:Request,token:str,target:str='auto',node:str=''):
+def subscription(request:Request,token:str,target:str='auto',node:str='',location:str=''):
     u=get_by_token(urllib.parse.unquote(token))
     if not u: raise HTTPException(404,'subscription not found')
     ok,reason=allowed(u)
     if not ok: raise HTTPException(403,reason)
-    nodes=_sub_nodes(node)
+    nodes=_sub_nodes(node,location)
     if not nodes: raise HTTPException(404,'no matching nodes')
     # Generate from the live Node Catalog on every request. This means a client
-    # refresh automatically receives the current Railway + healthy Cloudflare nodes.
+    # refresh automatically receives the current origin node plus every healthy
+    # clean IP / clean domain of every configured location.
     try: text=render(u,public_base(request),target,nodes,_sub_prefix())
     except ValueError as e: raise HTTPException(400,str(e))
     headers={'Cache-Control':'no-store, max-age=0','X-Content-Type-Options':'nosniff',
              'X-NEXUS-Node-Count':str(len(nodes)),'X-NEXUS-Target':normalize_target(target),
              'X-NEXUS-Format':'singbox' if text.lstrip().startswith('{') else 'lines',
              'X-NEXUS-Transports':str(len(transports.available_profiles()))}
+    if location: headers['X-NEXUS-Location']=str(location)
     return PlainTextResponse(text,headers=headers)
 @app.get('/sub/{token}/{node_name}')
 def subscription_node(request:Request,token:str,node_name:str,target:str='auto'):
@@ -522,7 +528,8 @@ def subscription_node(request:Request,token:str,node_name:str,target:str='auto')
     # grouping and failover trivial.
     return subscription(request,token,target,node_name)
 @app.get('/feed/{token}')
-def feed(request:Request,token:str,target:str='auto',node:str=''): return subscription(request,token,target,node)
+def feed(request:Request,token:str,target:str='auto',node:str='',location:str=''):
+    return subscription(request,token,target,node,location)
 
 
 async def _relay(ws: WebSocket, reader, writer, user, initial=b''):
@@ -743,11 +750,85 @@ async def save_worker_settings(request:Request):
     if key: execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',('cloudflare_worker_key',key))
     sync_from_sources(public_base(request), url or None)
     _audit('cloudflare.worker',url or 'disabled')
-    return {'success':True,'configured':bool(url),'nodes':list_nodes()}
+    return {'success':True,'configured':bool(url),'nodes':[_node_payload(n) for n in list_nodes()]}
+
+def _node_payload(node):  # noqa: D401
+    """A node row plus the edge-source view (its location and provider)."""
+    if not node: return node
+    item=dict(node)
+    item['location']=transports.node_location(node)
+    item['provider']=transports.node_provider(node)
+    item['role']='origin' if str(node.get('kind'))=='railway' else 'edge'
+    return item
 
 @app.get('/api/nodes')
 def nodes(request:Request):
-    auth(request); _ensure_catalog(request); return list_nodes()
+    auth(request); _ensure_catalog(request); return [_node_payload(n) for n in list_nodes()]
+
+@app.get('/api/nodes/samples')
+def node_samples(request:Request):
+    """Ready-made nodes with different settings (clean IPs, alt ports, domains…)."""
+    auth(request)
+    existing={n['name'] for n in list_nodes()}
+    items=edge_samples.catalog(public_host=_samples_host(request), worker_url=_setting('cloudflare_worker_url') or '')
+    for item in items:
+        item['added']=all(name in existing for name in item['names'])
+        item['present']=[name for name in item['names'] if name in existing]
+    return {'samples':items,'host':_samples_host(request),
+            'worker':_setting('cloudflare_worker_url') or ''}
+
+
+def _samples_host(request:Request):
+    """The hostname a CDN would serve this deployment on (its public host)."""
+    return (node_catalog.origin_host(public_base(request)) or '').strip()
+
+
+@app.post('/api/nodes/samples')
+async def add_node_samples(request:Request):
+    """Create one or more sample nodes, then ping them for real."""
+    auth(request)
+    try: body=await request.json()
+    except Exception: body=None
+    body=body if isinstance(body,dict) else {}
+    wanted=[str(item).strip().lower() for item in (body.get('ids') or []) if str(item).strip()]
+    if body.get('all'):
+        wanted=[spec['id'] for spec in edge_samples.SAMPLES]
+    if not wanted: raise HTTPException(400,'حداقل یک نمونه لازم است')
+    host=_samples_host(request); worker=_setting('cloudflare_worker_url') or ''
+    created=[]; skipped=[]
+    for sample_id in wanted:
+        nodes=edge_samples.nodes_for(sample_id,host,worker)
+        if nodes is None:
+            skipped.append(sample_id); continue
+        for node in nodes:
+            existing=row('SELECT name FROM nodes WHERE name=?',(node['name'],))
+            if existing:
+                skipped.append(node['name']); continue
+            upsert_node(node['name'],node['kind'],node['server'],int(node['port']),bool(node['tls']),
+                        node['sni'] or None,node['host'] or None,'sample',
+                        {**edge_samples.SAMPLE_META,'sample':sample_id,'provider':node.get('provider'),
+                         'location':node.get('location') or '','role':'sample'})
+            node_catalog.update(node['name'],{'enabled':1,'latency_ms':None})
+            created.append(node['name'])
+    if not created:
+        raise HTTPException(400,'این نمونه‌ها از قبل وجود دارند')
+    ping=await ping_all_nodes(names=created,timeout=4.0)
+    _audit('nodes.samples',','.join(created))
+    return {'success':True,'created':created,'skipped':skipped,'healthy':ping['healthy'],
+            'probed':ping['probed'],'nodes':[_node_payload(n) for n in list_nodes()]}
+
+
+@app.delete('/api/nodes/samples')
+def clear_node_samples(request:Request):
+    """Remove every node that came from a sample (hand-made ones stay)."""
+    auth(request)
+    removed=[]
+    for node in list_nodes():
+        if edge_samples.is_sample(node):
+            execute('DELETE FROM nodes WHERE name=?',(node['name'],)); removed.append(node['name'])
+    _audit('nodes.samples.clear',','.join(removed) or 'nothing')
+    return {'success':True,'removed':removed,'nodes':[_node_payload(n) for n in list_nodes()]}
+
 
 @app.post('/api/nodes/sync')
 async def sync_nodes(request:Request):
@@ -755,7 +836,8 @@ async def sync_nodes(request:Request):
     auth(request)
     result=await auto_sync(public_base(request), _setting('cloudflare_worker_url') or None, force_edge=True)
     _audit('nodes.sync',f"{result['synced']} nodes · edge {result['edge_host'] or '-'}")
-    return {'success':True,'synced':result['synced'],'edge_host':result['edge_host'],'nodes':result['nodes']}
+    return {'success':True,'synced':result['synced'],'edge_host':result['edge_host'],
+            'nodes':[_node_payload(n) for n in result['nodes']]}
 
 @app.post('/api/nodes/ping')
 async def ping_nodes(request:Request):
@@ -775,7 +857,7 @@ async def ping_nodes(request:Request):
 async def create_node(request:Request):
     auth(request); b=await request.json();
     name=str(b.get('name','')).strip(); server=str(b.get('server','')).strip(); kind=str(b.get('kind','railway')).strip()
-    if not name or not server or kind not in {'railway','cloudflare'}: raise HTTPException(400,'name, server and kind are required')
+    if not name or not server or kind not in {'railway','cloudflare','edge'}: raise HTTPException(400,'name, server and kind are required')
     upsert_node(name,kind,server,int(b.get('port',443)),bool(b.get('tls',True)),b.get('sni'),b.get('host'),kind,{})
     return {'success':True,'node':row('SELECT * FROM nodes WHERE name=?',(name,))}
 
@@ -785,15 +867,143 @@ def cloudflare_ips(request:Request,limit:int=50):
 
 @app.post('/api/cloudflare/refresh')
 async def cloudflare_refresh(request:Request):
-    auth(request); count=seed_ips(settings.cf_probe_limit); results=await probe_all(limit=settings.cf_probe_limit); result=await auto_sync(public_base(request), _setting('cloudflare_worker_url') or None, force_edge=True); return {'seeded':count,'probed':len(results),'best':best(20),'edge_host':result['edge_host'],'nodes':result['nodes']}
+    auth(request); count=seed_ips(settings.cf_probe_limit); results=await probe_all(limit=settings.cf_probe_limit); result=await auto_sync(public_base(request), _setting('cloudflare_worker_url') or None, force_edge=True); return {'seeded':count,'probed':len(results),'best':best(20),'edge_host':result['edge_host'],'nodes':[_node_payload(n) for n in result['nodes']]}
 
-WORKER_STEPS=[
-    'کد زیر را کپی یا دانلود کنید؛ آدرس Railway شما از قبل داخلش قرار گرفته است.',
-    'در Cloudflare → Workers & Pages → Create Worker کد را جایگزین و Deploy کنید.',
-    'اختیاری: در Settings → Variables متغیری با نام NEXUS_ORIGIN و مقدار آدرس Railway بسازید.',
-    'آدرس Worker را در فیلد همین بخش ذخیره کنید تا نودهای Cloudflare ساخته و پینگ شوند.',
-    'روی «پینگ همه نودها» بزنید؛ نودها به ترتیب کمترین پینگ در سابلینک‌ها می‌آیند.',
-]
+
+# ------------------------------------------------------- runtime + edge sources
+@app.get('/api/system/runtime')
+def system_runtime(request:Request):
+    """Which platform this is, where it answers and whether a raw TCP port exists."""
+    auth(request)
+    return runtime.info()
+
+
+def _edge_sync(request:Request):
+    """Rebuild the catalog right away so a new source/domain is usable at once."""
+    try:
+        return sync_from_sources(public_base(request), _setting('cloudflare_worker_url') or None,
+                                 node_catalog.edge_cache.get('host'))
+    except Exception:
+        return 0
+
+@app.get('/api/edge')
+def edge_status(request:Request):
+    """Everything the panel's "منابع لبه و لوکیشن‌ها" card renders."""
+    auth(request); _ensure_catalog(request)
+    payload=edge_sources.status()
+    payload['nodes']=[_node_payload(n) for n in list_nodes()]
+    payload['worker']={'url':_setting('cloudflare_worker_url') or '','configured':bool(_setting('cloudflare_worker_url'))}
+    return payload
+
+@app.get('/api/edge/providers')
+def edge_providers(request:Request):
+    auth(request)
+    return {'providers':edge_sources.provider_summary(),'runtime':runtime.info(),
+            'pool':len(edge_sources.ips(limit=500))}
+
+@app.post('/api/edge/scan')
+async def edge_scan(request:Request):
+    """Refresh every provider's clean-IP pool, then probe and republish."""
+    auth(request)
+    try: body=await request.json()
+    except Exception: body=None
+    body=body if isinstance(body,dict) else {}
+    provider_id=str(body.get('provider') or '').strip().lower()
+    try: limit=min(max(int(body.get('limit') or 96),4),512)
+    except (TypeError,ValueError): limit=96
+    if provider_id:
+        if not edge_sources.provider(provider_id): raise HTTPException(400,'provider ناشناخته است')
+        results=[edge_sources.scan(provider_id,limit=limit)]
+    else:
+        results=edge_sources.scan_all(limit)
+    found=sum(int(r.get('found') or 0) for r in results)
+    if not found and all(not r.get('ok') for r in results):
+        detail='; '.join(str(r.get('error')) for r in results if r.get('error'))
+        raise HTTPException(502,f'لیست هیچ provider دریافت نشد: {detail[:300]}')
+    probed=await probe_all(limit=min(limit*2,256),provider_id=provider_id or None)
+    synced=_edge_sync(request)
+    _audit('edge.scan',f"{provider_id or 'all'} · +{found} ips")
+    return {'success':True,'results':results,'found':found,'probed':len(probed),'synced':synced,
+            'providers':edge_sources.provider_summary(),'nodes':[_node_payload(n) for n in list_nodes()]}
+
+@app.get('/api/edge/ips')
+def edge_ips(request:Request,provider:str='',limit:int=200):
+    auth(request)
+    return {'ips':edge_sources.ips(provider,min(max(limit,1),500)),'providers':edge_sources.provider_summary()}
+
+@app.post('/api/edge/ips')
+async def edge_add_ips(request:Request):
+    """Add hand-written clean IPs (or CIDRs) to the pool and publish them."""
+    auth(request)
+    try: body=await request.json()
+    except Exception: body=None
+    body=body if isinstance(body,dict) else {}
+    values=body.get('ips') if body.get('ips') is not None else body.get('value')
+    if values is None: raise HTTPException(400,'فیلد ips لازم است')
+    provider_id=str(body.get('provider') or edge_sources.MANUAL_PROVIDER).strip().lower()
+    if not edge_sources.provider(provider_id): raise HTTPException(400,'provider ناشناخته است')
+    result=edge_sources.add_ips(values,provider_id)
+    if not result['added']:
+        raise HTTPException(400,'هیچ آی‌پی معتبری پیدا نشد' if result['skipped'] else 'چیزی برای افزودن نبود')
+    probed=await probe_all(limit=64,provider_id=provider_id)
+    synced=_edge_sync(request)
+    _audit('edge.ips',f"+{len(result['added'])} · {provider_id}")
+    return {'success':True,'added':result['added'],'skipped':result['skipped'],'probed':len(probed),
+            'synced':synced,'ips':edge_sources.ips(provider_id,200)}
+
+@app.delete('/api/edge/ips/{ip}')
+def edge_delete_ip(request:Request,ip:str):
+    auth(request); edge_sources.remove_ip(ip); synced=_edge_sync(request)
+    _audit('edge.ip.remove',ip)
+    return {'success':True,'synced':synced,'providers':edge_sources.provider_summary()}
+
+@app.post('/api/edge/sources')
+async def edge_save_source(request:Request):
+    """Create or update one location: a clean-IP provider, a manual list, a domain."""
+    auth(request)
+    try: body=await request.json()
+    except Exception: body=None
+    body=body if isinstance(body,dict) else {}
+    try:
+        source,items=edge_sources.save_source(body,str(body.get('id') or '').strip())
+    except ValueError as exc:
+        raise HTTPException(400,str(exc))
+    if source.get('ips'):
+        edge_sources.add_ips(source['ips'],source.get('provider') or edge_sources.MANUAL_PROVIDER)
+    await probe_all(limit=128)
+    synced=_edge_sync(request)
+    _audit('edge.source.save',f"{source['id']} · {source['kind']}")
+    return {'success':True,'source':source,'sources':items,'synced':synced,
+            'nodes':[_node_payload(n) for n in list_nodes()]}
+
+@app.delete('/api/edge/sources/{source_id}')
+def edge_delete_source(request:Request,source_id:str):
+    auth(request); items=edge_sources.delete_source(source_id); synced=_edge_sync(request)
+    _audit('edge.source.delete',source_id)
+    return {'success':True,'sources':items,'synced':synced,'nodes':[_node_payload(n) for n in list_nodes()]}
+
+@app.post('/api/edge/sources/{source_id}/toggle')
+async def edge_toggle_source(request:Request,source_id:str):
+    auth(request)
+    current=next((item for item in edge_sources.sources() if item['id']==source_id),None)
+    if not current: raise HTTPException(404,'منبع پیدا نشد')
+    source,items=edge_sources.save_source({'enabled':0 if current.get('enabled',1) else 1},source_id)
+    synced=_edge_sync(request)
+    _audit('edge.source.toggle',f"{source_id} · {'on' if source['enabled'] else 'off'}")
+    return {'success':True,'source':source,'sources':items,'synced':synced,
+            'nodes':[_node_payload(n) for n in list_nodes()]}
+
+def _worker_steps():
+    """The Worker deployment guide, worded for the platform this runs on."""
+    where=runtime.label()
+    return [
+        f'کد زیر را کپی یا دانلود کنید؛ آدرس همین سرویس ({where}) از قبل داخلش قرار گرفته است.',
+        'در Cloudflare → Workers & Pages → Create Worker کد را جایگزین و Deploy کنید.',
+        f'اختیاری: در Settings → Variables متغیری با نام NEXUS_ORIGIN و مقدار آدرس {where} بسازید.',
+        'آدرس Worker را در فیلد همین بخش ذخیره کنید تا لوکیشن کلودفلر ساخته و پینگ شود.',
+        'روی «پینگ همه نودها» بزنید؛ نودها به ترتیب کمترین پینگ در سابلینک‌ها می‌آیند.',
+        'برای لوکیشن‌های بیشتر (Fastly، آروان، دامنهٔ تمیز و…) از بخش «منابع لبه و لوکیشن‌ها» استفاده کنید.',
+    ]
 
 def _worker_source(request:Request,origin=None):
     with open(WORKER_PATH,'r',encoding='utf-8') as fh: source=fh.read()
@@ -808,7 +1018,8 @@ def cloudflare_worker_code(request:Request):
     auth(request)
     base=public_base(request)
     return {'code':_worker_source(request,base),'filename':'nexus-worker.js','origin':base,
-            'configured_url':_setting('cloudflare_worker_url') or '','steps':WORKER_STEPS}
+            'configured_url':_setting('cloudflare_worker_url') or '','steps':_worker_steps(),
+            'runtime':runtime.info()}
 
 @app.get('/api/cloudflare/worker-download')
 def cloudflare_worker_download(request:Request):
@@ -906,7 +1117,10 @@ def metrics(request:Request,hours:int=24):
             'nodes':len(nodes),
             'nodes_enabled':sum(1 for n in nodes if n['enabled']),
             'railway_nodes':sum(1 for n in nodes if n['kind']=='railway'),
+            'origin_nodes':sum(1 for n in nodes if n['kind']=='railway'),
             'cloudflare_nodes':sum(1 for n in nodes if n['kind']=='cloudflare'),
+            'edge_domain_nodes':sum(1 for n in nodes if n['kind']=='edge'),
+            'locations':sorted({transports.node_location(n) for n in nodes if transports.node_location(n)}),
             'cf_ips_total':len(rows('SELECT ip FROM cf_ips')),
             'cf_ips_ok':len(rows('SELECT ip FROM cf_ips WHERE ok=1')),
             'proxies':len(list_proxies()),
@@ -915,7 +1129,9 @@ def metrics(request:Request,hours:int=24):
         'series_hourly':hourly,
         'series_daily':daily,
         'protocols':[{'name':k,'count':v} for k,v in protocols.items()],
-        'nodes':[{'name':n['name'],'kind':n['kind'],'server':n['server'],'port':n['port'],'latency_ms':n['latency_ms'],'enabled':bool(n['enabled'])} for n in nodes],
+        'nodes':[{'name':n['name'],'kind':n['kind'],'server':n['server'],'port':n['port'],'latency_ms':n['latency_ms'],'enabled':bool(n['enabled']),
+                   'location':transports.node_location(n),'provider':transports.node_provider(n)} for n in nodes],
+        'locations':sorted({transports.node_location(n) for n in nodes if transports.node_location(n)}),
         'top_users':[{'username':u['username'],'protocol':u.get('protocol'),'protocol_label':_user_payload(u)['protocol_label'],'used_gb':round(float(u.get('used_gb') or 0),4),'limit_gb':u.get('limit_gb'),'is_active':bool(u['is_active'])} for u in top],
     }
 
@@ -929,11 +1145,16 @@ def user_links(request:Request,username:str,node:str=''):
     base=public_base(request); prefix=_sub_prefix()
     token=urllib.parse.quote(u['uuid'],safe='')
     nodes=_sub_nodes(node) or active_nodes()
-    def sub(target,name=''):
+    def sub(target,name='',location=''):
         url=f"{base}/sub/{token}?target={urllib.parse.quote(normalize_target(target))}"
         if name: url+='&node='+urllib.parse.quote(str(name))
+        if location: url+='&location='+urllib.parse.quote(str(location))
         return url
     protocol_set=transports.user_protocols(u)
+    # Multi-location: one subscription per edge source (location), so a user who
+    # only wants the German edge (or only the Iranian one) gets exactly that.
+    catalog_nodes=active_nodes()
+    locations=sorted({transports.node_location(n) for n in catalog_nodes if transports.node_location(n)})
     items=[]
     for n in nodes:
         item=node_links(u,n,prefix)
@@ -963,6 +1184,11 @@ def user_links(request:Request,username:str,node:str=''):
         'smart_url':sub('auto'),
         'subscriptions':[{'target':t,'label':_target_label(t),'url':sub(t)} for t in SUB_TARGETS],
         'protocol_set':sorted(enabled_protocols,key=transports.PROTOCOLS.index),
+        'locations':locations,
+        'location_subscriptions':[{'location':loc,'label':f'{loc.upper()} · فقط همین لوکیشن',
+                                   'url':sub(_user_target(u),'',loc),
+                                   'nodes':sum(1 for n in catalog_nodes if transports.node_location(n)==loc)} for loc in locations],
+        'runtime':runtime.info(),
         'transports':_transport_targets(enabled_protocols),
         'profiles':profiles_for('auto',enabled_protocols),
         'clients':client_links(base,token,'',None),
@@ -976,7 +1202,7 @@ async def update_node(request:Request,name:str):
     existing=row('SELECT * FROM nodes WHERE name=?',(name,))
     if not existing: raise HTTPException(404,'node not found')
     b=await request.json(); sets=[]; vals=[]
-    if b.get('kind') is not None and str(b['kind']) not in {'railway','cloudflare'}: raise HTTPException(400,'unsupported node kind')
+    if b.get('kind') is not None and str(b['kind']) not in {'railway','cloudflare','edge'}: raise HTTPException(400,'unsupported node kind')
     for key in ('kind','server','sni','host'):
         if key in b: sets.append(key+'=?'); vals.append(b[key])
     for key in ('port','tls','enabled'):

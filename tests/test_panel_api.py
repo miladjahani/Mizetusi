@@ -180,14 +180,19 @@ def test_session_lifetime_is_admin_configurable():
 
 
 def test_reload_self_heals_the_node_catalog():
-    # A fresh Railway deployment that only read the database would publish an
-    # empty catalog; opening the panel must create the origin node.
+    # A fresh deployment that only read the database would publish an empty
+    # catalog; opening the panel must create the origin node. It is named after
+    # the platform it runs on (railway-direct, vps-direct, render-direct…).
+    from app.nodes import origin_node_name
     execute('DELETE FROM nodes')
     assert client.get('/api/metrics', headers=h()).json()['totals']['nodes'] == 0
     page = client.get('/', headers=h())
     assert page.status_code == 200
     nodes = client.get('/api/nodes', headers=h()).json()
-    assert any(node['name'] == 'railway-direct' and node['kind'] == 'railway' for node in nodes)
+    origin = [node for node in nodes if node['kind'] == 'railway']
+    assert origin, 'the origin node must exist on any platform'
+    assert origin[0]['name'] == origin_node_name()
+    assert origin[0]['role'] == 'origin'
     _seed_nodes()
 
 

@@ -2,7 +2,7 @@ import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    app_name: str = 'NEXUS Railway Python Auto'
+    app_name: str = 'NEXUS Xray Control Plane'
     environment: str = 'production'
     admin_password: str = 'admin'
     jwt_secret: str = ''

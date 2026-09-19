@@ -21,6 +21,7 @@ import json
 import os
 import secrets
 
+from app import runtime
 from app.config import settings
 from app.db import row, execute
 
@@ -257,19 +258,23 @@ def reality_keys():
 def direct_endpoint():
     """Where a raw TCP client can reach this deployment, if anywhere at all.
 
-    Railway injects the TCP-proxy hostname only after the admin enables one, so
-    the direct transports switch themselves on with no code change.
+    Precedence: the panel's own setting, then the environment, then — on a host
+    that owns a public port (a VPS, Docker, Fly) — the machine's own address via
+    :mod:`app.runtime`. Railway only gets one after the admin enables a TCP
+    proxy, and Render/Heroku never do, so nothing is published there.
     """
-    host = (_setting('direct_host') or settings.direct_host
-            or os.getenv('NEXUS_DIRECT_HOST') or os.getenv('RAILWAY_TCP_PROXY_DOMAIN') or '').strip()
-    port = (_setting('direct_port') or settings.direct_port
-            or os.getenv('NEXUS_DIRECT_PORT') or os.getenv('RAILWAY_TCP_PROXY_PORT') or 0)
+    host = (_setting('direct_host') or settings.direct_host or '').strip()
+    port = _setting('direct_port') or settings.direct_port or 0
     try:
         port = int(port or 0)
     except (TypeError, ValueError):
         port = 0
     if host and port:
-        return {'host': host, 'port': port}
+        return {'host': host, 'port': port, 'source': 'panel'}
+    detected = runtime.direct()
+    if detected:
+        return {'host': detected['host'], 'port': int(detected['port']),
+                'source': detected.get('source') or 'env'}
     return None
 
 
@@ -461,3 +466,16 @@ def node_host_header(node):
 
 def node_sni(node):
     return str(node.get('sni') or node.get('host') or node.get('server') or '')
+
+
+def node_location(node):
+    """The location label of an edge source ('' for the deployment's own node)."""
+    from app.edge.sources import parse_metadata
+    return str(parse_metadata((node or {}).get('metadata')).get('location') or '').strip().lower()
+
+
+def node_provider(node):
+    """Which edge source published this node ('' when unknown)."""
+    from app.edge.sources import parse_metadata
+    raw = parse_metadata((node or {}).get('metadata'))
+    return str(raw.get('provider') or (node or {}).get('source') or '').strip().lower()

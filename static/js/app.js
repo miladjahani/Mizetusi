@@ -218,7 +218,7 @@ export class NexusApp {
   }
 
   async loadCloudflare() {
-    await Promise.all([this.loadCfIps(), this.loadWorkerSettings()]);
+    await Promise.all([this.loadCfIps(), this.loadWorkerSettings(), this.cloudflare.loadEdge()]);
     this.cloudflare.render();
     this.dashboard.cloudflareSummary();
   }

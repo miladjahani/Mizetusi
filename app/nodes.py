@@ -12,13 +12,13 @@ function names are thin aliases kept for the routes and the tests.
 """
 import asyncio
 import json
-import os
 import ssl
 import time
-import urllib.parse
 
 from app.db import rows, row, execute, is_pg
 from app.cloudflare.monitor import best
+from app import runtime
+from app.edge import sources as edge_sources
 
 FAILED_LATENCY = -1.0
 
@@ -31,9 +31,13 @@ SCHEMA = (
 )
 INDEX = 'CREATE INDEX IF NOT EXISTS idx_nodes_kind_enabled ON nodes(kind,enabled)'
 
-# Cloudflare / Railway hostnames cannot be guessed, so the origin comes from
-# the environment Railway injects (or the admin's saved base URL).
-ENV_ORIGIN_KEYS = ('PUBLIC_BASE_URL', 'RAILWAY_PUBLIC_DOMAIN', 'RAILWAY_STATIC_URL', 'RAILWAY_PRIVATE_DOMAIN')
+# Public hostnames cannot be guessed, so the origin comes from the environment
+# the platform injects (Railway, Render, Fly, Koyeb, Heroku…) or from the
+# admin's saved base URL — see :mod:`app.runtime`.
+def origin_node_name(platform_id=None):
+    """Name of this deployment's own node (``vps-direct``, ``render-direct``…)."""
+    pid = platform_id or runtime.platform()
+    return 'railway-direct' if pid == 'railway' else f'{pid}-direct'
 
 
 class NodeCatalog:
@@ -75,7 +79,10 @@ class NodeCatalog:
         self.ensure()
         now = int(time.time())
         metadata = metadata or {}
-        values = (name, kind, server, port, int(bool(tls)), sni, host, source, str(metadata), now, now)
+        # metadata is stored as JSON: the panel and the subscription labels read
+        # the location/provider back out of it, and a Python repr would not parse.
+        payload = json.dumps(metadata, ensure_ascii=False) if isinstance(metadata, (dict, list)) else str(metadata)
+        values = (name, kind, server, port, int(bool(tls)), sni, host, source, payload, now, now)
         if is_pg():
             return execute(
                 'INSERT INTO nodes(name,kind,server,port,tls,sni,host,source,metadata,created_at,updated_at) '
@@ -118,34 +125,35 @@ class NodeCatalog:
 
     # ------------------------------------------------------------------- sync
     def origin_host(self, base_url=None):
-        """The public host this deployment answers on (Railway injects it)."""
+        """The public host this deployment answers on (env-injected per platform)."""
         candidate = (base_url or '').strip()
         if not candidate:
-            for key in ENV_ORIGIN_KEYS:
-                candidate = (os.getenv(key) or '').strip()
-                if candidate:
-                    break
-        if not candidate:
-            return None
+            return runtime.host()
         if '://' not in candidate:
             candidate = 'https://' + candidate
+        import urllib.parse
         return urllib.parse.urlparse(candidate).hostname
 
     def ensure_origin(self, base_url=None):
-        """Guarantee the Railway direct node exists.
+        """Guarantee this deployment's own node exists.
 
         Without it a fresh deployment publishes an empty Node Catalog (and every
         subscription 404s), so this runs at startup and whenever the panel is
-        opened.
+        opened. The node is named after the platform it runs on (``vps-direct``,
+        ``render-direct``, ``railway-direct``) so a user sees where a location
+        actually is, and it stays the one node that is never dropped when a probe
+        fails — it is the guaranteed baseline of every subscription.
         """
         host = self.origin_host(base_url)
         if not host:
             return None
-        node = self.get('railway-direct')
+        name = origin_node_name()
+        node = self.get(name)
         if node and node.get('server') == host:
             return node
-        self.upsert('railway-direct', 'railway', host, 443, True, host, host, 'railway', {'role': 'direct'})
-        return self.get('railway-direct')
+        self.upsert(name, 'railway', host, 443, True, host, host, runtime.platform(),
+                    {'role': 'direct', 'platform': runtime.platform(), 'location': ''})
+        return self.get(name)
 
     # Deployment-shape detection is a network probe; the result is cached so a
     # sync storm (panel open, ping button, background loop) never hammers the
@@ -180,14 +188,14 @@ class NodeCatalog:
         return host
 
     @staticmethod
-    def clean_candidates(limit=3):
+    def clean_candidates(limit=3, provider_id=None):
         """Clean IPs to test the edge against.
 
         Measured-healthy IPs come first, but a deployment that has not probed
-        anything yet (``ok`` still 0) must not end up with an empty Cloudflare
-        catalog, so unprobed entries are used as the fallback.
+        anything yet (``ok`` still 0) must not end up with an empty edge catalog,
+        so unprobed entries are used as the fallback.
         """
-        chosen = best(limit)
+        chosen = best(limit, provider_id)
         if len(chosen) < limit:
             seen = {item['ip'] for item in chosen}
             # Top up with entries that have not been measured yet: the ping loop
@@ -199,33 +207,37 @@ class NodeCatalog:
         return chosen[:limit]
 
     def sync(self, base_url=None, worker_url=None, edge_host=None):
-        """Rebuild the catalog: Railway direct plus the Cloudflare edge entries.
+        """Rebuild the catalog: this deployment's own node plus every location.
 
-        Everything here is automatic. The Worker host wins when configured;
-        otherwise a Cloudflare-fronted panel domain (detected by
-        :meth:`detect_edge`) serves as the SNI/Host for the clean-IP nodes, so
-        they appear with zero user interaction.
+        Everything here is automatic. When the admin has defined edge sources
+        (clean-IP providers, hand-written IPs, clean domains — each with a
+        location), those define the catalog: one group of nodes per location, each
+        carrying its own Host/SNI. With no source configured the historical
+        behaviour is unchanged: the Worker host (or a Cloudflare-fronted panel
+        domain, detected by :meth:`detect_edge`) fronts the healthiest clean IPs.
         """
         self.ensure()
         created = 0
         if self.ensure_origin(base_url) is not None:
             created += 1
-        # The previous Cloudflare catalog is disabled first so stale IPs never
-        # survive a re-probe; Railway direct stays enabled as the baseline.
-        execute("UPDATE nodes SET enabled=0, updated_at=? WHERE kind='cloudflare'", (int(time.time()),))
-        whost = urllib.parse.urlparse(worker_url).hostname if worker_url else None
-        source = 'cloudflare-probe' if whost else None
-        if not whost:
-            whost = edge_host or NodeCatalog.edge_cache.get('host')
-            source = 'cloudflare-edge'
-        if whost:
-            for i, item in enumerate(self.clean_candidates(20), 1):
-                name = f'cloudflare-{i:02d}'
-                self.upsert(name, 'cloudflare', item['ip'], 443, True, whost, whost,
-                            source,
-                            {'probe_latency_ms': item.get('latency_ms'), 'edge_host': whost})
-                self.update(name, {'enabled': 1, 'latency_ms': item.get('latency_ms')})
-                created += 1
+        # The previous edge catalog is disabled first so stale IPs never survive a
+        # re-probe. Only the rows this sync owns are reset: a node the admin added
+        # by hand — or from one of the ready-made samples — must survive a rebuild,
+        # and so must the deployment's own node.
+        execute("UPDATE nodes SET enabled=0, updated_at=? "
+                "WHERE kind IN ('cloudflare','edge') "
+                "AND (source IN ('cloudflare-probe','cloudflare-edge') OR metadata LIKE '%source_id%')",
+                (int(time.time()),))
+        edge = edge_host or NodeCatalog.edge_cache.get('host')
+        keep = set()
+        for item in edge_sources.plan(worker_url, edge):
+            self.upsert(item['name'], item['kind'], item['server'], item['port'], item['tls'],
+                        item['sni'], item['host'], item['source'], item['metadata'])
+            self.update(item['name'], {'enabled': 1, 'latency_ms': item.get('latency_ms')})
+            keep.add(item['name'])
+            created += 1
+        # A location the admin deleted takes its nodes with it.
+        edge_sources.cleanup_orphans(keep)
         return created
 
 
@@ -237,14 +249,7 @@ class NodeProbe:
 
     @staticmethod
     def metadata(node):
-        raw = node.get('metadata')
-        if isinstance(raw, dict):
-            return dict(raw)
-        try:
-            data = json.loads(raw or '{}')
-            return dict(data) if isinstance(data, dict) else {}
-        except Exception:
-            return {}
+        return edge_sources.parse_metadata(node.get('metadata'))
 
     @staticmethod
     async def tcp(host, port, timeout=4.0, tls=False, server_hostname=None):

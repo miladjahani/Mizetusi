@@ -159,8 +159,9 @@
     <section class="section" id="section-nodes">
       <div class="panel glass">
         <div class="panel-head">
-          <div><h2>Node Catalog</h2><p class="sub">نودهای Railway و Cloudflare سالم، همگام با مولد سابلینک</p></div>
+          <div><h2>Node Catalog</h2><p class="sub">نودهای سالم هر لوکیشن (IP تمیز، دامنهٔ تمیز، مستقیم) همگام با مولد سابلینک</p></div>
           <div class="actions" style="margin:0">
+            <button class="secondary compact" id="btnNodeSamples"><svg width="14" height="14"><use href="#i-plus"/></svg> نمونه‌های آماده</button>
             <button class="secondary compact" id="btnSync"><svg width="14" height="14"><use href="#i-sync"/></svg> Sync نودها</button>
             <button class="secondary compact" id="btnPingNodes"><svg width="14" height="14"><use href="#i-activity"/></svg> پینگ همه نودها</button>
             <button class="primary compact" id="btnAddNode"><svg width="14" height="14"><use href="#i-plus"/></svg> نود جدید</button>
@@ -243,10 +244,10 @@
             <button class="primary" id="saveWorker">ذخیره و Sync</button>
             <button class="secondary" id="clearWorker">حذف Worker</button>
           </div>
-          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ در حالت Railway-only فقط نود مستقیم Railway منتشر می‌شود.</p></div></div>
+          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ اگر لوکیشنی تعریف نکنید فقط نود مستقیم همین سرویس منتشر می‌شود.</p></div></div>
         </div>
         <div class="panel glass">
-          <div class="panel-head"><div><h2>Probe IPهای Cloudflare</h2><p class="sub">اسکن از سمت Railway</p></div></div>
+          <div class="panel-head">          <div><h2>Probe آی‌پی‌های لبه</h2><p class="sub">اسکن از سمت همین سرور</p></div></div>
           <div class="stats" style="margin-top:0" id="cfStats"></div>
           <div class="actions">
             <button class="primary" id="btnProbe">اجرای Probe</button>
@@ -257,7 +258,7 @@
       </div>
       <div class="panel glass" style="margin-top:13px">
         <div class="panel-head">
-          <div><h2>کد ورکر Cloudflare (بهینه)</h2><p class="sub">آدرس Railway شما از قبل داخل کد نوشته شده — کپی یا دانلود کنید و مستقیم Deploy بزنید</p></div>
+          <div><h2>کد ورکر Cloudflare (بهینه)</h2><p class="sub">آدرس همین سرویس از قبل داخل کد نوشته شده — کپی یا دانلود کنید و مستقیم Deploy بزنید</p></div>
           <div class="actions" style="margin:0">
             <button class="secondary compact" id="btnWorkerCode"><svg width="14" height="14"><use href="#i-eye"/></svg> نمایش کد</button>
             <button class="secondary compact" id="btnWorkerCopy"><svg width="14" height="14"><use href="#i-copy"/></svg> کپی</button>
@@ -267,6 +268,36 @@
         </div>
         <div class="kv-list" id="workerGuide"></div>
         <pre class="worker-code" id="workerCode" dir="ltr"><code>برای نمایش کد روی «نمایش کد» بزنید…</code></pre>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head">
+          <div><h2>منابع لبه و لوکیشن‌ها</h2><p class="sub">آی‌پی تمیز از هر CDN، لیست دستی و دامنه‌های تمیز — هر منبع یک لوکیشن</p></div>
+          <div class="actions" style="margin:0">
+            <button class="secondary compact" id="btnEdgeScan">اسکن همه providerها</button>
+            <button class="secondary compact" id="btnEdgeReload">بروزرسانی</button>
+          </div>
+        </div>
+        <div id="runtimeBox" class="kv-list"></div>
+        <div class="field-grid">
+          <div><label>نوع منبع</label>
+            <select id="edgeKind">
+              <option value="ip">آی‌پی تمیز (پشت CDN)</option>
+              <option value="domain">دامنهٔ تمیز</option>
+            </select></div>
+          <div><label>provider</label><select id="edgeProvider"></select></div>
+          <div><label>لوکیشن <span class="hint">مثل de یا ir</span></label><input id="edgeLocation" dir="ltr" placeholder="de"></div>
+          <div><label>برچسب</label><input id="edgeLabel" placeholder="آلمان · کلودفلر"></div>
+          <div><label>دامنه / Host-SNI</label><input id="edgeHost" dir="ltr" placeholder="cdn.example.com"></div>
+          <div><label>پورت</label><input id="edgePort" type="number" min="1" max="65535" value="443" dir="ltr"></div>
+          <div><label>حداکثر آی‌پی در لوکیشن</label><input id="edgeMax" type="number" min="1" max="30" value="5" dir="ltr"></div>
+          <div><label>آی‌پی‌های دستی <span class="hint">با کاما یا خط جدید</span></label><input id="edgeIps" dir="ltr" placeholder="1.2.3.4, 5.6.7.8"></div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="edgeSave">افزودن لوکیشن و Sync</button>
+        </div>
+        <div id="edgeSources"></div>
+        <div id="edgeProviderStats"></div>
       </div>
 
       <div class="panel glass" style="margin-top:13px">

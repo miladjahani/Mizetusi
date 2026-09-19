@@ -1,4 +1,4 @@
-# NEXUS Railway Python Auto v8
+# NEXUS · Xray control plane v9
 
 NEXUS is a Python/FastAPI + Xray-core control plane that runs on Railway. It creates real
 Xray users, publishes subscribable nodes (Railway direct + healthy Cloudflare clean IPs),
@@ -7,6 +7,27 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **Ready-made node examples.** The Nodes section has a **«نمونه‌های آماده»** button that
+  creates nodes with genuinely different settings in one click: clean IPs of Cloudflare,
+  Fastly, Gcore and آروان‌کلود, Cloudflare's alternative HTTPS ports (2053/2087/2096/8443), a
+  clean domain, an IP/SNI pair from different ranges, a plain-WS fallback and the origin node
+  itself (`app/edge/samples.py`). Each entry explains what it is for, defaults its Host/SNI to
+  the domain the CDN really serves this deployment on (the Worker URL when configured), never
+  overwrites an existing node, and is pinged the moment it is created.
+- **It runs anywhere, not only on Railway.** The origin hostname, the raw TCP endpoint and
+  the database directory are now resolved generically (`app/runtime.py`): Railway, Render,
+  Fly.io, Koyeb, Heroku, Vercel, Replit and a plain VPS/Docker host, each with its own
+  injected variables, plus generic `NEXUS_PUBLIC_DOMAIN` / `NEXUS_DIRECT_HOST` / `NEXUS_DIRECT_PORT`
+  overrides. `render.yaml` and `docker-compose.yml` ship as ready blueprints. On a host that owns
+  a public port (VPS/Docker/Fly) Reality switches itself on with no configuration at all; where
+  no raw port exists (Render, Heroku) it stays unpublished instead of handing users a dead link.
+- **Clean IPs and clean domains from anywhere — real multi-location.** The catalog is no longer
+  Cloudflare-only: `app/edge/sources.py` knows Cloudflare, Fastly, Gcore, آروان‌کلود, Bunny and
+  AWS CloudFront, plus hand-written IP/CIDR lists and clean domains. Every **source** is one
+  location with its own Host/SNI, so `de-cloudflare-01`, `nl` or `ir-arvan` all publish the full
+  protocol matrix, the panel groups them by location, and a user can subscribe to a single one
+  (`/sub/<uuid>?location=de`). With no source configured the previous automatic behaviour is
+  unchanged.
 - **The protocol multi-select is never empty again.** The chips in the create/edit user
   form render from the settings catalog, and only the Settings section fetched it — so
   opening «ساخت/ویرایش کاربر» first (a very normal thing to do) showed an empty protocol
@@ -96,8 +117,11 @@ a dedicated subscription per client.
 | `app/subscriptions/clients.py` | Client catalog + the Iran-ready quick-create presets |
 | `app/xray.py` | Xray-core supervisor: config generation, reload, StatsService sync |
 
-Xray is the protocol engine while FastAPI stays the public HTTPS/WebSocket edge on Railway:
-the edge terminates TLS and bridges WebSocket streams to the loopback Xray listeners.
+Xray is the protocol engine while FastAPI stays the public HTTPS/WebSocket edge on whatever
+host this runs on: the edge terminates TLS and bridges WebSocket streams to the loopback
+Xray listeners. `app/runtime.py` answers "where am I, what is my public hostname, is there a
+raw TCP port, which directory is writable", and `app/edge/sources.py` owns the clean-IP
+providers, the clean domains and the locations they form.
 
 ### Front end (`static/js/`)
 
@@ -127,12 +151,14 @@ the edge terminates TLS and bridges WebSocket streams to the loopback Xray liste
 
 The Node Catalog is fully self-building — no admin action is ever required:
 
-- `railway-direct` is created automatically from `PUBLIC_BASE_URL`,
-  `RAILWAY_PUBLIC_DOMAIN`/`RAILWAY_STATIC_URL`, or the saved base URL.
-- Cloudflare clean-IP nodes are rebuilt automatically too. The Worker host wins when a
-  Worker URL is configured; otherwise, if the panel's own domain is served through
-  Cloudflare (custom-domain setups), NEXUS detects that with one TLS handshake against a
-  healthy clean IP (SNI = panel host) and publishes the CF nodes with no user input.
+- The origin node (`railway-direct`, `render-direct`, `vps-direct`… depending on the platform)
+  is created automatically from `PUBLIC_BASE_URL`, the platform's own variable, or the saved
+  base URL. It is the one node that is never dropped after a failed probe, so a subscription
+  can never come back empty.
+- Edge nodes are rebuilt automatically too. When locations are configured they define the
+  catalog; otherwise the Worker host wins, and failing that, if the panel's own domain is
+  served through Cloudflare (custom-domain setups), NEXUS detects that with one TLS handshake
+  against a healthy clean IP (SNI = panel host) and publishes the CF nodes with no user input.
 - The catalog rebuild runs at startup, on every panel open, on «Sync نودها», and on a
   ~10-minute background loop; the ping loop keeps every latency fresh.
 - Latency convention: `NULL` never probed, `>= 0` measured, `-1` last probe failed.
@@ -270,11 +296,67 @@ created user gets a status window at `/portal/<uuid>` listing the smart link, th
 subscriptions, the client download buttons and every node with its measured ping. Download
 links are editable in Settings → «لینک دانلود کلاینتها» because stores and release pages move.
 
-## Deploy on Railway
+## Deploy anywhere — Railway, Render, VPS
 
 Deploy the repository with the included Dockerfile; the container starts FastAPI and
 reconciles Xray-core automatically. A PostgreSQL database is recommended for production
-(SQLite is used otherwise, on the mounted volume). Railway supplies `PORT`.
+(SQLite is used otherwise, on the mounted volume or in a local `data/` directory when the
+volume is missing). Every platform supplies `PORT`.
+
+The runtime layer detects where it is and adapts (`GET /api/system/runtime` shows what was
+detected):
+
+| Platform | Public hostname from | Raw TCP (Reality) |
+| --- | --- | --- |
+| Railway | `RAILWAY_PUBLIC_DOMAIN` / `RAILWAY_STATIC_URL` | only after a TCP Proxy is added |
+| Render | `RENDER_EXTERNAL_URL` / `RENDER_EXTERNAL_HOSTNAME` | not on the free plan |
+| Fly.io | `FLY_APP_NAME` (`.fly.dev`) | yes (TCP services are free) |
+| Koyeb / Heroku / Azure | `KOYEB_PUBLIC_DOMAIN` / `HEROKU_APP_DOMAIN` / `WEBSITE_HOSTNAME` | no |
+| VPS / Docker | `NEXUS_PUBLIC_DOMAIN`, else the machine's public IP | yes — auto-detected |
+
+* **Render** — Render → New → Blueprint, then pick this repository (`render.yaml`). The disk
+  needs a paid instance; without it the app stores sqlite in a local directory and still boots.
+* **VPS** — `NEXUS_PUBLIC_DOMAIN=panel.example.com docker compose up -d --build`, then open
+  8080 (panel + WebSocket edge) and 8443 (Reality) in the firewall. `NET_ADMIN` is only needed
+  by the optional WARP exit.
+* **Anywhere else** — set `NEXUS_PUBLIC_DOMAIN` (and `NEXUS_DIRECT_HOST`/`NEXUS_DIRECT_PORT` if
+  a raw port is reachable) and run the image; nothing else is provider-specific.
+
+### Ready-made nodes
+
+The Nodes section can create a set of example nodes with one click:
+
+| Sample | What it publishes |
+| --- | --- |
+| دامنهٔ تمیز | the deployment's own hostname as a node (what a custom domain behind a CDN needs) |
+| Cloudflare · IP تمیز + Worker | a Cloudflare anycast IP with the Worker hostname as Host/SNI |
+| Cloudflare · پورت‌های جایگزین | the same edge on 2053/2087/2096/8443, for networks that drop 443 |
+| Cloudflare · IP و SNI متفاوت | an address from one range carrying another range's SNI |
+| Fastly / Gcore / آروان | clean IPs of three more CDNs, each as its own location |
+| بدون TLS · پورت ۸۰ | the same host over plain WebSocket, as a last resort |
+| نود مستقیم (Origin) | the always-present origin node, if it was deleted |
+
+Adding a sample never overwrites an existing node, and a sample node survives the automatic
+catalog rebuild (only the rows the rebuild owns are reset). `POST /api/nodes/samples` with
+`ids` (or `all: true`), `GET /api/nodes/samples` and `DELETE /api/nodes/samples` are the same
+actions over the API.
+
+### Edge sources (clean IPs, clean domains, locations)
+
+The Cloudflare section of the panel has a **«منابع لبه و لوکیشن‌ها»** card. One source = one
+location:
+
+* **IP source** — pick a provider and press «اسکن همه providerها»; the published ranges are
+  downloaded, sampled, TCP-probed and turned into nodes named `<location>-<provider>-NN`. Your
+  own clean IPs (or CIDRs) can be pasted instead, under any provider or as `custom`.
+* **Domain source** — paste a clean domain (a custom domain behind Cloudflare, a CDN hostname,
+  another server of yours); it becomes a node of its own, and the whole protocol matrix is
+  published through it.
+
+Every source carries a `location`, its own Host/SNI and a node cap; disabling or deleting a
+location stops its nodes from being published, and the leftover rows are removed on the next
+sync. `POST /api/edge/scan`, `POST /api/edge/sources`, `POST /api/edge/ips` and the matching
+`DELETE`s are the same actions over the API.
 
 Icons are committed, but can be regenerated after a rebrand with:
 

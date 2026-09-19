@@ -7,8 +7,14 @@ LEGACY_SQLITE = '/data/zeus.db'
 def _default_sqlite():
     # Keep reading the pre-rebrand database file so an existing Railway volume
     # does not restart empty after the rename.
-    if not os.path.exists(DEFAULT_SQLITE) and os.path.exists(LEGACY_SQLITE): return LEGACY_SQLITE
-    return DEFAULT_SQLITE
+    if os.path.exists(DEFAULT_SQLITE): return DEFAULT_SQLITE
+    if os.path.exists(LEGACY_SQLITE): return LEGACY_SQLITE
+    # /data is a mounted volume on Railway and on Render *with* a disk, but it
+    # does not exist on most VPS deployments or on Heroku. Fall back to a
+    # writable directory instead of failing to boot, and never create /data on a
+    # read-only filesystem.
+    from app.runtime import data_dir
+    return os.path.join(data_dir(), 'nexus.db')
 
 SQLITE_PATH = os.getenv('SQLITE_PATH') or _default_sqlite()
 DB_URL = os.getenv('DATABASE_URL') or os.getenv('database_url') or ('sqlite:///' + SQLITE_PATH)

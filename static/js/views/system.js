@@ -22,25 +22,27 @@ export class CloudflareView {
     const cfNodes = nodes.filter((node) => node.kind === 'cloudflare' && node.enabled).length;
     // A Cloudflare-fronted panel domain feeds the catalog automatically, so the
     // section must not claim "Railway-only" while CF nodes are live.
-    const mode = worker.configured ? 'worker' : cfNodes > 0 ? 'edge' : 'railway';
+    const runtime = this.store.get('edge')?.runtime || this.store.get('settings')?.runtime || {};
+    const native = runtime.label || 'میزبان';
+    const mode = worker.configured ? 'worker' : cfNodes > 0 ? 'edge' : 'origin';
     const url = $('#workerUrl');
     if (url && document.activeElement !== url) url.value = worker.url || '';
     const tag = $('#cfTag');
     if (tag) {
-      tag.className = `pill ${mode === 'railway' ? 'warn' : 'ok'}`;
+      tag.className = `pill ${mode === 'origin' ? 'warn' : 'ok'}`;
       tag.innerHTML = mode === 'worker' ? '<i class="dot"></i> Worker فعال'
         : mode === 'edge' ? '<i class="dot"></i> حالت خودکار (Edge)'
-        : 'Railway-only';
+        : 'فقط نود مستقیم';
     }
     const stateBox = $('#workerState');
     if (stateBox) {
       const copy = {
-        worker: ['Worker فعال است', 'Node Catalog از IPهای سالم Cloudflare و از طریق Worker منتشر می‌شود.'],
+        worker: ['Worker فعال است', 'Node Catalog از آی‌پی‌های سالم لوکیشن کلودفلر و از طریق Worker منتشر می‌شود.'],
         edge: ['حالت خودکار — بدون Worker', `دامنه پنل از طریق Cloudflare جلوه‌گذاری شده است؛ ${Fmt.num(cfNodes)} نود تمیز به‌صورت خودکار ساخته و پینگ شدند. اگر Worker هم مستقر کنید، همان آدرس اینجا ذخیره می‌شود.`],
-        railway: ['Worker تنظیم نشده', 'در این حالت نود مستقیم Railway منتشر می‌شود؛ اگر دامنه پنل را روی Cloudflare ببرید، نودهای تمیز بدون هیچ تنظیمی خودکار اضافه می‌شوند.'],
+        origin: ['لوکیشنی تنظیم نشده', `فقط نود مستقیم همین سرویس (${native}) منتشر می‌شود؛ از «منابع لبه و لوکیشن‌ها» می‌توانید آی‌پی تمیز یا دامنهٔ تمیز اضافه کنید.`],
       }[mode];
       stateBox.innerHTML = `<div class="txt"><b>${copy[0]}</b><p>${copy[1]}</p></div>
-        <span class="pill ${mode === 'railway' ? 'warn' : 'ok'}">${esc((worker.url || '').replace(/^https?:\/\//, '') || (mode === 'edge' ? 'auto-detect' : '—'))}</span>`;
+        <span class="pill ${mode === 'origin' ? 'warn' : 'ok'}">${esc((worker.url || '').replace(/^https?:\/\//, '') || (mode === 'edge' ? 'auto-detect' : native))}</span>`;
     }
 
     const ips = this.store.get('cfIps') || [];
@@ -78,6 +80,106 @@ export class CloudflareView {
     }
   }
 
+  /* ------------------------------------------------ edge sources + locations */
+  /* The catalog is no longer Cloudflare-only: every location (a CDN's clean IPs,
+     a hand-written list, a clean domain) is one source, and each one publishes
+     the whole protocol matrix. */
+  async loadEdge() {
+    try {
+      this.store.set('edge', await this.api.get('/api/edge'));
+    } catch (error) {
+      this.store.set('edge', null);
+      if (!error.unauthorized) throw error;
+    }
+    this.fillProviders();
+    this.renderEdge();
+  }
+
+  fillProviders() {
+    const select = $('#edgeProvider');
+    if (!select) return;
+    const providers = (this.store.get('edge')?.providers || this.store.get('settings')?.edge?.providers || [])
+      .filter((item) => item.scannable !== false && item.id !== 'domain');
+    const current = select.value;
+    select.innerHTML = providers.map((item) => `<option value="${esc(item.id)}">${esc(item.label)} · ${Fmt.num(item.total)} IP</option>`).join('')
+      || '<option value="custom">آی‌پی دستی</option>';
+    if (current && providers.some((item) => item.id === current)) select.value = current;
+  }
+
+  renderEdge() {
+    const data = this.store.get('edge');
+    const runtime = $('#runtimeBox');
+    if (runtime) {
+      const info = data?.runtime || {};
+      const direct = info.direct ? `${info.direct.host}:${info.direct.port}` : 'در دسترس نیست';
+      runtime.innerHTML = `
+        <div class="kv-line"><span>محل اجرا</span><b>${esc(info.label || '—')}</b></div>
+        <div class="kv-line"><span>دامنهٔ عمومی</span><b dir="ltr">${esc(info.host || '—')}</b></div>
+        <div class="kv-line"><span>پورت مستقیم (Reality)</span><b dir="ltr">${esc(direct)}</b></div>
+        <div class="kv-line"><span>مسیر دیتابیس</span><b dir="ltr">${esc(info.data_dir || '—')}</b></div>
+        ${(info.notes || []).map((note) => `<div class="kv-line"><span>یادداشت</span><b style="font-family:Vazirmatn;direction:rtl;max-width:78%;white-space:normal">${esc(note)}</b></div>`).join('')}`;
+    }
+    const host = $('#edgeSources');
+    if (host) {
+      const sources = data?.sources || [];
+      const nodes = data?.nodes || [];
+      host.innerHTML = sources.length ? `<div class="table-wrap" style="margin-top:12px"><table>
+        <thead><tr><th>لوکیشن</th><th>برچسب</th><th>نوع</th><th>Host / SNI</th><th>نودها</th><th>وضعیت</th><th></th></tr></thead>
+        <tbody>${sources.map((source) => {
+          const count = nodes.filter((node) => node.location === source.location && node.enabled).length;
+          return `<tr>
+            <td><b>${esc(source.location || '—')}</b></td>
+            <td>${esc(source.label || '')}</td>
+            <td>${source.kind === 'domain' ? 'دامنهٔ تمیز' : esc(source.provider)}</td>
+            <td class="mono" dir="ltr">${esc(source.host)}:${esc(String(source.port))}</td>
+            <td>${Fmt.num(count)}</td>
+            <td><span class="pill ${source.enabled ? 'ok' : 'warn'}">${source.enabled ? 'فعال' : 'خاموش'}</span></td>
+            <td class="nowrap">
+              <button class="tbtn" data-edge="toggle" data-id="${esc(source.id)}">${source.enabled ? 'خاموش' : 'روشن'}</button>
+              <button class="tbtn bad" data-edge="del" data-id="${esc(source.id)}">حذف</button></td></tr>`;
+        }).join('')}</tbody></table></div>`
+        : '<div class="empty" style="margin-top:12px">هنوز لوکیشنی ساخته نشده — با فرم بالا یکی اضافه کنید (یا فقط دامنهٔ پنل را پشت Cloudflare ببرید تا خودکار ساخته شود).</div>';
+      $$('#edgeSources [data-edge]').forEach((button) => {
+        button.onclick = () => this.app.safe(async () => {
+          const id = button.dataset.id;
+          if (button.dataset.edge === 'del') {
+            const confirmed = await this.modals.ask('حذف لوکیشن', 'نودهای این لوکیشن از سابلینک همه کاربران حذف می‌شوند.', { confirmLabel: 'حذف' });
+            if (!confirmed) return;
+            await this.api.delete(`/api/edge/sources/${encodeURIComponent(id)}`);
+            this.toasts.ok('لوکیشن حذف شد');
+          } else {
+            await this.api.post(`/api/edge/sources/${encodeURIComponent(id)}/toggle`, {});
+          }
+          await this.loadEdge();
+          await this.app.reloadNodes();
+          await this.app.loadMetrics();
+        });
+      });
+    }
+    const stats = $('#edgeProviderStats');
+    if (stats) {
+      const providers = data?.providers || [];
+      stats.innerHTML = providers.length ? `<div class="picks" style="gap:7px;margin-top:12px">${providers.map((item) => `
+        <span class="pill ${item.healthy ? 'ok' : item.total ? 'warn' : ''}" title="${esc(item.note || '')}">${esc(item.label)} · ${Fmt.num(item.healthy)}/${Fmt.num(item.total)}</span>`).join('')}</div>`
+        : '';
+    }
+  }
+
+  async scanEdge(provider = '', button = null) {
+    const original = button ? button.innerHTML : '';
+    if (button) { button.disabled = true; button.innerHTML = '<span class="spin-inline"></span> در حال اسکن…'; }
+    try {
+      const result = await this.api.post('/api/edge/scan', provider ? { provider } : {});
+      await this.loadEdge();
+      await this.app.loadCfIps();
+      await this.app.reloadNodes();
+      await this.app.loadMetrics();
+      this.toasts.ok(`${Fmt.num(result.found)} آی‌پی تازه · ${Fmt.num(result.probed)} Probe · ${Fmt.num(result.synced)} نود`, 5200);
+    } finally {
+      if (button) { button.disabled = false; button.innerHTML = original; }
+    }
+  }
+
   async loadWorkerCode(show = true, force = false) {
     const host = $('#workerCode');
     if (!host) return '';
@@ -92,7 +194,7 @@ export class CloudflareView {
         if (guide) {
           guide.innerHTML = (data.steps || []).map((step, index) => `<div class="kv-line"><span>مرحله ${Fmt.num(index + 1)}</span>
             <b style="font-family:Vazirmatn;direction:rtl;max-width:78%;white-space:normal">${esc(step)}</b></div>`).join('')
-            + `<div class="kv-line"><span>آدرس Railway داخل کد</span><b>${esc(data.origin)}</b></div>`;
+            + `<div class="kv-line"><span>آدرس سرویس داخل کد</span><b>${esc(data.origin)}</b></div>`;
         }
       } catch (error) {
         this.store.set('workerCode', '');
@@ -158,6 +260,44 @@ export class CloudflareView {
     }
     const probe = $('#btnProbe');
     if (probe) probe.onclick = () => this.app.safe(() => this.probe(probe));
+    const edgeScan = $('#btnEdgeScan');
+    if (edgeScan) edgeScan.onclick = () => this.app.safe(() => this.scanEdge('', edgeScan));
+    const edgeReload = $('#btnEdgeReload');
+    if (edgeReload) edgeReload.onclick = () => this.app.safe(async () => { await this.loadEdge(); this.toasts.ok('منابع لبه بروزرسانی شد', 1600); });
+    const edgeSave = $('#edgeSave');
+    if (edgeSave) {
+      edgeSave.onclick = () => this.app.safe(async () => {
+        const payload = {
+          kind: $('#edgeKind')?.value || 'ip',
+          provider: $('#edgeProvider')?.value || 'custom',
+          location: $('#edgeLocation')?.value.trim() || '',
+          label: $('#edgeLabel')?.value.trim() || '',
+          host: $('#edgeHost')?.value.trim() || '',
+          port: Number($('#edgePort')?.value) || 443,
+          max: Number($('#edgeMax')?.value) || 5,
+          ips: $('#edgeIps')?.value.trim() || '',
+        };
+        try {
+          await this.api.post('/api/edge/sources', payload);
+        } catch (error) {
+          this.toasts.err(error.message || 'ذخیرهٔ لوکیشن ناموفق بود');
+          return;
+        }
+        ['#edgeLabel', '#edgeHost', '#edgeIps'].forEach((selector) => { const el = $(selector); if (el) el.value = ''; });
+        this.toasts.ok('لوکیشن ساخته و Sync شد');
+        await this.loadEdge();
+        await this.app.reloadNodes();
+        await this.app.loadMetrics();
+      });
+    }
+    const edgeKind = $('#edgeKind');
+    if (edgeKind) edgeKind.onchange = () => {
+      const domain = edgeKind.value === 'domain';
+      const provider = $('#edgeProvider');
+      const host = $('#edgeHost');
+      if (provider) provider.disabled = domain;
+      if (host) host.placeholder = domain ? 'nl.example.com' : 'cdn.example.com';
+    };
     const refresh = $('#btnCfIps');
     if (refresh) {
       refresh.onclick = () => this.app.safe(async () => {
@@ -255,7 +395,7 @@ export class SettingsView {
     if (!version) this.app.safe(() => this.loadVersion());
     const count = metrics ? `${Fmt.num(metrics.totals.users)} کل · ${Fmt.num(metrics.totals.active_users)} فعال` : '—';
     const rows = [
-      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 8.2.0'],
+      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 9.1.0'],
       ['آدرس پایه', settings.resolved_base_url || location.origin],
       ['کاربران', count],
       ['نودهای فعال', metrics ? `${Fmt.num(metrics.totals.nodes_enabled)} از ${Fmt.num(metrics.totals.nodes)}` : '—'],

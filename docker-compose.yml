@@ -1,0 +1,45 @@
+# NEXUS on a VPS — the deployment where every transport is available.
+#
+#   NEXUS_PUBLIC_DOMAIN=panel.example.com docker compose up -d --build
+#
+# Two ports are published on purpose:
+#   * 8080 — the panel and the whole WebSocket edge (VLESS/VMess/Trojan/…);
+#   * 8443 — the raw TCP port Reality terminates TLS on. Nothing has to be
+#     configured in the panel: on a host with a public port the direct endpoint
+#     is detected, the Reality inbound is generated and the link is published.
+#
+# Open both in the firewall (ufw allow 8080,8443/tcp; or the cloud security group)
+# and point a domain (or a Cloudflare-proxied one) at the host if you want TLS
+# in front of the panel too. NET_ADMIN is only needed by the optional WARP exit.
+services:
+  nexus:
+    build: .
+    image: nexus-railway-python-auto
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+      - '8443:8443'
+    environment:
+      PORT: '8080'
+      NEXUS_PLATFORM: vps
+      # Set this to the domain clients should use; leave empty to fall back to
+      # the machine's own public IP for the origin node.
+      NEXUS_PUBLIC_DOMAIN: '${NEXUS_PUBLIC_DOMAIN:-}'
+      # Auto-detected when empty (public IP + 8443 via app.runtime).
+      NEXUS_DIRECT_HOST: '${NEXUS_DIRECT_HOST:-}'
+      NEXUS_DIRECT_PORT: '${NEXUS_DIRECT_PORT:-8443}'
+      SQLITE_PATH: /data/nexus.db
+      XRAY_ENABLED: 'true'
+      ADMIN_PASSWORD: '${ADMIN_PASSWORD:-admin}'
+      JWT_SECRET: '${JWT_SECRET:-}'
+      WARP_ENABLED: '${WARP_ENABLED:-0}'
+    volumes:
+      - ./data:/data
+    cap_add:
+      - NET_ADMIN
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.getenv('PORT','8080')+'/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

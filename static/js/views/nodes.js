@@ -5,9 +5,13 @@
 import { $, $$, ico, esc, Fmt, bindCopyButtons } from '../core.js';
 import { StatusKit } from '../ui.js';
 
+// Node kinds are about *where* an entry comes from, independent of the platform:
+// 'railway' is this deployment's own hostname (the origin, on any provider),
+// 'cloudflare' is a clean IP of an edge source and 'edge' is a clean domain.
 const FILTERS = [
-  { id: 'all', label: 'همه' }, { id: 'railway', label: 'Railway' },
-  { id: 'cloudflare', label: 'Cloudflare' }, { id: 'disabled', label: 'غیرفعال' },
+  { id: 'all', label: 'همه' }, { id: 'railway', label: 'مستقیم (Origin)' },
+  { id: 'cloudflare', label: 'آی‌پی تمیز' }, { id: 'edge', label: 'دامنهٔ تمیز' },
+  { id: 'disabled', label: 'غیرفعال' },
 ];
 
 export class NodesView {
@@ -44,7 +48,7 @@ export class NodesView {
     else if (filter !== 'all') list = list.filter((node) => node.kind === filter);
     const query = this.store.get('nodeSearch').trim().toLowerCase();
     if (query) {
-      list = list.filter((node) => [node.name, node.server, node.sni, node.host, node.kind]
+      list = list.filter((node) => [node.name, node.server, node.sni, node.host, node.kind, node.location, node.provider]
         .filter(Boolean).some((value) => String(value).toLowerCase().includes(query)));
     }
     const sort = this.store.get('nodeSort');
@@ -70,7 +74,7 @@ export class NodesView {
       <div class="node-row" style="--i:${index};border-color:${node.enabled ? 'transparent' : 'rgba(255,107,129,.18)'}">
         <span class="node-icon ${node.kind === 'cloudflare' ? 'cf' : ''}">${node.kind === 'cloudflare' ? '☁' : 'R'}</span>
         <div class="node-main">
-          <b>${esc(node.name)} ${node.enabled ? '' : '<span class="pill bad" style="padding:2px 8px;font-size:9.5px">غیرفعال</span>'}</b>
+          <b>${esc(node.name)} ${node.enabled ? '' : '<span class="pill bad" style="padding:2px 8px;font-size:9.5px">غیرفعال</span>'}${node.location ? ` <span class="pill info" style="padding:2px 8px;font-size:9.5px">${esc(node.location.toUpperCase())}</span>` : ''}${node.provider ? ` <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(node.provider)}</span>` : ''}</b>
           <span>${esc(node.kind)} · ${esc(node.server)}:${esc(node.port)}${node.sni ? ` · SNI ${esc(node.sni)}` : ''}${node.host && node.host !== node.server ? ` · HOST ${esc(node.host)}` : ''}</span>
         </div>
         <span class="lat ${StatusKit.latencyTone(node.latency_ms)}" title="${Number(node.latency_ms) < 0 ? 'آخرین پینگ ناموفق بود' : 'تأخیر اندازه‌گیری‌شده'}">${StatusKit.latencyText(node.latency_ms)}</span>
@@ -266,7 +270,7 @@ export class NodesView {
       subtitle: 'نود دستی در کاتالوگ ذخیره می‌شود و در همه سابلینک‌ها منتشر می‌شود.',
       body: `<div class="field-grid">
           <div><label>نام نود</label><input id="ndName" dir="ltr" ${isEdit ? 'disabled' : ''} placeholder="railway-eu"></div>
-          <div><label>نوع</label><select id="ndKind"><option value="railway">Railway</option><option value="cloudflare">Cloudflare</option></select></div>
+          <div><label>نوع</label><select id="ndKind"><option value="railway">مستقیم (Origin)</option><option value="cloudflare">آی‌پی تمیز (CDN)</option><option value="edge">دامنهٔ تمیز</option></select></div>
         </div>
         <div class="field-grid">
           <div><label>سرور / IP</label><input id="ndServer" dir="ltr" placeholder="nexus.up.railway.app"></div>
@@ -366,7 +370,101 @@ export class NodesView {
     render();
   }
 
+  /* ------------------------------------------------- ready-made node samples */
+  /* Different settings, one click: clean IPs of several CDNs, the alternative
+     Cloudflare ports, a clean domain, a plain-WS fallback and the origin. Each
+     sample explains itself and never overwrites a node that already exists. */
+  async samplesModal() {
+    const data = await this.api.get('/api/nodes/samples');
+    const samples = data.samples || [];
+    const modal = this.modals.open({
+      title: 'نمونه‌های آمادهٔ نود',
+      subtitle: 'چند نود با تنظیمات مختلف — هر کدام را لازم داری اضافه کن (نودهای موجود دست‌نخورده می‌مانند)',
+      size: 'wide',
+      body: `<div class="kv-list" id="sampleHost">
+          <div class="kv-line"><span>Host/SNI پیش‌فرض نمونه‌ها</span><b dir="ltr">${esc(data.host || '—')}</b></div>
+          <div class="kv-line"><span>Worker</span><b dir="ltr">${esc(data.worker || 'تنظیم نشده')}</b></div>
+        </div>
+        <div id="sampleList" style="margin-top:12px"></div>`,
+      footer: `<div class="actions" style="margin:0">
+        <button class="primary" id="sampleAddAll">افزودن همه</button>
+        <button class="secondary" id="sampleClear">حذف نمونه‌ها</button>
+        <button class="secondary" data-close>بستن</button></div>`,
+    });
+    const paint = () => {
+      $('#sampleList', modal.el).innerHTML = samples.map((sample) => {
+        const node = sample.node;
+        return `<div class="setting-row">
+          <div class="txt">
+            <b>${esc(sample.label)} ${sample.added ? '<span class="pill ok" style="padding:2px 8px;font-size:9.5px">افزوده شده</span>' : ''}</b>
+            <p>${esc(sample.note)}</p>
+            <p class="muted mono" dir="ltr" style="margin-top:5px">${esc(node.kind)} · ${esc(node.server)}:${esc(String(node.port))} · tls=${node.tls ? 'on' : 'off'} · sni=${esc(node.sni || '—')}${sample.nodes.length > 1 ? ` · ${Fmt.num(sample.nodes.length)} نود` : ''}</p>
+            ${(sample.tags || []).length ? `<div class="picks" style="gap:6px;margin-top:7px">${sample.tags.map((tag) => `<span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(tag)}</span>`).join('')}</div>` : ''}
+          </div>
+          <button class="secondary compact" data-sample="${esc(sample.id)}" ${sample.added ? 'disabled' : ''}>${sample.added ? 'موجود' : 'افزودن'}</button>
+        </div>`;
+      }).join('') || '<div class="empty">نمونه‌ای در دسترس نیست</div>';
+      $$('[data-sample]', modal.el).forEach((button) => {
+        button.onclick = () => this.app.safe(() => this.addSamples([button.dataset.sample], button, modal));
+      });
+    };
+    paint();
+    const all = $('#sampleAddAll', modal.el);
+    if (all) all.onclick = () => this.app.safe(() => this.addSamples([], all, modal, true));
+    const clear = $('#sampleClear', modal.el);
+    if (clear) {
+      clear.onclick = () => this.app.safe(async () => {
+        const confirmed = await this.modals.ask('حذف نمونه‌ها', 'فقط نودهایی که از این نمونه‌ها ساخته شده‌اند حذف می‌شوند.', { confirmLabel: 'حذف' });
+        if (!confirmed) return;
+        const result = await this.api.delete('/api/nodes/samples');
+        this.toasts.ok(`${Fmt.num((result.removed || []).length)} نود نمونه حذف شد`);
+        await this.app.reloadNodes();
+        await this.app.loadMetrics();
+        samples.forEach((sample) => { sample.added = false; sample.present = []; });
+        paint();
+      });
+    }
+  }
+
+  async addSamples(ids, button, modal, all = false) {
+    const original = button ? button.innerHTML : '';
+    if (button) { button.disabled = true; button.innerHTML = '<span class="spin-inline"></span> در حال ساخت…'; }
+    try {
+      const result = await this.api.post('/api/nodes/samples', all ? { all: true } : { ids });
+      await this.app.reloadNodes();
+      await this.app.loadMetrics();
+      this.toasts.ok(`${Fmt.num((result.created || []).length)} نود ساخته و پینگ شد · ${Fmt.num(result.healthy)} سالم`, 5200);
+      if (modal) await this.samplesRefreshInto(modal);
+    } finally {
+      if (button) { button.disabled = false; button.innerHTML = original; }
+    }
+  }
+
+  /* Re-render the open samples modal after a change (keeps it in sync). */
+  async samplesRefreshInto(modal) {
+    const data = await this.api.get('/api/nodes/samples');
+    const host = $('#sampleList', modal.el);
+    if (!host || !data.samples) return;
+    $('#sampleHost', modal.el).innerHTML = `
+      <div class="kv-line"><span>Host/SNI پیش‌فرض نمونه‌ها</span><b dir="ltr">${esc(data.host || '—')}</b></div>
+      <div class="kv-line"><span>Worker</span><b dir="ltr">${esc(data.worker || 'تنظیم نشده')}</b></div>`;
+    host.innerHTML = data.samples.map((sample) => {
+      const node = sample.node;
+      return `<div class="setting-row">
+        <div class="txt"><b>${esc(sample.label)} ${sample.added ? '<span class="pill ok" style="padding:2px 8px;font-size:9.5px">افزوده شده</span>' : ''}</b>
+          <p>${esc(sample.note)}</p>
+          <p class="muted mono" dir="ltr" style="margin-top:5px">${esc(node.kind)} · ${esc(node.server)}:${esc(String(node.port))} · tls=${node.tls ? 'on' : 'off'}</p></div>
+        <button class="secondary compact" data-sample="${esc(sample.id)}" ${sample.added ? 'disabled' : ''}>${sample.added ? 'موجود' : 'افزودن'}</button>
+      </div>`;
+    }).join('');
+    $$('[data-sample]', modal.el).forEach((button) => {
+      button.onclick = () => this.app.safe(() => this.addSamples([button.dataset.sample], button, modal));
+    });
+  }
+
   bindEvents() {
+    const samples = $('#btnNodeSamples');
+    if (samples) samples.onclick = () => this.app.safe(() => this.samplesModal());
     const search = $('#nodeSearch');
     if (search) search.oninput = (event) => { this.store.set('nodeSearch', event.target.value); this.render(); };
     const sort = $('#nodeSort');
