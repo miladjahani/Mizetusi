@@ -14,6 +14,16 @@ const FILTERS = [      { id: 'all', label: 'همه' }, { id: 'active', label: '�
 const CLIENT_ORDER = ['smart', 'bettbox', 'exclusive', 'v2rayng', 'nekoboxplus', 'nekobox', 'hiddify',
   'karing', 'streisand', 'shadowrocket', 'v2box', 'foxray', 'clash', 'singbox', 'xray'];
 
+// The protocol multi-select normally renders from the catalog in /api/settings.
+// These values are the fallback, so the create/edit form is always usable: it
+// used to show an empty box (and refuse to save) whenever that catalog had not
+// been fetched yet — e.g. opening the user form before visiting Settings.
+const FALLBACK_PROTOCOLS = [
+  { id: 'vless', label: 'VLESS' }, { id: 'vmess', label: 'VMess' },
+  { id: 'trojan', label: 'Trojan' }, { id: 'ss', label: 'Shadowsocks' },
+];
+const FALLBACK_CIPHERS = 'AES-128 · AES-256 · ChaCha20-Poly1305';
+
 const sortedClients = (clients) => (clients || []).slice().sort((a, b) => {
   const index = (item) => (CLIENT_ORDER.indexOf(item.id) === -1 ? 99 : CLIENT_ORDER.indexOf(item.id));
   return index(a) - index(b);
@@ -123,7 +133,7 @@ export class UsersView {
         const action = button.dataset.u;
         if (action === 'links') await this.linksModal(user);
         if (action === 'portal') await this.portal(user);
-        if (action === 'edit') this.modal(user);
+        if (action === 'edit') await this.openForm(user);
         if (action === 'toggle') await this.toggle(user);
         if (action === 'reset') await this.reset(user);
         if (action === 'del') await this.remove(user);
@@ -280,11 +290,9 @@ export class UsersView {
      (WS, CDN, Reality, WARP) with no extra step; an admin only narrows it. */
   protocolChips(user = {}) {
     const catalog = this.store.get('settings')?.protocols || {};
-    const list = catalog.protocols || [];
-    const ciphers = (catalog.shadowsocks || []).map((c) => c.method.replace('2022-blake3-', '')).join(' · ');
-    if (!list.length) {
-      return { html: '<div class="empty">کاتالوگ پروتکل در دسترس نیست</div>', ciphers };
-    }
+    const list = catalog.protocols?.length ? catalog.protocols : FALLBACK_PROTOCOLS;
+    const ciphers = (catalog.shadowsocks || []).map((c) => c.method.replace('2022-blake3-', '')).join(' · ')
+      || FALLBACK_CIPHERS;
     const raw = String(user.protocol_value || user.protocol || 'all');
     const explicit = raw.includes(',') ? raw.split(',').map((id) => id.trim()).filter(Boolean) : [];
     const on = new Set(Array.isArray(user.protocols) && user.protocols.length ? user.protocols
@@ -296,6 +304,14 @@ export class UsersView {
   }
 
   /* ------------------------------------------------------- advanced user form */
+  /* The form needs the settings catalog (protocols + defaults), which is only
+     fetched by the Settings section — load it first so the chips are never
+     empty, then open the form. */
+  async openForm(user = null) {
+    await this.app.ensureSettings();
+    this.modal(user);
+  }
+
   modal(user = null) {
     const isEdit = !!user;
     const defaults = this.store.get('settings')?.defaults || {};
@@ -573,7 +589,7 @@ export class UsersView {
     const sort = $('#userSort');
     if (sort) sort.onchange = (event) => { this.store.set('userSort', event.target.value); this.render(); };
     const add = $('#btnAddUser');
-    if (add) add.onclick = () => this.modal(null);
+    if (add) add.onclick = () => this.app.safe(() => this.openForm(null));
     const quick = $('#btnQuickUser');
     if (quick) quick.onclick = () => this.app.safe(() => this.quickCreate());
     this.app.safe(() => this.loadPresets());

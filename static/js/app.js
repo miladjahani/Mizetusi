@@ -178,6 +178,26 @@ export class NexusApp {
     this.cloudflare.render();
   }
 
+  /* The user form's protocol multi-select (and its defaults) render from the
+     settings payload, which only the Settings section used to load — so
+     "ساخت/ویرایش کاربر" opened with an empty protocol catalog. Fetch it once,
+     on demand, and keep it cached. */
+  async ensureSettings() {
+    const cached = this.store.get('settings');
+    if (cached?.protocols?.protocols?.length) return cached;
+    try {
+      const settings = await this.api.get('/api/settings');
+      this.store.set('settings', settings);
+      this.applyBrand();
+      return settings;
+    } catch (error) {
+      // The form falls back to a built-in protocol list, so a failed catalog
+      // fetch must not block creating a user.
+      if (!error.unauthorized) this.report(error);
+      return null;
+    }
+  }
+
   async loadCfIps() {
     const limit = $('#cfLimit') ? $('#cfLimit').value : 50;
     try {
@@ -242,6 +262,7 @@ export class NexusApp {
       return;
     }
     if (section === 'users') {
+      await this.ensureSettings();
       await this.loadUsers();
       this.users.render();
       this.users.renderSubTable();
@@ -274,6 +295,7 @@ export class NexusApp {
         this.nodes.renderCoverage();
       }
       if (section === 'users') {
+        await this.ensureSettings();
         await this.loadUsers();
         this.users.render();
         this.users.renderSubTable();

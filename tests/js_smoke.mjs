@@ -108,18 +108,44 @@ try {
 // The protocol multi-select must build a chip per catalog entry with no DOM, and
 // default to every protocol on (so all paths are live for a new user).
 try {
-  window.nexus.store.set('settings', {
+  const catalog = {
     protocols: {
       protocols: [{ id: 'vless', label: 'VLESS' }, { id: 'vmess', label: 'VMess' }, { id: 'ss', label: 'Shadowsocks' }],
       shadowsocks: [{ id: 'ss', method: '2022-blake3-aes-128-gcm' }, { id: 'ss-chacha', method: '2022-blake3-chacha20-poly1305' }],
     },
-  });
+  };
+  window.nexus.store.set('settings', catalog);
   const every = window.nexus.users.protocolChips({});
   const narrowed = window.nexus.users.protocolChips({ protocols: ['vless'], protocol_value: 'vless' });
   if ((every.html.match(/class="pick on"/g) || []).length !== 3) failures.push('protocol chips must default to all-on');
   if (!every.html.includes('data-proto="ss"') || !every.html.includes('chacha20-poly1305')) failures.push('protocol chips missing an SS cipher');
   if ((narrowed.html.match(/class="pick on"/g) || []).length !== 1) failures.push('protocol chips must honour a narrowed set');
   if (every.html.includes('undefined')) failures.push('protocol chips rendered undefined');
+
+  // The catalog only arrives with /api/settings, which the Settings section used
+  // to be the only one to fetch: opening the user form first left the select
+  // empty. The form must never render that empty state any more.
+  window.nexus.store.set('settings', null);
+  const offline = window.nexus.users.protocolChips({});
+  if (offline.html.includes('کاتالوگ پروتکل')) failures.push('protocol chips must never render the empty-catalog message');
+  if ((offline.html.match(/class="pick on"/g) || []).length !== 4) failures.push('protocol chips must fall back to the built-in protocol list');
+  if (!offline.html.includes('data-proto="ss"')) failures.push('protocol chips fallback is missing Shadowsocks');
+
+  // ensureSettings() reuses a cached catalog (no request) and never rejects when
+  // the fetch fails, and openForm() always waits for it before opening.
+  window.nexus.store.set('settings', catalog);
+  const cached = await window.nexus.ensureSettings();
+  if (cached !== catalog) failures.push('ensureSettings must reuse the cached catalog');
+  window.nexus.store.set('settings', null);
+  const view = window.nexus.users;
+  const originalModal = view.modal;
+  let handed = 'never-called';
+  view.modal = (user) => { handed = user; };
+  await view.openForm({ username: 'probe' }).catch((error) => failures.push(`openForm threw: ${error.message}`));
+  view.modal = originalModal;
+  if (!handed || handed.username !== 'probe') failures.push('openForm must open the form with the same user');
+  if (window.nexus.store.get('settings') !== null) failures.push('a failed catalog fetch must not cache an empty settings payload');
+  window.nexus.store.set('settings', catalog);
 } catch (error) {
   failures.push(`protocol chips threw: ${error.message}`);
 }

@@ -7,6 +7,12 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **The protocol multi-select is never empty again.** The chips in the create/edit user
+  form render from the settings catalog, and only the Settings section fetched it — so
+  opening «ساخت/ویرایش کاربر» first (a very normal thing to do) showed an empty protocol
+  box and the form refused to save. The users section now loads the catalog up front, the
+  form waits for it before opening, and the chips fall back to the built-in
+  VLESS/VMess/Trojan/Shadowsocks list if that request ever fails.
 - **A user really does get every protocol.** The Xray inbounds used to filter users by the
   single `protocol` column, so a VLESS user's VMess/Trojan/Shadowsocks links were published
   but rejected by the engine. One credential is now registered on every inbound, and the
