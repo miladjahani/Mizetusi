@@ -38,26 +38,35 @@ def _email(user):
     return str(user.get('username') or 'user') + '@nexus.local'
 
 
-def _clients_for(protocol):
+def _users_for(protocol):
+    """Active users whose enabled protocol set contains ``protocol``.
+
+    A user is one credential (UUID/password) across **every** protocol, so by
+    default they are registered on all of the inbounds and all of their links
+    work. Only an explicit multi-protocol restriction in the panel narrows this;
+    the legacy single-value rows keep meaning "all protocols".
+    """
+    return [u for u in _active_users() if protocol in tp.user_protocols(u)]
+
+
+def _clients_for(protocol, profile=None):
     """Xray client entries for one protocol, one entry per active user."""
-    users = _active_users()
+    users = _users_for(protocol)
     if protocol == 'vless':
-        return [{'id': u['uuid'], 'email': _email(u), 'level': 0, 'flow': ''}
-                for u in users if (u.get('protocol') or 'vless') == 'vless']
+        return [{'id': u['uuid'], 'email': _email(u), 'level': 0, 'flow': ''} for u in users]
     if protocol == 'vmess':
-        return [{'id': u['uuid'], 'email': _email(u), 'level': 0, 'alterId': 0}
-                for u in users if (u.get('protocol') or 'vless') == 'vmess']
+        return [{'id': u['uuid'], 'email': _email(u), 'level': 0, 'alterId': 0} for u in users]
     if protocol == 'trojan':
-        return [{'password': u['uuid'], 'email': _email(u), 'level': 0}
-                for u in users if (u.get('protocol') or 'vless') == 'trojan']
+        return [{'password': u['uuid'], 'email': _email(u), 'level': 0} for u in users]
     if protocol == 'ss':
-        return [{'password': tp.ss_key(u), 'email': _email(u), 'level': 0} for u in users]
+        return [{'password': tp.ss_key(u, profile), 'email': _email(u), 'level': 0} for u in users]
     return []
 
 
-def _protocol_settings(protocol):
+def _protocol_settings(profile):
     """The ``settings`` block of one inbound (clients + protocol extras)."""
-    clients = _clients_for(protocol)
+    protocol = profile['protocol']
+    clients = _clients_for(protocol, profile)
     if protocol == 'vless':
         return {'clients': clients, 'decryption': 'none'}
     if protocol == 'vmess':
@@ -65,22 +74,27 @@ def _protocol_settings(protocol):
     if protocol == 'trojan':
         return {'clients': clients}
     if protocol == 'ss':
-        # Shadowsocks-2022 is multi-user: the server key encrypts, each user key
-        # is what that user (and its subscription link) must present.
-        return {'method': tp.SS_METHOD, 'password': _ss_server_key(), 'network': 'tcp',
+        # Shadowsocks-2022 is multi-user: the server key (one per cipher, of the
+        # cipher's key length) authenticates the node, each user key is what
+        # that user - and its subscription link - must present.
+        key_len = tp.ss_key_len(profile)
+        return {'method': profile.get('method') or tp.SS_METHOD,
+                'password': _ss_server_key(key_len), 'network': 'tcp',
                 'clients': clients}
     return {'clients': clients}
 
 
-def _ss_server_key():
-    """Stable server PSK for Shadowsocks-2022 (generated once, then reused)."""
-    found = row('SELECT value FROM settings WHERE key=?', ('ss_server_key',))
+def _ss_server_key(key_len=16):
+    """Stable server PSK for one Shadowsocks-2022 cipher (created once, reused)."""
+    size = max(1, int(key_len or 16))
+    setting = 'ss_server_key' if size == 16 else f'ss_server_key_{size}'
+    found = row('SELECT value FROM settings WHERE key=?', (setting,))
     if found and found.get('value'):
         return found['value']
-    value = base64.b64encode(secrets.token_bytes(16)).decode()
+    value = base64.b64encode(secrets.token_bytes(size)).decode()
     try:
         execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                ('ss_server_key', value))
+                (setting, value))
     except Exception:
         pass
     return value
@@ -113,16 +127,18 @@ def _inbound(profile, port, listen='127.0.0.1'):
     return {
         'tag': profile['id'], 'listen': listen, 'port': int(port),
         'protocol': {'ss': 'shadowsocks'}.get(profile['protocol'], profile['protocol']),
-        'settings': _protocol_settings(profile['protocol']),
+        'settings': _protocol_settings(profile),
         'streamSettings': _transport_block(profile),
     }
 
 
-def edge_inbounds():
+def edge_inbounds(profiles=None):
     """One inbound per WebSocket profile; these ride the FastAPI bridge."""
     items = []
-    for profile in tp.EDGE_PROFILES:
-        items.append(_inbound(profile, tp.profile_port(profile)))
+    for profile in (tp.EDGE_PROFILES if profiles is None else profiles):
+        port = tp.profile_port(profile)
+        if port:
+            items.append(_inbound(profile, port))
     if tp.warp_config() and tp.profile_port(tp.WARP_PROFILE):
         items.append(_inbound(tp.WARP_PROFILE, tp.profile_port(tp.WARP_PROFILE)))
     return items
@@ -363,6 +379,9 @@ def status():
             'trojan_listener': settings.xray_trojan_port,
             'vmess_listener': settings.xray_vmess_port,
             'shadowsocks_listener': settings.xray_ss_port,
+            'shadowsocks_listeners': {c['id']: getattr(settings, 'xray_' + c['id'].replace('-', '_') + '_port')
+                                      for c in tp.SS_CIPHERS},
+            'shadowsocks_methods': [c['method'] for c in tp.SS_CIPHERS],
             'warp_listener': settings.xray_warp_port if tp.warp_config() else None,
             'reality_listener': settings.xray_reality_port if tp.direct_endpoint() else None,
             'transports': [p['id'] for p in profiles],

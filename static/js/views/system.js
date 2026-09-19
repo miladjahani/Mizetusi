@@ -229,7 +229,7 @@ export class SettingsView {
     const brand = settings.brand || {};
     set('#setBaseUrl', settings.public_base_url || '');
     set('#setPrefix', settings.sub_prefix || '');
-    set('#setProtocol', defaults.protocol || 'vless');
+    set('#setProtocol', defaults.protocol || 'all');
     set('#setLimit', defaults.limit_gb);
     set('#setExpiry', defaults.expiry_days);
     set('#setIpLimit', defaults.ip_limit);
@@ -255,7 +255,7 @@ export class SettingsView {
     if (!version) this.app.safe(() => this.loadVersion());
     const count = metrics ? `${Fmt.num(metrics.totals.users)} کل · ${Fmt.num(metrics.totals.active_users)} فعال` : '—';
     const rows = [
-      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 7.1.0'],
+      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 8.0.0'],
       ['آدرس پایه', settings.resolved_base_url || location.origin],
       ['کاربران', count],
       ['نودهای فعال', metrics ? `${Fmt.num(metrics.totals.nodes_enabled)} از ${Fmt.num(metrics.totals.nodes)}` : '—'],

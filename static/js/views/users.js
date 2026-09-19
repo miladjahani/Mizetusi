@@ -5,8 +5,7 @@
 import { $, $$, ico, esc, Fmt, bindCopyButtons } from '../core.js';
 import { Charts, StatusKit, STATUS } from '../ui.js';
 
-const FILTERS = [
-  { id: 'all', label: 'همه' }, { id: 'active', label: 'فعال' }, { id: 'off', label: 'غیرفعال' },
+const FILTERS = [      { id: 'all', label: 'همه' }, { id: 'active', label: 'فعال' }, { id: 'off', label: 'غیرفعال' },
   { id: 'quota', label: 'اتمام حجم' }, { id: 'expired', label: 'منقضی' },
 ];
 
@@ -104,7 +103,7 @@ export class UsersView {
             <div class="kv"><span>عمر کل</span><b>${esc(Fmt.sizeText(user.lifetime_used_gb))}</b></div>
             <div class="kv"><span>درخواست‌ها</span><b>${Fmt.num(user.used_req)}</b></div>
             <div class="kv"><span>انقضا</span><b data-expiry="${user.expires_at || ''}">${user.expires_at ? esc(Fmt.until(remain)) : 'بدون انقضا'}</b></div>
-            <div class="kv"><span>سقف IP / پروتکل</span><b>${user.ip_limit ? Fmt.num(user.ip_limit) : '—'} / ${esc((user.protocol || 'vless').toUpperCase())}</b></div>
+            <div class="kv"><span>سقف IP / پروتکل</span><b>${user.ip_limit ? Fmt.num(user.ip_limit) : '—'} / ${esc(user.protocol_label || 'همه پروتکل‌ها')}</b></div>
           </div>
         </div>
         <div class="acts">
@@ -148,7 +147,7 @@ export class UsersView {
       const url = `${base}/sub/${encodeURIComponent(user.uuid)}?target=auto`;
       return `<tr>
         <td><b>${esc(user.username)}</b><div class="muted mono" style="font-size:10px">${esc(String(user.uuid).slice(0, 13))}…</div></td>
-        <td>${esc((user.protocol || 'vless').toUpperCase())}</td>
+        <td>${esc(user.protocol_label || 'همه پروتکل‌ها')}</td>
         <td><span class="pill ${status.cls}">${esc(status.label)}</span></td>
         <td class="mono" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(url)}</td>
         <td class="nowrap">
@@ -276,6 +275,26 @@ export class UsersView {
     if (open && data.portal_url) open.onclick = () => window.open(data.portal_url, '_blank', 'noopener');
   }
 
+  /* ------------------------------------------------------------ protocol chips */
+  /* Every protocol is selected by default, so a created user works on all paths
+     (WS, CDN, Reality, WARP) with no extra step; an admin only narrows it. */
+  protocolChips(user = {}) {
+    const catalog = this.store.get('settings')?.protocols || {};
+    const list = catalog.protocols || [];
+    const ciphers = (catalog.shadowsocks || []).map((c) => c.method.replace('2022-blake3-', '')).join(' · ');
+    if (!list.length) {
+      return { html: '<div class="empty">کاتالوگ پروتکل در دسترس نیست</div>', ciphers };
+    }
+    const raw = String(user.protocol_value || user.protocol || 'all');
+    const explicit = raw.includes(',') ? raw.split(',').map((id) => id.trim()).filter(Boolean) : [];
+    const on = new Set(Array.isArray(user.protocols) && user.protocols.length ? user.protocols
+      : (explicit.length ? explicit : list.map((item) => item.id)));
+    const html = list.map((item) => `<button type="button" class="pick${on.has(item.id) ? ' on' : ''}" data-proto="${esc(item.id)}" title="${esc(item.label)}${item.id === 'ss' ? ` — ${esc(ciphers)}` : ''}">
+        <span class="tick"></span>${esc(item.label)}${item.id === 'ss' && ciphers ? `<small>${esc(ciphers)}</small>` : ''}
+      </button>`).join('');
+    return { html, ciphers };
+  }
+
   /* ------------------------------------------------------- advanced user form */
   modal(user = null) {
     const isEdit = !!user;
@@ -283,6 +302,7 @@ export class UsersView {
     const u = user || {};
     const pick = (value, fallback) => (value === null || value === undefined || value === '' ? (fallback ?? '') : value);
     const swClass = (value, fallback) => ((value === undefined ? fallback : !!value) ? ' on' : '');
+    const protocols = this.protocolChips(u);
 
     const modal = this.modals.open({
       title: isEdit ? `ویرایش ${user.username}` : 'ساخت کاربر جدید',
@@ -300,13 +320,17 @@ export class UsersView {
         <div class="field-grid">
           <div><label>نام کاربری <span class="hint">حروف لاتین، عدد، _ . -</span></label>
             <input id="ufUsername" dir="ltr" placeholder="nexus-user1" value="${esc(pick(u.username, ''))}" ${isEdit ? 'disabled' : ''}></div>
-          <div><label>پروتکل</label>
-            <select id="ufProtocol" ${isEdit ? 'disabled' : ''}>
-              <option value="vless"${(u.protocol || defaults.protocol || 'vless') === 'vless' ? ' selected' : ''}>VLESS + WebSocket</option>
-              <option value="trojan"${u.protocol === 'trojan' ? ' selected' : ''}>Trojan + WebSocket</option>
-            </select></div>
         </div>
-        ${isEdit ? '<p class="muted" style="margin-top:10px">نام کاربری و پروتکل پس از ساخت قابل تغییر نیستند.</p>' : ''}
+        <label>پروتکل‌ها <span class="hint">هر تعداد را می‌توانید همزمان فعال کنید</span></label>
+        <div class="picks" id="ufProtocols">${protocols.html}</div>
+        <div class="picks" style="gap:6px;margin-top:8px">
+          <button type="button" class="fchip" id="ufAllProtocols">انتخاب همه / هیچ‌کدام</button>
+        </div>
+        <p class="muted" style="margin:11px 0 0;line-height:1.9">
+          کاربر روی همه اینباندهای Xray این سرور ساخته می‌شود و هر پروتکل انتخابی یک سابلینک واقعی می‌گیرد.
+          ShadowSocks در سه نوع عرضه می‌شود (${esc(protocols.ciphers)}) و در خروجی sing-box و Clash می‌آید.
+        </p>
+        ${isEdit ? '<p class="muted" style="margin-top:10px">نام کاربری پس از ساخت قابل تغییر نیست؛ بقیه تنظیمات قابل ویرایش است.</p>' : ''}
         <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>در صورت خاموش بودن، کاربر از Xray حذف می‌شود</span></div>
           <div class="switch${swClass(u.is_active, true)}" id="ufActive"></div></div>
         <div class="switch-row"><div class="txt"><b>شروع شمارش از اولین اتصال</b><span>تا اولین اتصال، تاریخ انقضا محاسبه نمی‌شود</span></div>
@@ -368,6 +392,19 @@ export class UsersView {
     });
 
     const field = (selector) => $(selector, modal.el);
+    // One credential, every inbound: a chip toggles a protocol and "انتخاب همه"
+    // turns the whole set back on.
+    const chosenProtocols = () => $$('#ufProtocols .pick.on', modal.el).map((chip) => chip.dataset.proto);
+    $$('#ufProtocols .pick', modal.el).forEach((chip) => {
+      chip.onclick = () => chip.classList.toggle('on');
+    });
+    const allChip = field('#ufAllProtocols');
+    if (allChip) allChip.onclick = () => {
+      const chips = $$('#ufProtocols .pick', modal.el);
+      const every = chips.length > 0 && chips.every((chip) => chip.classList.contains('on'));
+      chips.forEach((chip) => chip.classList.toggle('on', !every));
+      allChip.classList.toggle('on', !every);
+    };
     $$('.tab', modal.el).forEach((tab) => {
       tab.onclick = () => {
         $$('.tab', modal.el).forEach((other) => other.classList.toggle('on', other === tab));
@@ -398,7 +435,13 @@ export class UsersView {
         block_ads: switchOn('#ufBlockAds') ? 1 : 0, block_porn: switchOn('#ufBlockPorn') ? 1 : 0,
       };
       const username = field('#ufUsername').value.trim();
-      if (!isEdit) { payload.username = username; payload.protocol = field('#ufProtocol').value; }
+      const selected = chosenProtocols();
+      if (!selected.length) {
+        this.toasts.err('حداقل یک پروتکل را انتخاب کنید');
+        return;
+      }
+      payload.protocol = selected;
+      if (!isEdit) payload.username = username;
       if (!isEdit && !/^[A-Za-z0-9_.-]{1,80}$/.test(username)) {
         this.toasts.err('نام کاربری فقط با حروف لاتین، عدد، _ و . و - (حداکثر ۸۰ کاراکتر)');
         return;
@@ -434,7 +477,7 @@ export class UsersView {
       const data = await this.api.get(`/api/users/${encodeURIComponent(user.username)}/links`);
       $('#linkSummary', modal.el).innerHTML = `
         <div class="kv-line"><span>UUID / رمز</span><b>${esc(data.uuid)}</b></div>
-        <div class="kv-line"><span>پروتکل</span><b>${esc((data.protocol || 'vless').toUpperCase())}</b></div>
+        <div class="kv-line"><span>پروتکل‌های فعال</span><b>${esc(data.protocol_label || 'همه پروتکل‌ها')}</b></div>
         <div class="kv-line"><span>وضعیت</span><b>${esc(data.allowed ? 'قابل اتصال' : `غیرفعال (${data.reason})`)}</b></div>
         <div class="kv-line"><span>نودهای موجود</span><b>${Fmt.num(data.node_count)} نود</b></div>
         <div class="kv-line"><span>مصرف</span><b>${esc(Fmt.sizeText(data.used_gb))}${data.limit_gb ? ` از ${esc(Fmt.sizeText(data.limit_gb))}` : ''}</b></div>`;
@@ -471,7 +514,7 @@ export class UsersView {
                 <b style="font-size:12px;flex:1">${esc(node.name)}</b>
                 <span class="lat ${StatusKit.latencyTone(node.latency_ms)}">${StatusKit.latencyText(node.latency_ms)}</span>
               </div>
-              <div class="link-box"><div class="lb-main"><b>${esc((data.protocol || 'vless').toUpperCase())} مستقیم</b><code>${esc(node.links.primary)}</code></div>
+              <div class="link-box"><div class="lb-main"><b>${esc(data.protocol_label || 'همه پروتکل‌ها')} مستقیم</b><code>${esc(node.links.primary)}</code></div>
                 <button class="copy-btn" data-copy="${esc(node.links.primary)}">${ico('copy', 14)}</button></div>
               <div class="link-box"><div class="lb-main"><b>سابلینک این نود</b><code>${esc(node.subscription)}</code></div>
                 <button class="copy-btn" data-copy="${esc(node.subscription)}">${ico('copy', 14)}</button></div>

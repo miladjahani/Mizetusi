@@ -186,7 +186,8 @@ def singbox(user, node, profile, prefix=''):
     elif protocol == 'trojan':
         entry.update({'type': 'trojan', 'password': user['uuid']})
     elif protocol == 'ss':
-        entry.update({'type': 'shadowsocks', 'method': tp.SS_METHOD, 'password': tp.ss_key(user)})
+        entry.update({'type': 'shadowsocks', 'method': profile.get('method') or tp.SS_METHOD,
+                      'password': tp.ss_key(user, profile)})
     else:
         raise ValueError('unsupported protocol: ' + protocol)
     return entry
@@ -213,7 +214,8 @@ def clash(user, node, profile, prefix=''):
     elif protocol == 'trojan':
         entry.update({'type': 'trojan', 'password': user['uuid']})
     elif protocol == 'ss':
-        entry.update({'type': 'ss', 'cipher': tp.SS_METHOD, 'password': tp.ss_key(user)})
+        entry.update({'type': 'ss', 'cipher': profile.get('method') or tp.SS_METHOD,
+                      'password': tp.ss_key(user, profile)})
     else:
         raise ValueError('unsupported protocol: ' + protocol)
     return entry
@@ -231,8 +233,9 @@ def xray(user, node, profile, prefix=''):
     elif protocol == 'trojan':
         settings = {'servers': [{'address': address, 'port': port, 'password': user['uuid'], 'level': 0}]}
     elif protocol == 'ss':
-        settings = {'servers': [{'address': address, 'port': port, 'method': tp.SS_METHOD,
-                                 'password': tp.ss_key(user), 'level': 0}]}
+        settings = {'servers': [{'address': address, 'port': port,
+                                 'method': profile.get('method') or tp.SS_METHOD,
+                                 'password': tp.ss_key(user, profile), 'level': 0}]}
     else:
         raise ValueError('unsupported protocol: ' + protocol)
     stream = {'network': profile['network'], 'security': profile.get('security') or 'none'}
@@ -293,15 +296,25 @@ def active_nodes(include_unhealthy=False):
     return keep
 
 
-def profiles_for(target):
-    """Which transport profiles a target asks for."""
+def profiles_for(target, protocols=None):
+    """Which transport profiles a target asks for.
+
+    ``protocols`` is the user's enabled protocol set: a target that names a
+    protocol this user does not have is a real error rather than a silently
+    empty subscription, so the caller can say why.
+    """
+    wanted = None if protocols is None else set(protocols)
     exact = tp.find(target)
     if exact:
+        if wanted is not None and exact['protocol'] not in wanted:
+            raise ValueError(_disabled_message(exact['protocol']))
         return [exact]
-    available = tp.available_profiles()
+    available = tp.available_profiles(protocols)
     if target in ('auto', 'all'):
         return available
     if target in PROTOCOL_TARGETS:
+        if wanted is not None and target not in wanted:
+            raise ValueError(_disabled_message(target))
         return [p for p in available if p['protocol'] == target]
     if target in TRANSPORT_TARGETS:
         if target == 'ws':
@@ -314,6 +327,10 @@ def profiles_for(target):
             return [p for p in available if p['group'] == tp.WARP]
         return [p for p in available if p['network'] == target]
     raise ValueError('unsupported target: ' + str(target))
+
+
+def _disabled_message(protocol):
+    return f"پروتکل {str(protocol).upper()} برای این کاربر فعال نشده است"
 
 
 def _json_subscription(user, nodes, profiles, kind, prefix=''):
@@ -329,10 +346,13 @@ def render(user, base, target, nodes=None, prefix=''):
     if not nodes:
         raise ValueError('no enabled nodes available')
 
+    # Every user gets the full matrix by default; a narrowed protocol set only
+    # ever removes entries this user explicitly turned off.
+    protocols = tp.user_protocols(user)
     # A client id resolves to the format that client imports best.
     resolved = CLIENT_FORMATS.get(target, target)
     if resolved in ('singbox', 'clash', 'xray'):
-        return _json_subscription(user, nodes, profiles_for('all'), resolved, prefix)
+        return _json_subscription(user, nodes, profiles_for('all', protocols), resolved, prefix)
     if resolved == 'json':
         return json.dumps({'transports': [{'id': p['id'], 'tag': p['tag'], 'protocol': p['protocol'],
                                           'network': p['network'], 'group': p['group']}
@@ -342,7 +362,7 @@ def render(user, base, target, nodes=None, prefix=''):
                                       'host': n['host'], 'latency_ms': n['latency_ms']} for n in nodes]},
                           ensure_ascii=False, indent=2)
 
-    profiles = profiles_for('auto' if resolved in ('base64', 'auto', 'all') else resolved)
+    profiles = profiles_for('auto' if resolved in ('base64', 'auto', 'all') else resolved, protocols)
     line_profiles = [p for p in profiles if p['protocol'] in tp.URI_PROTOCOLS]
     if not line_profiles:
         if profiles:
@@ -363,7 +383,7 @@ def render(user, base, target, nodes=None, prefix=''):
 
 def node_links(user, node, prefix=''):
     """Every raw link combination for ONE node (used by the panel drawers)."""
-    profiles = tp.available_profiles()
+    profiles = tp.available_profiles(tp.user_protocols(user))
     entries = []
     for profile in profiles:
         entry = {'id': profile['id'], 'tag': profile['tag'], 'protocol': profile['protocol'],

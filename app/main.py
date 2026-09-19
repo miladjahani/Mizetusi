@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import jwt
 from app.config import settings
 from app.db import init_db, row, rows, execute
-from app.core.models import UserCreate, TrafficEvent
+from app.core.models import UserCreate, TrafficEvent, PROTOCOL_LIST
 from app.users.service import list_users, get_user, get_by_token, create_user, delete_user, toggle_user, reset_user, track, allowed, reset_due
 from app.subscriptions.generator import render, active_nodes, node_links, normalize_target, profiles_for, TARGETS as SUB_TARGETS
 from app.subscriptions.clients import (CLIENTS, PRESETS, FORMAT_LABELS, DEFAULT_PRESET, catalog as client_catalog,
@@ -44,7 +44,7 @@ PWA_ICONS={'192':'/static/icons/icon-192.png','512':'/static/icons/icon-512.png'
 # One label per accepted target: subscription formats plus client ids.
 SUB_LABELS={**FORMAT_LABELS, **{c['id']:f"{c['name']} · {c['platform']}" for c in CLIENTS}}
 WORKER_PATH=os.path.join(BASE_DIR,'cloudflare-worker','worker.js')
-APP_VERSION='7.1.0'
+APP_VERSION='8.0.0'
 
 def _asset_fingerprint():
     """Content hash of the shipped front-end.
@@ -282,19 +282,22 @@ def logout():
 def stats(request:Request):
     auth(request); us=list_users(); ps=list_proxies(); return {'users':len(us),'active_users':sum(bool(x['is_active']) for x in us),'proxies':len(ps),'enabled_proxies':sum(bool(x['enabled']) for x in ps),'nodes':len(list_nodes()),'cf_ips':len(rows('SELECT ip FROM cf_ips WHERE ok=1'))}
 @app.get('/api/users')
-def users(request:Request): auth(request); return list_users()
+def users(request:Request): auth(request); return [_user_payload(u) for u in list_users()]
 @app.post('/api/users')
 def create(request:Request,m:UserCreate):
     auth(request)
     try: u=create_user(m)
     except Exception as e: raise HTTPException(400,str(e))
-    _audit('user.create',f"{m.username} ({m.protocol})")
-    return u
+    _audit('user.create',f"{m.username} ({transports.protocol_value(m.protocol)})")
+    return _user_payload(u)
 def _portal_url(base,token): return f"{base}/portal/{urllib.parse.quote(str(token),safe='')}"
 
 def _preset_summary(fields):
     """Human-readable list of what a preset actually applied."""
     bits=[]
+    selected=[p for p in transports.PROTOCOLS if p in transports.parse_protocols(fields.get('protocol'))]
+    bits.append('همه پروتکل‌ها' if len(selected)==len(transports.PROTOCOLS)
+                else ' · '.join(p.upper() for p in selected) or 'همه پروتکل‌ها')
     bits.append(f"فرگمنت {fields['frag_len']} / {fields.get('frag_int') or '۱۰'}" if fields.get('frag_len') else 'بدون فرگمنت')
     bits.append('حجم نامحدود' if not fields.get('limit_gb') else f"{float(fields['limit_gb']):g} گیگ")
     bits.append('بدون انقضا' if not fields.get('expiry_days') else f"{int(fields['expiry_days'])} روز")
@@ -302,18 +305,51 @@ def _preset_summary(fields):
     if fields.get('block_ads'): bits.append('بلاک تبلیغات')
     return bits
 
+def _user_target(u):
+    """The default subscription target for a user.
+
+    A user's primary URI protocol when they have one (so a legacy row still
+    resolves to ``vless``), otherwise the full node × transport matrix.
+    """
+    enabled=[p for p in transports.PROTOCOLS if p in transports.user_protocols(u)]
+    for candidate in enabled:
+        if candidate in transports.URI_PROTOCOLS:
+            return candidate
+    return 'auto'
+
 def _target_label(target):
     """Label for a subscription target: a transport profile, a format or a client."""
     profile=transports.find(target)
     return profile['tag'] if profile else SUB_LABELS.get(target,target)
 
-def _transport_targets():
-    """One subscription URL per published transport profile."""
+def _transport_targets(protocols=None):
+    """One subscription URL per published transport profile.
+
+    ``protocols`` narrows the list to one user's enabled protocol set, so the
+    panel and the status window never offer a link the user cannot dial.
+    """
     return [{'target':p['id'],'label':p['tag'],'protocol':p['protocol'],'network':p['network'],
              'group':p['group'],'security':p.get('security') or 'tls',
+             'method':p.get('method'),'key_bytes':p.get('key_len'),
              # Shadowsocks has no single-line sharing URI: its subscription is
              # the sing-box JSON, and the panel says so instead of hiding it.
-             'uri':p['protocol'] in transports.URI_PROTOCOLS} for p in transports.available_profiles()]
+             'uri':p['protocol'] in transports.URI_PROTOCOLS}
+            for p in transports.available_profiles(protocols)]
+
+def _user_payload(u):
+    """A user row plus the derived protocol view the panel renders."""
+    if not u: return u
+    item=dict(u)
+    enabled=[p for p in transports.PROTOCOLS if p in transports.user_protocols(u)]
+    item['protocols']=enabled
+    item['protocol_label']=('همه پروتکل‌ها' if len(enabled)==len(transports.PROTOCOLS)
+                            else ' · '.join(p.upper() for p in enabled) or '—')
+    item['protocol_value']=transports.protocol_value(enabled)
+    return item
+
+def _protocol_catalog():
+    """The protocol multi-select the panel renders (plus the SS cipher families)."""
+    return transports.protocol_catalog()
 
 def _share_payload(request:Request,u,node=''):
     """Everything an end user needs: status window, per-client subs, formats."""
@@ -331,8 +367,8 @@ def _share_payload(request:Request,u,node=''):
 def get_presets(request:Request):
     """Ready-made "best settings" bundles offered by the quick-create button."""
     auth(request)
-    return {'default':DEFAULT_PRESET,'presets':PRESETS,'defaults':{
-        'protocol':_setting('default_protocol') or 'vless',
+    return {'default':DEFAULT_PRESET,'presets':PRESETS,'protocols':_protocol_catalog(),'defaults':{
+        'protocol':_setting('default_protocol') or 'all',
         'limit_gb':_setting('default_limit_gb') or '',
         'expiry_days':_setting('default_expiry_days') or '',
         'ip_limit':_setting('default_ip_limit') or ''}}
@@ -401,7 +437,10 @@ async def quick_create(request:Request):
     except ValueError as e: raise HTTPException(400,str(e))
     fields=dict(chosen['fields'])
     # Precedence: admin defaults, then the preset, then anything the request sends.
-    if (_setting('default_protocol') or '') in {'vless','trojan'}: fields['protocol']=_setting('default_protocol')
+    # An admin default protocol set wins over the preset's own selection.
+    admin_protocols=(_setting('default_protocol') or '').strip().lower()
+    if admin_protocols=='all' or admin_protocols in transports.PROTOCOLS:
+        fields['protocol']=admin_protocols
     for key,setting_key in (('limit_gb','default_limit_gb'),('expiry_days','default_expiry_days'),('ip_limit','default_ip_limit')):
         configured=(_setting(setting_key) or '').strip()
         if configured:
@@ -416,24 +455,35 @@ async def quick_create(request:Request):
     try: u=create_user(m)
     except Exception as e: raise HTTPException(400,str(e))
     _audit('user.quick',f"{username} · {chosen['id']}")
-    return {'success':True,'preset':chosen['id'],'preset_name':chosen['name'],'applied':_preset_summary(fields),'user':u,**_share_payload(request,u)}
+    return {'success':True,'preset':chosen['id'],'preset_name':chosen['name'],'applied':_preset_summary(fields),'user':_user_payload(u),**_share_payload(request,u)}
 @app.get('/api/users/{username}')
 def user_detail(request:Request,username:str):
     auth(request); u=get_user(username)
     if not u: raise HTTPException(404,'user not found')
-    return u
+    return _user_payload(u)
 @app.put('/api/users/{username}')
 def update(request:Request,username:str,body:dict):
     auth(request); u=get_user(username)
     if not u: raise HTTPException(404,'user not found')
-    if body.get('toggle_only'): return toggle_user(username)
-    if body.get('reset_action'): return reset_user(username,body['reset_action'])
-    allowed_keys={'limit_gb','expiry_days','limit_req','ip_limit','is_active','ips','port','sni','host','fingerprint','tls','user_proxy','frag_len','frag_int','advanced_frag','cipher_suites','tls_mask','block_ads','block_porn','auto_rotate_ip','rotate_time','ip_operator','ip_count'}
+    if body.get('toggle_only'): return _user_payload(toggle_user(username))
+    if body.get('reset_action'): return _user_payload(reset_user(username,body['reset_action']))
+    allowed_keys={'protocol','limit_gb','expiry_days','limit_req','ip_limit','is_active','ips','port','sni','host','fingerprint','tls','user_proxy','frag_len','frag_int','advanced_frag','cipher_suites','tls_mask','block_ads','block_porn','auto_rotate_ip','rotate_time','ip_operator','ip_count'}
+    payload=dict(body)
+    if 'protocol' in payload:
+        # The protocol set is a multi-select: validate it here and store the
+        # canonical comma-separated form so an empty selection cannot lock the
+        # user out of every inbound.
+        value=transports.protocol_value(payload['protocol'])
+        if value not in ('all',) and not re.match(PROTOCOL_LIST,value):
+            raise HTTPException(400,'protocol must be all or a comma-separated list of vless, vmess, trojan, ss')
+        payload['protocol']=value
     sets=[]; vals=[]
-    for k,v in body.items():
+    for k,v in payload.items():
         if k in allowed_keys: sets.append(k+'=?'); vals.append(v)
-    if sets: vals.append(username); execute('UPDATE users SET '+','.join(sets)+' WHERE username=?',vals)
-    return get_user(username)
+    if sets:
+        vals.append(username); execute('UPDATE users SET '+','.join(sets)+' WHERE username=?',vals)
+        _audit('user.update',f"{username} · {','.join(sorted(k for k in payload if k in allowed_keys))}")
+    return _user_payload(get_user(username))
 @app.delete('/api/users/{username}')
 def delete(request:Request,username:str):
     auth(request); removed=bool(delete_user(username)); _audit('user.delete',username); return {'success':removed}
@@ -567,51 +617,27 @@ async def _bridge_ws(ws: WebSocket, upstream_path: str):
         except Exception: pass
 
 
-@app.websocket('/ws/vless')
-async def vless_ws(ws: WebSocket):
-    await _bridge_ws(ws, '/ws/vless')
+def _edge_handler(upstream_path, route_path):
+    """Build the bridge handler for one published edge path."""
+    async def handler(ws: WebSocket):
+        await _bridge_ws(ws, upstream_path)
+    handler.__name__ = 'edge_ws_' + (re.sub(r'\W+', '_', route_path).strip('_') or 'root')
+    return handler
 
 
-@app.websocket('/ws/trojan')
-async def trojan_ws(ws: WebSocket):
-    await _bridge_ws(ws, '/ws/trojan')
+def _register_edge_routes():
+    """Register one WebSocket route per published edge path.
+
+    The route table is generated from the transport profiles instead of being
+    hand-written, so adding a transport (a new Shadowsocks cipher, a new path
+    shape) can never leave a published link without a route on the edge.
+    """
+    for path in list(EDGE_ROUTES) + ['/ws']:
+        upstream = '/ws/vless' if path == '/ws' else path
+        app.websocket(path)(_edge_handler(upstream, path))
 
 
-@app.websocket('/ws/vmess')
-async def vmess_ws(ws: WebSocket):
-    await _bridge_ws(ws, '/ws/vmess')
-
-
-@app.websocket('/ws/ss')
-async def shadowsocks_ws(ws: WebSocket):
-    await _bridge_ws(ws, '/ws/ss')
-
-
-@app.websocket('/cdn/vless')
-async def vless_cdn_ws(ws: WebSocket):
-    await _bridge_ws(ws, '/cdn/vless')
-
-
-@app.websocket('/cdn/vmess')
-async def vmess_cdn_ws(ws: WebSocket):
-    await _bridge_ws(ws, '/cdn/vmess')
-
-
-@app.websocket('/cdn/trojan')
-async def trojan_cdn_ws(ws: WebSocket):
-    await _bridge_ws(ws, '/cdn/trojan')
-
-
-@app.websocket('/ws/warp')
-async def warp_ws(ws: WebSocket):
-    await _bridge_ws(ws, '/ws/warp')
-
-
-@app.websocket('/ws')
-async def legacy_ws(ws: WebSocket):
-    # Backward-compatible endpoint: VLESS clients using the old /ws path are
-    # forwarded to the Xray VLESS listener. New subscriptions use /ws/vless.
-    await _bridge_ws(ws, '/ws/vless')
+_register_edge_routes()
 
 
 def _portal_data(request:Request,u):
@@ -628,15 +654,16 @@ def _portal_data(request:Request,u):
         nodes.append({
             'name':n['name'],'kind':n['kind'],'server':n['server'],'port':int(n.get('port') or 443),
             'latency_ms':latency,'online':bool(latency is not None and float(latency)>=0),'tls_ok':bool(meta.get('ping_tls')),
-            'subscription':client_subscription_url(base,token,u.get('protocol') or 'vless',n['name']),
+            'subscription':client_subscription_url(base,token,_user_target(u),n['name']),
             'subscription_all':client_subscription_url(base,token,'all',n['name']),
-            'transport_count':len(transports.available_profiles()),
+            'transport_count':len(transports.available_profiles(transports.user_protocols(u))),
             'transports':[{'target':p['id'],'label':p['tag'],'protocol':p['protocol'],
                            'url':client_subscription_url(base,token,p['id'],n['name'])}
-                          for p in transports.available_profiles()],
+                          for p in transports.available_profiles(transports.user_protocols(u))],
         })
     return {
-        'brand':'NEXUS','token':u['uuid'],'username':u['username'],'protocol':(u.get('protocol') or 'vless'),
+        'brand':'NEXUS','token':u['uuid'],'username':u['username'],'protocol':(u.get('protocol') or 'all'),
+        'protocol_label':_user_payload(u)['protocol_label'],
         'is_active':bool(u['is_active']),'allowed':ok,'reason':reason,'reason_label':REASON_LABELS.get(reason,reason),
         'used_gb':round(used,3),'limit_gb':limit,'quota_pct':round(min(100.0,used/float(limit)*100),1) if limit else 0.0,
         'used_req':int(u.get('used_req') or 0),'limit_req':u.get('limit_req'),'ip_limit':u.get('ip_limit'),
@@ -647,7 +674,7 @@ def _portal_data(request:Request,u):
         'portal_url':_portal_url(base,token),
         'smart_url':client_subscription_url(base,token,'auto'),
         'clients':client_links(base,token,'',None),
-        'transports':_transport_targets(),
+        'transports':_transport_targets(transports.user_protocols(u)),
         'nodes':nodes,'nodes_total':len(nodes),'nodes_online':sum(1 for n in nodes if n['online']),
     }
 
@@ -791,24 +818,37 @@ def cloudflare_worker_download(request:Request):
 
 @app.post('/api/cloudflare/worker-test')
 async def cloudflare_worker_test(request:Request):
-    """Call the Worker's /health endpoint so the panel can prove it is live."""
+    """Call the Worker's /health endpoint so the panel can prove it is live.
+
+    ``?probe=1`` makes the Worker also dial the Railway origin, so one click
+    proves the Worker, the origin URL and the request route together.
+    """
     auth(request)
     try: body=await request.json()
     except Exception: body=None
     body=body if isinstance(body,dict) else {}
     url=str(body.get('url') or _setting('cloudflare_worker_url') or '').strip().rstrip('/')
     if not url.startswith('https://'): raise HTTPException(400,'Worker URL must be a valid HTTPS URL')
-    from urllib.request import Request as UrlRequest, urlopen
+    from urllib.request import Request as UrlRequest, urlopen, HTTPError
     def call():
         started=time.perf_counter()
-        with urlopen(UrlRequest(url+'/health',headers={'User-Agent':'NEXUS-Panel/1.0'}),timeout=8) as resp:
-            return resp.status,resp.read().decode('utf-8','replace'),round((time.perf_counter()-started)*1000,1)
+        target=url.split('?',1)[0]+'/health?probe=1'
+        try:
+            with urlopen(UrlRequest(target,headers={'User-Agent':'NEXUS-Panel/1.0','Accept':'application/json'}),timeout=10) as resp:
+                return resp.status,resp.read().decode('utf-8','replace'),round((time.perf_counter()-started)*1000,1)
+        except HTTPError as exc:
+            # 503 with a JSON body is a usable answer (origin not configured /
+            # origin down), so surface it instead of a bare failure.
+            return exc.code,exc.read().decode('utf-8','replace'),round((time.perf_counter()-started)*1000,1)
     try: status,text,latency=await asyncio.to_thread(call)
     except Exception as exc:
         return {'ok':False,'detail':type(exc).__name__,'url':url,'health':{}}
     try: parsed=json.loads(text)
     except Exception: parsed={'raw':text[:400]}
-    return {'ok':200<=status<300,'status':status,'latency_ms':latency,'url':url,'health':parsed}
+    probe=parsed.get('origin_probe') if isinstance(parsed,dict) else None
+    ok=200<=status<300 and (not probe or probe.get('reachable'))
+    return {'ok':ok,'status':status,'latency_ms':latency,'url':url,'health':parsed,'origin_probe':probe}
+
 
 @app.get('/api/core/status')
 def core_status(request:Request):
@@ -876,7 +916,7 @@ def metrics(request:Request,hours:int=24):
         'series_daily':daily,
         'protocols':[{'name':k,'count':v} for k,v in protocols.items()],
         'nodes':[{'name':n['name'],'kind':n['kind'],'server':n['server'],'port':n['port'],'latency_ms':n['latency_ms'],'enabled':bool(n['enabled'])} for n in nodes],
-        'top_users':[{'username':u['username'],'protocol':u.get('protocol'),'used_gb':round(float(u.get('used_gb') or 0),4),'limit_gb':u.get('limit_gb'),'is_active':bool(u['is_active'])} for u in top],
+        'top_users':[{'username':u['username'],'protocol':u.get('protocol'),'protocol_label':_user_payload(u)['protocol_label'],'used_gb':round(float(u.get('used_gb') or 0),4),'limit_gb':u.get('limit_gb'),'is_active':bool(u['is_active'])} for u in top],
     }
 
 
@@ -893,29 +933,38 @@ def user_links(request:Request,username:str,node:str=''):
         url=f"{base}/sub/{token}?target={urllib.parse.quote(normalize_target(target))}"
         if name: url+='&node='+urllib.parse.quote(str(name))
         return url
+    protocol_set=transports.user_protocols(u)
     items=[]
     for n in nodes:
         item=node_links(u,n,prefix)
-        item['subscriptions']=[{'target':t,'label':_target_label(t),'url':sub(t,item['name'])} for t in ('vless','trojan','vmess','base64','singbox','clash','xray')]
+        # A protocol link is only offered when that protocol is live for this
+        # user; the format links (base64/singbox/clash/xray) always are.
+        item['subscriptions']=[{'target':t,'label':_target_label(t),'url':sub(t,item['name'])}
+                               for t in ('vless','trojan','vmess','base64','singbox','clash','xray')
+                               if t not in transports.PROTOCOLS or t in protocol_set]
         # One subscription per published transport for this single node.
         item['transport_subscriptions']=[{'target':p['id'],'label':p['tag'],'url':sub(p['id'],item['name'])}
-                                         for p in transports.available_profiles()]
-        item['subscription']=sub(u.get('protocol') or 'vless',item['name'])
+                                         for p in transports.available_profiles(protocol_set)]
+        item['subscription']=sub(_user_target(u),item['name'])
         item['subscription_all']=sub('all',item['name'])
         item['clients']=client_links(base,token,item['name'],{})
         items.append(item)
+    enabled_protocols=transports.user_protocols(u)
+    payload=_user_payload(u)
     return {
         'username':u['username'],'uuid':u['uuid'],'protocol':u.get('protocol'),
+        'protocols':payload['protocols'],'protocol_label':payload['protocol_label'],
         'is_active':bool(u['is_active']),'allowed':ok,'reason':reason,
         'limit_gb':u.get('limit_gb'),'used_gb':round(float(u.get('used_gb') or 0),4),
         'used_req':int(u.get('used_req') or 0),'expires_at':u.get('expires_at'),
         'base_url':base,'node_count':len(items),
         'portal_url':_portal_url(base,token),
-        'subscription':sub(u.get('protocol') or 'vless'),
+        'subscription':sub(_user_target(u)),
         'smart_url':sub('auto'),
         'subscriptions':[{'target':t,'label':_target_label(t),'url':sub(t)} for t in SUB_TARGETS],
-        'transports':_transport_targets(),
-        'profiles':profiles_for('auto'),
+        'protocol_set':sorted(enabled_protocols,key=transports.PROTOCOLS.index),
+        'transports':_transport_targets(enabled_protocols),
+        'profiles':profiles_for('auto',enabled_protocols),
         'clients':client_links(base,token,'',None),
         'nodes':items,
     }
@@ -957,7 +1006,9 @@ def get_settings(request:Request):
     payload['worker']={'url':worker,'configured':bool(worker)}
     payload['subscription']={'targets':SUB_TARGETS,'prefix':_sub_prefix(),'node_count':len(active_nodes()),
         'protocols':sorted({p['protocol'].upper() for p in transports.available_profiles()}),
-        'transport':'WebSocket edge + Reality','transports':_transport_targets()}
+        'transport':'WebSocket edge + Reality','transports':_transport_targets(),
+        'protocol_catalog':_protocol_catalog()}
+    payload['protocols']=_protocol_catalog()
     payload['clients']=client_catalog()
     payload['brand']=_brand()
     payload['pwa']={'manifest':'/manifest.webmanifest','service_worker':'/sw.js','icons':PWA_ICONS,
@@ -976,8 +1027,12 @@ async def save_settings(request:Request):
         if url and not (url.startswith(('http://','https://')) and urllib.parse.urlparse(url).hostname):
             raise HTTPException(400,'Base URL must be a valid http(s) URL')
         _set('public_base_url',url); changed.append('public_base_url')
-    if 'default_protocol' in b and str(b['default_protocol']) not in {'vless','trojan','vmess','ss'}:
-        raise HTTPException(400,'default_protocol must be vless, trojan, vmess or ss')
+    if 'default_protocol' in b:
+        # `all` or a comma-separated set, so the default can be the full matrix.
+        value=str(b['default_protocol'] or 'all').strip().lower()
+        if value!='all' and not re.match(PROTOCOL_LIST,value):
+            raise HTTPException(400,'default_protocol must be all or a comma-separated list of vless, vmess, trojan, ss')
+        b=dict(b,default_protocol=value)
     for key in ('sub_prefix','default_protocol','default_limit_gb','default_expiry_days','default_ip_limit'):
         if key in b: _set(key,str(b[key]).strip()); changed.append(key)
     # Presentation + session lifetime: validated so a bad value cannot lock the

@@ -163,7 +163,7 @@ export class DashboardView {
         <span class="idx mono">${Fmt.num(index + 1)}</span>
         <span class="avatar" style="width:28px;height:28px;flex:0 0 28px;font-size:11px">${esc((user.username || '?')[0].toUpperCase())}</span>
         <span class="who"><b>${esc(user.username)}</b>
-          <span>${user.limit_gb ? `از ${esc(Fmt.sizeText(user.limit_gb))}` : 'بدون سقف حجم'} · ${esc((user.protocol || 'vless').toUpperCase())}</span></span>
+          <span>${user.limit_gb ? `از ${esc(Fmt.sizeText(user.limit_gb))}` : 'بدون سقف حجم'} · ${esc(user.protocol_label || 'همه پروتکل‌ها')}</span></span>
         <span class="amt">${esc(Fmt.sizeText(user.used_gb))}</span>
         <span class="bar-track" style="width:52px;height:6px"><span class="bar-fill ${user.limit_gb && user.used_gb / user.limit_gb > 0.85 ? 'bad' : ''}" style="width:${(user.used_gb / max) * 100}%"></span></span>
       </div>`).join('');

@@ -118,15 +118,18 @@ export class NodesView {
     }
     const badge = (ok, label, title) => `<span class="chip" style="padding:3px 9px;font-size:10px;${ok ? 'border-color:rgba(62,230,160,.3);color:#8ef0c0;background:rgba(62,230,160,.07)' : 'opacity:.45'}" title="${esc(title)}">${ok ? '✓' : '×'} ${esc(label)}</span>`;
     const users = this.store.get('users');
-    const vless = users.filter((user) => (user.protocol || 'vless') === 'vless').length;
-    const trojan = users.filter((user) => user.protocol === 'trojan').length;
+    // A user now carries a protocol *set*, so each protocol is counted by
+    // membership - a user with every protocol on counts in every row.
+    const count = (id) => users.filter((user) => (user.protocols || ['vless']).includes(id)).length;
     const enabled = nodes.filter((node) => node.enabled).length;
     const clients = this.store.get('settings')?.clients?.length || this.store.get('clientCount') || 16;
+    const ciphers = (matrix.ss_methods || []).map((method) => method.replace('2022-blake3-', '')).join(' · ');
     host.innerHTML = `
       <div class="kv-list" style="margin-bottom:12px">
         <div class="kv-line"><span>ترکیب‌های قابل انتشار</span><b>${Fmt.num(enabled * profiles.length)} لینک (${Fmt.num(enabled)} نود × ${Fmt.num(profiles.length)} پروتکل/ترنسپورت)</b></div>
         <div class="kv-line"><span>سابلینک اختصاصی هر کلاینت</span><b>${Fmt.num(clients)} کلاینت × ${Fmt.num(enabled)} نود</b></div>
-        <div class="kv-line"><span>کاربرهای VLESS / Trojan</span><b>${Fmt.num(vless)} / ${Fmt.num(trojan)}</b></div>
+        <div class="kv-line"><span>کاربرهای هر پروتکل</span><b>VLESS ${Fmt.num(count('vless'))} · VMess ${Fmt.num(count('vmess'))} · Trojan ${Fmt.num(count('trojan'))} · SS ${Fmt.num(count('ss'))}</b></div>
+        ${ciphers ? `<div class="kv-line"><span>ShadowSocks منتشر‌شده</span><b>${esc(ciphers)}</b></div>` : ''}
         <div class="kv-line"><span>وضعیت هسته</span><b>${matrix.xray?.running ? 'Running' : 'متوقف'}${matrix.xray?.warning ? ' · هشدار کانفیگ' : ''}</b></div>
       </div>
       ${nodes.slice(0, 12).map((node) => `
@@ -150,7 +153,7 @@ export class NodesView {
     const current = this.store.get('exploreUser') || (users[0] ? users[0].username : '');
     this.store.set('exploreUser', current);
     select.innerHTML = users.length
-      ? users.map((user) => `<option value="${esc(user.username)}"${user.username === current ? ' selected' : ''}>${esc(user.username)} · ${esc((user.protocol || 'vless').toUpperCase())}</option>`).join('')
+      ? users.map((user) => `<option value="${esc(user.username)}"${user.username === current ? ' selected' : ''}>${esc(user.username)} · ${esc(user.protocol_label || 'همه پروتکل‌ها')}</option>`).join('')
       : '<option value="">کاربری وجود ندارد</option>';
     select.onchange = () => {
       this.store.set('exploreUser', select.value);
@@ -177,7 +180,7 @@ export class NodesView {
           <span class="lat ${StatusKit.latencyTone(node.latency_ms)}">${StatusKit.latencyText(node.latency_ms)}</span>
         </div>
         <div class="link-box">
-          <div class="lb-main"><b>لینک مستقیم ${esc((data.protocol || 'vless').toUpperCase())}</b><code>${esc(node.links.primary)}</code></div>
+          <div class="lb-main"><b>لینک مستقیم ${esc(data.protocol_label || 'همه پروتکل‌ها')}</b><code>${esc(node.links.primary)}</code></div>
           <button class="copy-btn" data-copy="${esc(node.links.primary)}">${ico('copy', 14)}</button>
         </div>
         <div class="link-box" style="margin-top:6px">

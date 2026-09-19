@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     xray_vmess_cdn_port: int = 10006
     xray_trojan_cdn_port: int = 10007
     xray_warp_port: int = 10008
+    # One listener per Shadowsocks-2022 cipher family, in both edge path shapes.
+    xray_ss_cdn_port: int = 10009
+    xray_ss_aes256_port: int = 10010
+    xray_ss_aes256_cdn_port: int = 10011
+    xray_ss_chacha_port: int = 10012
+    xray_ss_chacha_cdn_port: int = 10013
     # Reality + fallback children (gRPC/HTTPUpgrade/H2/XHTTP) share ONE public
     # TCP port. Off until a direct endpoint exists (Railway TCP proxy env vars
     # or the direct_host/direct_port settings).

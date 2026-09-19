@@ -354,6 +354,20 @@ nav{display:grid;gap:5px;position:relative;z-index:1}
 .fchip:hover{color:#fff;border-color:var(--line-strong)}
 .fchip.on{background:rgba(90,209,255,.15);color:#d9f0ff;border-color:rgba(90,209,255,.3)}
 
+/* ---------- multi-select chips (a user's protocols) ---------- */
+.picks{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+.pick{
+  display:inline-flex;align-items:center;gap:7px;font-size:11.5px;padding:8px 12px;border-radius:99px;cursor:pointer;
+  border:1px solid var(--line);background:rgba(255,255,255,.04);color:#a9b9d1;transition:.2s var(--ease);min-width:0
+}
+.pick:hover{color:#fff;border-color:var(--line-strong)}
+.pick.on{background:rgba(90,209,255,.15);color:#d9f0ff;border-color:rgba(90,209,255,.32)}
+.pick .tick{width:8px;height:8px;flex:0 0 8px;border-radius:50%;background:rgba(255,255,255,.16);transition:.2s var(--ease)}
+.pick.on .tick{background:#5ad1ff;box-shadow:0 0 10px rgba(90,209,255,.75)}
+.pick small{color:var(--muted-2);font-size:9.5px;white-space:nowrap}
+@keyframes pickPulse{from{opacity:.45}to{opacity:1}}
+.pick.on .tick{animation:pickPulse .3s var(--ease)}
+
 /* ---------- forms ---------- */
 label{display:block;font-size:11.5px;color:#b3c2d8;margin:14px 0 7px;font-weight:500}
 label:first-child{margin-top:0}

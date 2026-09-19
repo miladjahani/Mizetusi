@@ -242,6 +242,52 @@ def test_user_links_cover_every_target_and_node():
     assert client.get('/api/users/ghost/links', headers=h()).status_code == 404
 
 
+def test_xray_config_registers_every_user_on_every_edge_inbound():
+    """The generated config must be coherent: one inbound per published profile,
+    a distinct listener port each, and every active user on every inbound."""
+    from app import xray
+    from app.subscriptions import transports as tp
+
+    execute('DELETE FROM users')
+    execute('INSERT INTO users(username,uuid,protocol,is_active,created_at) VALUES(?,?,?,1,0)',
+            ('cfg-all', '11111111-2222-3333-4444-555555555555', 'all'))
+    execute('INSERT INTO users(username,uuid,protocol,is_active,created_at) VALUES(?,?,?,1,0)',
+            ('cfg-two', '22222222-2222-3333-4444-666666666666', 'vless,trojan'))
+    execute('INSERT INTO users(username,uuid,protocol,is_active,created_at) VALUES(?,?,?,0,0)',
+            ('cfg-off', '33333333-2222-3333-4444-777777777777', 'all'))
+
+    config = xray._config()
+    inbounds = [item for item in config['inbounds'] if item['tag'] in {p['id'] for p in tp.EDGE_PROFILES}]
+    assert {item['tag'] for item in inbounds} == {p['id'] for p in tp.EDGE_PROFILES}
+    ports = [item['port'] for item in inbounds]
+    assert len(set(ports)) == len(ports), 'two transports must never share a listener port'
+    assert len({item['tag'] for item in config['inbounds']}) == len(config['inbounds'])
+
+    for item in inbounds:
+        assert item['listen'] == '127.0.0.1', 'edge listeners must stay on loopback'
+        emails = {client.get('email') for client in item['settings']['clients']}
+        assert 'cfg-all@nexus.local' in emails, item['tag']
+        # A narrowed user is only on the inbounds it selected, and a disabled
+        # user is on none of them.
+        assert ('cfg-two@nexus.local' in emails) is (item['tag'].startswith('vless') or item['tag'].startswith('trojan'))
+        assert 'cfg-off@nexus.local' not in emails
+
+    # Each Shadowsocks cipher reaches its own listener with its own method and
+    # a server PSK of exactly that cipher's key length.
+    import base64 as b64
+    shadowsocks = [item for item in inbounds if item['protocol'] == 'shadowsocks']
+    assert {item['settings']['method'] for item in shadowsocks} == {c['method'] for c in tp.SS_CIPHERS}
+    for item in shadowsocks:
+        key_len = next(c['key_len'] for c in tp.SS_CIPHERS if c['method'] == item['settings']['method'])
+        assert len(b64.b64decode(item['settings']['password'])) == key_len
+        for client in item['settings']['clients']:
+            assert len(b64.b64decode(client['password'])) == key_len
+
+    # Every path the edge bridges has a route, and the Worker proxies them all.
+    assert set(xray.edge_routes()) == {p['path'] for p in tp.EDGE_PROFILES} | {'/ws/warp'}
+    execute('DELETE FROM users')
+
+
 def test_transport_catalog_endpoint_describes_the_matrix():
     _seed_nodes()
     data = client.get('/api/transports', headers=h()).json()
@@ -482,6 +528,110 @@ def test_per_client_subscription_formats():
     assert client.get(f'/sub/{uuid_value}?target=unknown-client').status_code == 400
 
 
+def test_a_user_is_provisioned_on_every_inbound_by_default():
+    """One credential, all paths: the user must exist in every protocol inbound.
+
+    This is the bug behind "you cannot select all protocols for one user": the
+    inbounds used to filter users by the single ``protocol`` column, so a VLESS
+    user's VMess/Trojan/Shadowsocks links were published but rejected by Xray.
+    """
+    from app import xray
+
+    _seed_nodes()
+    execute('DELETE FROM users')
+    created = client.post('/api/users', headers=h(), json={'username': 'allproto'}).json()
+    assert created['protocols'] == ['vless', 'vmess', 'trojan', 'ss']
+    assert 'همه' in created['protocol_label']
+
+    for protocol in ('vless', 'vmess', 'trojan', 'ss'):
+        clients = xray._clients_for(protocol, {'method': '2022-blake3-aes-128-gcm', 'key_len': 16})
+        assert 'allproto@nexus.local' in [entry['email'] for entry in clients], protocol
+
+    data = client.get('/api/users/allproto/links', headers=h()).json()
+    assert {profile['protocol'] for profile in data['profiles']} == {'vless', 'vmess', 'trojan', 'ss'}
+    # And every one of those really renders a usable subscription.
+    for target in ('vless', 'vmess', 'trojan'):
+        text = client.get(f"/sub/{data['uuid']}?target={target}").text
+        assert text.count(target + '://') == 2 * len([p for p in data['profiles'] if p['protocol'] == target])
+        assert text.count(target + '://') >= 2
+    assert client.get(f"/sub/{data['uuid']}?target=ss").text.lstrip().startswith('{')
+
+
+def test_protocol_selection_can_be_all_or_a_subset():
+    """The panel sends a list; a subset genuinely narrows every link."""
+    _seed_nodes()
+    execute('DELETE FROM users')
+    client.post('/api/users', headers=h(), json={'username': 'multi'})
+
+    # All protocols selected at once (what the default form submits).
+    every = client.put('/api/users/multi', headers=h(),
+                       json={'protocol': ['vless', 'vmess', 'trojan', 'ss']}).json()
+    assert sorted(every['protocols']) == ['ss', 'trojan', 'vless', 'vmess']
+    assert every['protocol_value'] == 'all'
+
+    # A real subset only offers what was selected.
+    narrow = client.put('/api/users/multi', headers=h(), json={'protocol': ['vless', 'trojan']}).json()
+    assert narrow['protocols'] == ['vless', 'trojan']
+    assert narrow['protocol_value'] == 'vless,trojan'
+    data = client.get('/api/users/multi/links', headers=h()).json()
+    assert {p['protocol'] for p in data['profiles']} == {'vless', 'trojan'}
+    assert {t['protocol'] for t in data['transports']} == {'vless', 'trojan'}
+    assert client.get(f"/sub/{data['uuid']}?target=vmess").status_code == 400
+    assert 'trojan://' in client.get(f"/sub/{data['uuid']}?target=all").text
+
+    # The status window of the narrowed user lists only the live transports.
+    portal = client.get(f"/portal/{data['uuid']}/json").json()
+    assert {t['protocol'] for t in portal['transports']} == {'vless', 'trojan'}
+    assert portal['protocol_label'] == 'VLESS · TROJAN'
+
+    # A string list works too, an unknown protocol is rejected, and turning
+    # every protocol off falls back to the full set instead of locking the user
+    # out of every inbound.
+    assert client.put('/api/users/multi', headers=h(), json={'protocol': 'vless,trojan'}).json()['protocols'] == ['vless', 'trojan']
+    assert client.post('/api/users', headers=h(), json={'username': 'bad', 'protocol': 'wireguard'}).status_code == 422
+    assert client.put('/api/users/multi', headers=h(), json={'protocol': []}).json()['protocols'] == ['vless', 'vmess', 'trojan', 'ss']
+
+    # Legacy single-value rows keep meaning "the whole matrix".
+    execute("UPDATE users SET protocol='vless' WHERE username='multi'")
+    legacy = client.get('/api/users/multi/links', headers=h()).json()
+    assert {p['protocol'] for p in legacy['profiles']} == {'vless', 'vmess', 'trojan', 'ss'}
+    assert 'vless' in legacy['subscription']
+
+
+def test_shadowsocks_ships_every_cipher_family():
+    """Shadowsocks is several ciphers, each with its own listener and key size."""
+    from app.subscriptions import transports as tp
+
+    _seed_nodes()
+    execute('DELETE FROM users')
+    data = client.get('/api/transports', headers=h()).json()
+    methods = {p['method'] for p in data['profiles'] if p['protocol'] == 'ss'}
+    assert methods == {'2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305'}
+    assert set(data['ss_methods']) == methods
+    assert {variant['id'] for variant in data['protocol_catalog']['shadowsocks']} == {'ss', 'ss-aes256', 'ss-chacha'}
+
+    # Each cipher has its own key shape: 16 bytes for AES-128, 32 for the rest.
+    user = {'uuid': '11111111-2222-3333-4444-555555555555'}
+    keys = {c['id']: tp.ss_key(user, c) for c in tp.SS_CIPHERS}
+    assert len({len(__import__('base64').b64decode(k)) for k in keys.values()}) == 2
+    assert len(keys['ss']) == 24 and len(keys['ss-aes256']) == 44
+    # The server PSK is generated per cipher length, so both inbounds validate.
+    from app import xray
+    assert xray._ss_server_key(16) != xray._ss_server_key(32)
+    assert len(__import__('base64').b64decode(xray._ss_server_key(32))) == 32
+
+    # Every cipher lands in the JSON subscriptions with its own method.
+    uuid_value = client.post('/api/users', headers=h(), json={'username': 'ssuser'}).json()['uuid']
+    outbounds = json.loads(client.get(f'/sub/{uuid_value}?target=singbox').text)['outbounds']
+    shadowsocks = [o for o in outbounds if o['type'] == 'shadowsocks']
+    assert {o['method'] for o in shadowsocks} == methods
+    assert len({o['password'] for o in shadowsocks}) == len(tp.SS_CIPHERS)
+    clash = json.loads(client.get(f'/sub/{uuid_value}?target=clash').text)['proxies']
+    assert {p['cipher'] for p in clash if p['type'] == 'ss'} == methods
+    xray_out = json.loads(client.get(f'/sub/{uuid_value}?target=xray').text)['outbounds']
+    assert {o['settings']['servers'][0]['method'] for o in xray_out if o['protocol'] == 'shadowsocks'} == methods
+
+
 def test_ping_probes_every_node_and_records_the_result():
     _seed_nodes()
     # Cloudflare clean IPs are dialled by IP with the Worker host as SNI, the
@@ -498,6 +648,28 @@ def test_ping_probes_every_node_and_records_the_result():
     failed = client.get('/api/logs', headers=h()).json()
     assert any(item['action'] == 'nodes.ping' for item in failed)
     _seed_nodes()  # restore the fixture for the tests that follow
+
+
+def test_worker_edge_paths_match_the_published_transports():
+    """The Worker's path table must equal the paths the edge and the panel publish.
+
+    A path the panel hands out but the Worker 404s is a Cloudflare node that only
+    works on the Railway origin - the exact "the Worker is broken" report.
+    """
+    import os
+    import re
+
+    from app.subscriptions import transports as tp
+
+    path = os.path.join(os.path.dirname(__file__), '..', 'cloudflare-worker', 'worker.js')
+    with open(path, encoding='utf-8') as handle:
+        source = handle.read()
+    block = source.split('const EDGE_PATHS = [', 1)[1].split('];', 1)[0]
+    advertised = set(re.findall(r"'([^']+)'", block))
+    assert advertised == set(tp.edge_paths()) | {'/ws'}
+    # Both the FastAPI edge and the Worker are generated from the same profile
+    # table, so every published path is proxied on both sides.
+    assert set(tp.edge_paths()) <= advertised
 
 
 def test_worker_code_is_prefilled_and_downloadable():

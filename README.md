@@ -1,9 +1,26 @@
-# NEXUS Railway Python Auto v7
+# NEXUS Railway Python Auto v8
 
 NEXUS is a Python/FastAPI + Xray-core control plane that runs on Railway. It creates real
 Xray users, publishes subscribable nodes (Railway direct + healthy Cloudflare clean IPs),
 measures every node with a real probe, and gives each end user a public status window with
 a dedicated subscription per client.
+
+## What this release changes
+
+- **A user really does get every protocol.** The Xray inbounds used to filter users by the
+  single `protocol` column, so a VLESS user's VMess/Trojan/Shadowsocks links were published
+  but rejected by the engine. One credential is now registered on every inbound, and the
+  panel's protocol field became a multi-select with all protocols on by default.
+- **Shadowsocks is three cipher families**, not one: AES-128-GCM, AES-256-GCM and
+  ChaCha20-Poly1305, each with its own listener, its own key length and its own subscription
+  target, across both edge path shapes.
+- **The Cloudflare Worker proxies the whole matrix.** It only knew `/ws`, `/ws/vless` and
+  `/ws/trojan`, so every VMess, Shadowsocks, CDN and WARP node 404'd behind Cloudflare while
+  working on the Railway origin. It also forwards the real client IP, keeps the handshake
+  headers the origin needs, and answers an unreachable origin with a JSON `502`.
+- **Freebuff-side hardening.** Edge routes and the Worker's path table are now generated from
+  (and asserted against) the transport profile table, and two new headless probes cover them:
+  `tests/worker_smoke.mjs` and the protocol/Shadowsocks cases in `tests/test_panel_api.py`.
 
 ## What v7 changes
 
@@ -116,13 +133,31 @@ panel. Every node publishes all of these **by default**, with no admin action:
 | `vless-ws` / `vless-cdn` | VLESS | WebSocket + TLS | `/ws/vless`, `/cdn/vless` |
 | `vmess-ws` / `vmess-cdn` | VMess | WebSocket + TLS | `/ws/vmess`, `/cdn/vmess` |
 | `trojan-ws` / `trojan-cdn` | Trojan | WebSocket + TLS | `/ws/trojan`, `/cdn/trojan` |
-| `ss-ws` | Shadowsocks-2022 | WebSocket + TLS | `/ws/ss` (sing-box/Clash/Xray output) |
+| `ss-ws` / `ss-cdn` | Shadowsocks-2022 · AES-128-GCM | WebSocket + TLS | `/ws/ss`, `/cdn/ss` |
+| `ss-aes256-ws` / `ss-aes256-cdn` | Shadowsocks-2022 · AES-256-GCM | WebSocket + TLS | `/ws/ss-aes256`, `/cdn/ss-aes256` |
+| `ss-chacha-ws` / `ss-chacha-cdn` | Shadowsocks-2022 · ChaCha20-Poly1305 | WebSocket + TLS | `/ws/ss-chacha`, `/cdn/ss-chacha` |
 | `vless-reality` | VLESS | Reality (TCP) | the direct port, when one exists |
 | `warp-ws` | VLESS | WebSocket → WARP exit | `/ws/warp`, once WARP is enabled |
 
-The two path shapes per protocol exist so a blocked path never takes the service down.
-Each profile gets its own local Xray listener; the FastAPI edge bridges each WebSocket path
-to the matching listener (`EDGE_ROUTES`), so one Railway HTTP port serves all of them.
+The two path shapes per protocol exist so a blocked path never takes the service down, and
+Shadowsocks ships one listener per cipher family (each cipher needs a key of its own length,
+so a single profile cannot represent them all). Each profile gets its own local Xray
+listener; the FastAPI edge bridges each WebSocket path to the matching listener
+(`EDGE_ROUTES`), so one Railway HTTP port serves all of them. Those routes are *generated*
+from the profile table rather than hand-written, and the Cloudflare Worker's copy of the same
+path list is asserted against it by `tests/test_panel_api.py` — a transport can therefore
+never be published without a route on both edges.
+
+### One credential, every protocol
+
+A user is not tied to a single protocol. The `protocol` column holds a **set**
+(comma-separated), every user is registered on **every** inbound by default, and the panel
+renders it as a multi-select with all protocols switched on — so VLESS, VMess, Trojan and
+all three Shadowsocks ciphers work for the same UUID/password with no extra step. Narrowing
+the set is optional and only removes the links that were turned off (a subscription target
+for a disabled protocol answers `400` instead of returning an empty list). Rows written by
+older releases carry a single value, which still means "all protocols", because that is what
+those users have always received.
 
 **Reality** terminates TLS inside Xray with a real site's certificate, so it needs a raw
 TCP endpoint: set `direct_host`/`direct_port` in the panel (or enable a Railway TCP proxy,
@@ -149,8 +184,9 @@ is advertised.
 
 ## Public endpoints
 
-- VLESS: `/ws/vless` · VMess: `/ws/vmess` · Trojan: `/ws/trojan` · Shadowsocks: `/ws/ss`
-- CDN path shapes: `/cdn/vless`, `/cdn/vmess`, `/cdn/trojan` · WARP: `/ws/warp` · legacy `/ws`
+- VLESS: `/ws/vless` · VMess: `/ws/vmess` · Trojan: `/ws/trojan` · WARP: `/ws/warp`
+- Shadowsocks-2022: `/ws/ss` (AES-128-GCM) · `/ws/ss-aes256` · `/ws/ss-chacha`
+- CDN path shapes: `/cdn/vless`, `/cdn/vmess`, `/cdn/trojan`, `/cdn/ss`, `/cdn/ss-aes256`, `/cdn/ss-chacha` · legacy `/ws`
 - Subscription: `/sub/<UUID>?target=auto|all|vless|trojan|vmess|ss|base64|singbox|clash|xray|json`
 - By transport: `?target=ws|cdn|reality|warp` or one exact profile, e.g. `?target=vless-cdn`
 - Per-client: `/sub/<UUID>?target=bettbox|exclusive|nekoboxplus|v2rayng|hiddify|karing|streisand|shadowrocket|v2box|foxray|nekobox|amnezia|smart`
@@ -170,6 +206,19 @@ base64 blobs. Shadowsocks-over-WebSocket has no sharing-URI form, so `?target=ss
 the sing-box JSON for exactly those profiles instead of a link that would dial the wrong
 endpoint; the panel marks such rows. Every response carries `X-NEXUS-Format`,
 `X-NEXUS-Node-Count`, `X-NEXUS-Transports` and `X-NEXUS-Target`.
+
+## The Cloudflare Worker
+
+`cloudflare-worker/worker.js` is a narrow WebSocket reverse proxy (never a generic fetch or
+open relay) so Iranian users can dial a clean Cloudflare IP while the traffic still ends in
+the Railway container. It proxies **every** published path, not a hand-picked subset: a path
+the panel hands out but the Worker refuses 404s behind Cloudflare while working on the
+Railway origin, which reads as "the Worker is broken". It also forwards the real client IP as
+`X-Forwarded-For` (so IP limits and quota attribution survive Cloudflare), keeps
+`Connection: upgrade`/`Upgrade: websocket` (the origin's handshake requires both), and turns
+an unreachable origin into a JSON `502` instead of letting the rejection escape into
+Cloudflare's opaque error page. `/health?probe=1` makes the Worker dial the origin itself, so
+the panel's «تست ورکر» button proves the Worker, the origin URL and the route in one call.
 
 ## Clients, presets and the quick-create button
 
@@ -201,6 +250,7 @@ python3 scripts/make_icons.py
 ```bash
 python -m pytest -q                        # backend + panel API + PWA asset tests
 node tests/js_smoke.mjs                    # links the ES-module graph and exercises the render paths
+node tests/worker_smoke.mjs                # routes every published path through the real Worker source
 python scripts/check_subscriptions.py      # prints the exact matrix one user receives
 python scripts/check_xray_config.py        # builds the real Xray config and runs `xray run -test`
 python scripts/check_transports_e2e.py     # drives real traffic through each direct transport

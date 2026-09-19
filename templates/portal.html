@@ -71,7 +71,7 @@
     <div class="p-head" style="flex:1">
       <div class="who">
         <b>{{ p.username }}</b>
-        <span dir="ltr">{{ p.protocol|upper }} · {{ p.fingerprint }}{% if p.fragment %} · fragment {{ p.fragment }}{% endif %}</span>
+        <span dir="ltr">{{ p.protocol_label }} · {{ p.fingerprint }}{% if p.fragment %} · fragment {{ p.fragment }}{% endif %}</span>
       </div>
     </div>
     <div class="top-actions">

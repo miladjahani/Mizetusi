@@ -105,6 +105,25 @@ try {
   failures.push(`render path threw: ${error.message}`);
 }
 
+// The protocol multi-select must build a chip per catalog entry with no DOM, and
+// default to every protocol on (so all paths are live for a new user).
+try {
+  window.nexus.store.set('settings', {
+    protocols: {
+      protocols: [{ id: 'vless', label: 'VLESS' }, { id: 'vmess', label: 'VMess' }, { id: 'ss', label: 'Shadowsocks' }],
+      shadowsocks: [{ id: 'ss', method: '2022-blake3-aes-128-gcm' }, { id: 'ss-chacha', method: '2022-blake3-chacha20-poly1305' }],
+    },
+  });
+  const every = window.nexus.users.protocolChips({});
+  const narrowed = window.nexus.users.protocolChips({ protocols: ['vless'], protocol_value: 'vless' });
+  if ((every.html.match(/class="pick on"/g) || []).length !== 3) failures.push('protocol chips must default to all-on');
+  if (!every.html.includes('data-proto="ss"') || !every.html.includes('chacha20-poly1305')) failures.push('protocol chips missing an SS cipher');
+  if ((narrowed.html.match(/class="pick on"/g) || []).length !== 1) failures.push('protocol chips must honour a narrowed set');
+  if (every.html.includes('undefined')) failures.push('protocol chips rendered undefined');
+} catch (error) {
+  failures.push(`protocol chips threw: ${error.message}`);
+}
+
 await new Promise((resolve) => setTimeout(resolve, 50));
 
 if (failures.length) {

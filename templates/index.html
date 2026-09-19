@@ -304,7 +304,7 @@
           <label>پیشوند برچسب لینک</label>
           <input id="setPrefix" placeholder="NEXUS" dir="ltr">
           <div class="field-grid">
-            <div><label>پروتکل پیش‌فرض</label><select id="setProtocol"><option value="vless">VLESS</option><option value="trojan">Trojan</option></select></div>
+            <div><label>پروتکل پیش‌فرض <span class="hint">برای کاربران سریع‌ساخت</span></label><select id="setProtocol"><option value="all">همه پروتکل‌ها (پیشنهادی)</option><option value="vless">VLESS</option><option value="vmess">VMess</option><option value="trojan">Trojan</option><option value="ss">Shadowsocks</option><option value="vless,trojan">VLESS + Trojan</option></select></div>
             <div><label>سقف حجم پیش‌فرض (GB)</label><input id="setLimit" type="number" min="0" step="1" placeholder="50"></div>
             <div><label>انقضای پیش‌فرض (روز)</label><input id="setExpiry" type="number" min="0" step="1" placeholder="30"></div>
             <div><label>محدودیت IP پیش‌فرض</label><input id="setIpLimit" type="number" min="1" step="1" placeholder="2"></div>
