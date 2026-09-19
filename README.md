@@ -322,6 +322,15 @@ detected):
 * **Anywhere else** — set `NEXUS_PUBLIC_DOMAIN` (and `NEXUS_DIRECT_HOST`/`NEXUS_DIRECT_PORT` if
   a raw port is reachable) and run the image; nothing else is provider-specific.
 
+> **Choosing a host.** NEXUS is a proxy/VPN control plane, and most PaaS acceptable-use
+> policies forbid running one — Railway, Render and friends also watch for the outbound
+> patterns a scanner produces, which is how a workspace can be restricted for "suspicious
+> activity" minutes after a deploy. A VPS or dedicated server you control (Hetzner, Netcup,
+> a provider in Iran) is the honest home for this software: one raw TCP port for Reality,
+> no fair-use limits, and no third party inspecting your traffic. The defaults above
+> (`scan_on_boot=0`, small batches, `NEXUS_OUTBOUND_PROBE_ENABLED=0` if the host must never
+> see outbound measurement traffic) keep the footprint small wherever it runs.
+
 ### Ready-made nodes
 
 The Nodes section can create a set of example nodes with one click:
@@ -340,6 +349,25 @@ Adding a sample never overwrites an existing node, and a sample node survives th
 catalog rebuild (only the rows the rebuild owns are reset). `POST /api/nodes/samples` with
 `ids` (or `all: true`), `GET /api/nodes/samples` and `DELETE /api/nodes/samples` are the same
 actions over the API.
+
+### Outbound probing is quiet by default
+
+Filling and measuring the clean-IP pool means opening sockets to third-party CDNs,
+and doing that the moment the container boots is what gets a deployment flagged for
+"suspicious activity" by a hosting provider. The defaults are therefore small and
+explicit:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `cf_probe_limit` | `64` | addresses kept (and probed) per pass |
+| `cf_probe_concurrency` | `8` | probes in flight at once |
+| `scan_on_boot` (`NEXUS_SCAN_ON_BOOT`) | `0` | never seed the pool automatically at boot |
+| `outbound_probe_enabled` (`NEXUS_OUTBOUND_PROBE_ENABLED`) | `1` | `0` stops every external probe and ping |
+
+With the defaults a fresh deploy publishes only the origin node — which is a complete
+subscription — and the admin scans a provider on demand from the panel (or presses
+«اسکن همه providerها»). The «منابع لبه و لوکیشن‌ها» card shows the active scan mode and the
+per-pass size, so the outbound footprint is visible rather than implicit.
 
 ### Edge sources (clean IPs, clean domains, locations)
 

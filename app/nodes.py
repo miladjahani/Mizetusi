@@ -310,13 +310,14 @@ class NodeProbe:
         return {'name': name, 'kind': kind, 'server': server, 'port': port, 'ok': ok,
                 'tls_ok': tls_ok, 'latency_ms': ms, 'error': err, 'at': now}
 
-    async def ping_all(self, names=None, timeout=4.0, concurrency=8):
+    async def ping_all(self, names=None, timeout=4.0, concurrency=None):
         """Probe every enabled node: Cloudflare clean IPs and the Railway origin."""
         items = self.catalog.enabled()
         if names:
             wanted = {str(n).strip().lower() for n in names if str(n).strip()}
             items = [n for n in items if str(n['name']).lower() in wanted]
-        sem = asyncio.Semaphore(max(1, min(int(concurrency or 8), 16)))
+        from app.config import settings as live_settings
+        sem = asyncio.Semaphore(max(1, min(int(concurrency or live_settings.cf_probe_concurrency), 16)))
 
         async def one(item):
             async with sem:
@@ -342,7 +343,11 @@ class NodeProbe:
         """
         while True:
             try:
-                if self.catalog.enabled():
+                # ``NEXUS_OUTBOUND_PROBE_ENABLED=0`` turns every external probe off
+                # (latencies freeze at their last value) for a host that does not
+                # want any outbound measurement traffic.
+                from app.config import settings as live_settings
+                if live_settings.outbound_probe_enabled and self.catalog.enabled():
                     await self.ping_all(timeout=4.0)
             except Exception:
                 pass

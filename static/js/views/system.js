@@ -76,7 +76,7 @@ export class CloudflareView {
         <td><span class="lat ${StatusKit.latencyTone(item.latency_ms)}">${item.latency_ms != null ? `${Fmt.lat().format(item.latency_ms)} ms` : '—'}</span></td>
         <td><span class="pill ${item.ok ? 'ok' : 'bad'}">${item.ok ? 'سالم' : 'ناموفق'}</span></td>
         <td class="mono">${esc(item.last_probe ? Fmt.ago(item.last_probe) : '—')}</td></tr>`).join('')
-        : '<tr><td colspan="5"><div class="empty">هنوز IP Probe نشده — دکمه «اجرای Probe» را بزنید</div></td></tr>';
+        : '<tr><td colspan="5"><div class="empty">هنوز IP Probe نشده — دکمه «اجرای Probe» را بزنید (اسکن خودکار در بوت خاموش است تا تعداد اتصال‌های خروجی کم و قابل‌توضیح بماند)</div></td></tr>';
     }
   }
 
@@ -112,11 +112,17 @@ export class CloudflareView {
     if (runtime) {
       const info = data?.runtime || {};
       const direct = info.direct ? `${info.direct.host}:${info.direct.port}` : 'در دسترس نیست';
+      const probing = data?.probing || {};
+      const scanMode = probing.enabled === false ? 'خاموش (NEXUS_OUTBOUND_PROBE_ENABLED=0)'
+        : probing.scan_on_boot ? 'خودکار در بوت + دستی'
+        : 'فقط دستی — اسکن در بوت خاموش است';
       runtime.innerHTML = `
         <div class="kv-line"><span>محل اجرا</span><b>${esc(info.label || '—')}</b></div>
         <div class="kv-line"><span>دامنهٔ عمومی</span><b dir="ltr">${esc(info.host || '—')}</b></div>
         <div class="kv-line"><span>پورت مستقیم (Reality)</span><b dir="ltr">${esc(direct)}</b></div>
         <div class="kv-line"><span>مسیر دیتابیس</span><b dir="ltr">${esc(info.data_dir || '—')}</b></div>
+        <div class="kv-line"><span>حالت اسکن خروجی</span><b>${esc(scanMode)}</b></div>
+        ${probing.limit ? `<div class="kv-line"><span>اندازهٔ هر اسکن</span><b dir="ltr">${Fmt.num(probing.limit)} IP · ${Fmt.num(probing.concurrency || 8)} همزمان</b></div>` : ''}
         ${(info.notes || []).map((note) => `<div class="kv-line"><span>یادداشت</span><b style="font-family:Vazirmatn;direction:rtl;max-width:78%;white-space:normal">${esc(note)}</b></div>`).join('')}`;
     }
     const host = $('#edgeSources');
@@ -212,7 +218,7 @@ export class CloudflareView {
     button.innerHTML = '<span class="spin-inline"></span> در حال Probe…';
     const progress = $('#cfProgress');
     if (progress) {
-      progress.innerHTML = `<div class="setting-row"><div class="txt"><b>اسکن IPهای Cloudflare</b><p>Probe از سمت Railway روی آدرس‌های نامزد انجام می‌شود؛ ممکن است چند ثانیه طول بکشد.</p></div><span class="pill info">در جریان</span></div>`;
+      progress.innerHTML = `<div class="setting-row"><div class="txt"><b>اسکن IPهای لبه</b><p>Probe با نرخ کم (${Fmt.num(this.store.get('edge')?.probing?.concurrency || 8)} همزمان) و فقط با درخواست شما انجام می‌شود؛ چند ثانیه طول می‌کشد.</p></div><span class="pill info">در جریان</span></div>`;
     }
     try {
       const result = await this.api.post('/api/cloudflare/refresh', {});
@@ -395,7 +401,7 @@ export class SettingsView {
     if (!version) this.app.safe(() => this.loadVersion());
     const count = metrics ? `${Fmt.num(metrics.totals.users)} کل · ${Fmt.num(metrics.totals.active_users)} فعال` : '—';
     const rows = [
-      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 9.1.0'],
+      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 9.2.0'],
       ['آدرس پایه', settings.resolved_base_url || location.origin],
       ['کاربران', count],
       ['نودهای فعال', metrics ? `${Fmt.num(metrics.totals.nodes_enabled)} از ${Fmt.num(metrics.totals.nodes)}` : '—'],

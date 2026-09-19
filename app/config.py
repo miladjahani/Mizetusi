@@ -14,7 +14,19 @@ class Settings(BaseSettings):
     session_ttl: int = 604800
     auto_reset_interval: int = 60
     cf_probe_interval: int = 900
-    cf_probe_limit: int = 256
+    # How many clean IPs are kept per pass, and how many probes run at once.
+    # Both are deliberately small: a panel that fires hundreds of outbound
+    # TCP/TLS connects the moment it boots looks like port scanning to its host,
+    # which is how a workspace ends up flagged for "suspicious activity".
+    cf_probe_limit: int = 64
+    cf_probe_concurrency: int = 8
+    # Filling the clean-IP pool at boot is opt-in (NEXUS_SCAN_ON_BOOT=1). The
+    # catalog is complete without it — the origin node is always published — and
+    # an admin can scan any provider on demand from the panel.
+    scan_on_boot: bool = False
+    # Master switch for outbound probing (NEXUS_OUTBOUND_PROBE_ENABLED=0 stops
+    # every external probe and ping; the nodes already measured stay published).
+    outbound_probe_enabled: bool = True
     xray_enabled: bool = True
     xray_binary: str = '/usr/local/bin/xray'
     xray_config: str = '/data/xray.json'

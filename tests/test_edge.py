@@ -18,7 +18,7 @@ import pytest
 
 from fastapi.testclient import TestClient
 
-from app.config import settings as cfg
+from app.config import settings
 from app.db import execute, rows, init_db
 from app.edge import sources as edge
 from app.main import _setting, app
@@ -33,7 +33,7 @@ client = TestClient(app)
 
 
 def h():
-    return {'X-Admin-Password': _setting('admin_password') or cfg.admin_password}
+    return {'X-Admin-Password': _setting('admin_password') or settings.admin_password}
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +94,33 @@ def test_manual_ips_are_added_and_removed():
     assert '203.0.113.7' in mine
     edge.remove_ip('203.0.113.7')
     assert '203.0.113.7' not in [item['ip'] for item in edge.ips('custom')]
+
+
+def test_outbound_scanning_is_quiet_by_default():
+    """A deploy must not look like a port scan.
+
+    Hundreds of outbound TCP/TLS connects within seconds of a boot is what got a
+    workspace flagged for "suspicious activity", so seeding is opt-in, the batch
+    and its concurrency are small, and a master switch can stop every probe.
+    """
+    import asyncio
+
+    from app.cloudflare.monitor import probe_all
+
+    assert settings.scan_on_boot is False
+    assert settings.cf_probe_limit <= 64 and settings.cf_probe_concurrency <= 8
+    settings.outbound_probe_enabled = False
+    try:
+        assert asyncio.run(probe_all()) == []  # short-circuits without opening a socket
+    finally:
+        settings.outbound_probe_enabled = True
+
+
+def test_the_panel_reports_how_much_it_is_allowed_to_scan():
+    probing = client.get('/api/edge', headers=h()).json()['probing']
+    assert probing['scan_on_boot'] is False
+    assert probing['limit'] <= 64 and probing['concurrency'] <= 8
+    assert probing['enabled'] is True
 
 
 def test_provider_summary_counts_the_pool():

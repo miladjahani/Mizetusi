@@ -48,7 +48,7 @@ PWA_ICONS={'192':'/static/icons/icon-192.png','512':'/static/icons/icon-512.png'
 # One label per accepted target: subscription formats plus client ids.
 SUB_LABELS={**FORMAT_LABELS, **{c['id']:f"{c['name']} · {c['platform']}" for c in CLIENTS}}
 WORKER_PATH=os.path.join(BASE_DIR,'cloudflare-worker','worker.js')
-APP_VERSION='9.1.0'
+APP_VERSION='9.2.0'
 
 def _asset_fingerprint():
     """Content hash of the shipped front-end.
@@ -206,12 +206,14 @@ async def bootstrap_nodes_full():
     self-building: Railway origin + clean-IP edge entries, zero user action.
     """
     try:
-        # A brand-new deployment has no clean-IP rows at all. Seeding them here
-        # (one HTTPS fetch of Cloudflare's published ranges) is what lets the
-        # very first pass detect the edge and build the Cloudflare nodes with
-        # zero admin action; the background loop would otherwise race it.
-        if not rows('SELECT ip FROM cf_ips LIMIT 1'):
-            try: seed_ips(settings.cf_probe_limit)
+        # A brand-new deployment has no clean-IP rows at all, and filling them at
+        # boot means hundreds of outbound connects within seconds of the deploy —
+        # exactly what gets a host flagged for "suspicious activity". The catalog
+        # works without it (the origin node is always published), so seeding is
+        # opt-in (NEXUS_SCAN_ON_BOOT=1) and an admin can scan any provider on
+        # demand from the panel instead.
+        if settings.scan_on_boot and not rows('SELECT ip FROM cf_ips LIMIT 1'):
+            try: seed_ips(settings.cf_probe_limit, 'cloudflare')
             except Exception: pass
         base=(_setting('public_base_url') or settings.public_base_url or '').strip() or None
         worker=(_setting('cloudflare_worker_url') or '').strip() or None
@@ -867,7 +869,7 @@ def cloudflare_ips(request:Request,limit:int=50):
 
 @app.post('/api/cloudflare/refresh')
 async def cloudflare_refresh(request:Request):
-    auth(request); count=seed_ips(settings.cf_probe_limit); results=await probe_all(limit=settings.cf_probe_limit); result=await auto_sync(public_base(request), _setting('cloudflare_worker_url') or None, force_edge=True); return {'seeded':count,'probed':len(results),'best':best(20),'edge_host':result['edge_host'],'nodes':[_node_payload(n) for n in result['nodes']]}
+    auth(request); count=seed_ips(settings.cf_probe_limit,'cloudflare'); results=await probe_all(limit=settings.cf_probe_limit); result=await auto_sync(public_base(request), _setting('cloudflare_worker_url') or None, force_edge=True); return {'seeded':count,'probed':len(results),'best':best(20),'edge_host':result['edge_host'],'nodes':[_node_payload(n) for n in result['nodes']]}
 
 
 # ------------------------------------------------------- runtime + edge sources
@@ -893,6 +895,10 @@ def edge_status(request:Request):
     payload=edge_sources.status()
     payload['nodes']=[_node_payload(n) for n in list_nodes()]
     payload['worker']={'url':_setting('cloudflare_worker_url') or '','configured':bool(_setting('cloudflare_worker_url'))}
+    # How much outbound traffic this deployment is allowed to make: a scan is
+    # admin-triggered, small and visible instead of hundreds of connects at boot.
+    payload['probing']={'enabled':bool(settings.outbound_probe_enabled),'scan_on_boot':bool(settings.scan_on_boot),
+                        'limit':int(settings.cf_probe_limit),'concurrency':int(settings.cf_probe_concurrency)}
     return payload
 
 @app.get('/api/edge/providers')
@@ -920,7 +926,7 @@ async def edge_scan(request:Request):
     if not found and all(not r.get('ok') for r in results):
         detail='; '.join(str(r.get('error')) for r in results if r.get('error'))
         raise HTTPException(502,f'لیست هیچ provider دریافت نشد: {detail[:300]}')
-    probed=await probe_all(limit=min(limit*2,256),provider_id=provider_id or None)
+    probed=await probe_all(limit=min(limit*2,192),provider_id=provider_id or None)
     synced=_edge_sync(request)
     _audit('edge.scan',f"{provider_id or 'all'} · +{found} ips")
     return {'success':True,'results':results,'found':found,'probed':len(probed),'synced':synced,
@@ -945,7 +951,7 @@ async def edge_add_ips(request:Request):
     result=edge_sources.add_ips(values,provider_id)
     if not result['added']:
         raise HTTPException(400,'هیچ آی‌پی معتبری پیدا نشد' if result['skipped'] else 'چیزی برای افزودن نبود')
-    probed=await probe_all(limit=64,provider_id=provider_id)
+    probed=await probe_all(limit=settings.cf_probe_limit,provider_id=provider_id)
     synced=_edge_sync(request)
     _audit('edge.ips',f"+{len(result['added'])} · {provider_id}")
     return {'success':True,'added':result['added'],'skipped':result['skipped'],'probed':len(probed),
@@ -970,7 +976,7 @@ async def edge_save_source(request:Request):
         raise HTTPException(400,str(exc))
     if source.get('ips'):
         edge_sources.add_ips(source['ips'],source.get('provider') or edge_sources.MANUAL_PROVIDER)
-    await probe_all(limit=128)
+    await probe_all(limit=settings.cf_probe_limit)
     synced=_edge_sync(request)
     _audit('edge.source.save',f"{source['id']} · {source['kind']}")
     return {'success':True,'source':source,'sources':items,'synced':synced,
