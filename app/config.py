@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     xray_ss_aes256_cdn_port: int = 10011
     xray_ss_chacha_port: int = 10012
     xray_ss_chacha_cdn_port: int = 10013
+    xray_ss_legacy_port: int = 10014
+    xray_ss_legacy_cdn_port: int = 10015
     # Reality + fallback children (gRPC/HTTPUpgrade/H2/XHTTP) share ONE public
     # TCP port. Off until a direct endpoint exists (Railway TCP proxy env vars
     # or the direct_host/direct_port settings).

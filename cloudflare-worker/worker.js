@@ -40,10 +40,12 @@ const EDGE_PATHS = [
   '/ws/vless', '/cdn/vless',
   '/ws/vmess', '/cdn/vmess',
   '/ws/trojan', '/cdn/trojan',
-  // Shadowsocks-2022, one listener per cipher family.
+  // Shadowsocks, one listener per cipher family (the last one is the widely
+  // compatible chacha20-ietf-poly1305 profile).
   '/ws/ss', '/cdn/ss',
   '/ws/ss-aes256', '/cdn/ss-aes256',
   '/ws/ss-chacha', '/cdn/ss-chacha',
+  '/ws/ss-legacy', '/cdn/ss-legacy',
   // The WARP exit node, once it is enabled in the panel.
   '/ws/warp',
   // Legacy VLESS path kept for clients subscribed before the split.
@@ -51,7 +53,7 @@ const EDGE_PATHS = [
 ];
 
 const HEALTH_PATHS = ['/health', '/diag'];
-const WORKER_VERSION = 'nexus-ws-2';
+const WORKER_VERSION = 'nexus-ws-3';
 
 // Edge/Cloudflare internals must not leak into the origin request: they would
 // confuse Host/SNI handling and let a client spoof its own country or scheme.

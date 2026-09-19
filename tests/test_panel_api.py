@@ -265,6 +265,8 @@ def test_xray_config_registers_every_user_on_every_edge_inbound():
 
     for item in inbounds:
         assert item['listen'] == '127.0.0.1', 'edge listeners must stay on loopback'
+        if item['protocol'] == 'shadowsocks':
+            continue
         emails = {client.get('email') for client in item['settings']['clients']}
         assert 'cfg-all@nexus.local' in emails, item['tag']
         # A narrowed user is only on the inbounds it selected, and a disabled
@@ -272,20 +274,50 @@ def test_xray_config_registers_every_user_on_every_edge_inbound():
         assert ('cfg-two@nexus.local' in emails) is (item['tag'].startswith('vless') or item['tag'].startswith('trojan'))
         assert 'cfg-off@nexus.local' not in emails
 
-    # Each Shadowsocks cipher reaches its own listener with its own method and
-    # a server PSK of exactly that cipher's key length.
+    # Shadowsocks is the one listener without a client list: it authenticates a
+    # single key per cipher, because a multi-user 2022 inbound is rejected by
+    # Xray for every method but blake3-aes-gcm - and one rejected inbound used to
+    # abort startup and take every other protocol down with it.
     import base64 as b64
     shadowsocks = [item for item in inbounds if item['protocol'] == 'shadowsocks']
     assert {item['settings']['method'] for item in shadowsocks} == {c['method'] for c in tp.SS_CIPHERS}
     for item in shadowsocks:
-        key_len = next(c['key_len'] for c in tp.SS_CIPHERS if c['method'] == item['settings']['method'])
-        assert len(b64.b64decode(item['settings']['password'])) == key_len
-        for client in item['settings']['clients']:
-            assert len(b64.b64decode(client['password'])) == key_len
+        cipher = next(c for c in tp.SS_CIPHERS if c['method'] == item['settings']['method'])
+        assert 'clients' not in item['settings'], item['tag']
+        assert item['settings']['password'] == tp.ss_shared_key(cipher)
+        assert len(b64.b64decode(item['settings']['password'])) == (cipher['key_len'] or 20)
 
     # Every path the edge bridges has a route, and the Worker proxies them all.
     assert set(xray.edge_routes()) == {p['path'] for p in tp.EDGE_PROFILES} | {'/ws/warp'}
     execute('DELETE FROM users')
+
+
+def test_a_rejected_transport_shrinks_the_config_instead_of_killing_it():
+    """The startup ladder must always end in a config the engine can serve.
+
+    Xray validates the whole file at once, so one inbound it dislikes (an SS cipher
+    it refuses, a Reality/WARP build the host forbids) used to abort startup and
+    stop every protocol. Each rung is tried in order and the profiles it really
+    contains are what gets published.
+    """
+    from app import xray
+    from app.subscriptions import transports as tp
+
+    ladder = list(xray._candidate_configs())
+    assert len(ladder) == 2 + len(tp.SS_CIPHERS)
+    served_sets = [set(served) for _config, served, _note in ladder]
+    assert all(len(before) >= len(after) for before, after in zip(served_sets, served_sets[1:]))
+    assert len(served_sets[0]) == len(xray._config()['inbounds'])
+    # The last resort serves the edge without any Shadowsocks listener at all.
+    assert not [item for item in ladder[-1][0]['inbounds'] if item['protocol'] == 'shadowsocks']
+
+    for config, served, _note in ladder:
+        assert len({item['tag'] for item in config['inbounds']}) == len(config['inbounds'])
+        ports = [item['port'] for item in config['inbounds']]
+        assert len(set(ports)) == len(ports)
+        assert all(item['listen'] == '127.0.0.1' for item in config['inbounds'])
+        # ``served`` is exactly what the panel may publish for this rung.
+        assert {item['tag'] for item in config['inbounds']} == set(served)
 
 
 def test_transport_catalog_endpoint_describes_the_matrix():
@@ -543,18 +575,29 @@ def test_a_user_is_provisioned_on_every_inbound_by_default():
     assert created['protocols'] == ['vless', 'vmess', 'trojan', 'ss']
     assert 'همه' in created['protocol_label']
 
-    for protocol in ('vless', 'vmess', 'trojan', 'ss'):
+    for protocol in ('vless', 'vmess', 'trojan'):
         clients = xray._clients_for(protocol, {'method': '2022-blake3-aes-128-gcm', 'key_len': 16})
         assert 'allproto@nexus.local' in [entry['email'] for entry in clients], protocol
+
+    # Shadowsocks carries a single key per cipher instead of a client list (see
+    # the inbound test), so ``all protocols`` there means the listener exists and
+    # the user's subscription carries its link.
+    from app.subscriptions import transports as tp
+    assert xray._clients_for('ss', {'method': '2022-blake3-aes-128-gcm', 'key_len': 16}) == []
+    ss_inbound = xray._protocol_settings({'protocol': 'ss', 'method': '2022-blake3-aes-128-gcm', 'key_len': 16})
+    assert ss_inbound['password'] == tp.ss_shared_key({'method': '2022-blake3-aes-128-gcm'})
 
     data = client.get('/api/users/allproto/links', headers=h()).json()
     assert {profile['protocol'] for profile in data['profiles']} == {'vless', 'vmess', 'trojan', 'ss'}
     # And every one of those really renders a usable subscription.
-    for target in ('vless', 'vmess', 'trojan'):
+    for target in ('vless', 'vmess', 'trojan', 'ss'):
         text = client.get(f"/sub/{data['uuid']}?target={target}").text
         assert text.count(target + '://') == 2 * len([p for p in data['profiles'] if p['protocol'] == target])
         assert text.count(target + '://') >= 2
-    assert client.get(f"/sub/{data['uuid']}?target=ss").text.lstrip().startswith('{')
+    # Shadowsocks now has link form too (SIP002 + the WebSocket plugin), so a
+    # dead-transport install is the only thing left that falls back to JSON.
+    text = client.get(f"/sub/{data['uuid']}?target=ss").text
+    assert text.count('ss://') >= 2 and not text.lstrip().startswith('{')
 
 
 def test_protocol_selection_can_be_all_or_a_subset():
@@ -599,37 +642,70 @@ def test_protocol_selection_can_be_all_or_a_subset():
 
 
 def test_shadowsocks_ships_every_cipher_family():
-    """Shadowsocks is several ciphers, each with its own listener and key size."""
+    """Shadowsocks is several ciphers, each with its own listener, key and link."""
     from app.subscriptions import transports as tp
 
     _seed_nodes()
     execute('DELETE FROM users')
     data = client.get('/api/transports', headers=h()).json()
     methods = {p['method'] for p in data['profiles'] if p['protocol'] == 'ss'}
-    assert methods == {'2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305'}
+    assert methods == {'2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm',
+                       '2022-blake3-chacha20-poly1305', 'chacha20-ietf-poly1305'}
     assert set(data['ss_methods']) == methods
-    assert {variant['id'] for variant in data['protocol_catalog']['shadowsocks']} == {'ss', 'ss-aes256', 'ss-chacha'}
+    variants = {variant['id'] for variant in data['protocol_catalog']['shadowsocks']}
+    assert variants == {'ss', 'ss-aes256', 'ss-chacha', 'ss-legacy'}
+    # Every cipher is linkable, so it reaches a client's config list.
+    assert all(variant['linkable'] for variant in data['protocol_catalog']['shadowsocks'])
 
-    # Each cipher has its own key shape: 16 bytes for AES-128, 32 for the rest.
+    # One key per cipher (not per user), sized to the cipher: 16 bytes for
+    # AES-128, 32 for the other 2022 methods, 20 for the legacy password.
+    import base64 as b64
     user = {'uuid': '11111111-2222-3333-4444-555555555555'}
     keys = {c['id']: tp.ss_key(user, c) for c in tp.SS_CIPHERS}
-    assert len({len(__import__('base64').b64decode(k)) for k in keys.values()}) == 2
-    assert len(keys['ss']) == 24 and len(keys['ss-aes256']) == 44
-    # The server PSK is generated per cipher length, so both inbounds validate.
+    assert len(set(keys.values())) == len(tp.SS_CIPHERS)
+    assert {c['id']: len(b64.b64decode(keys[c['id']])) for c in tp.SS_CIPHERS} == {
+        'ss': 16, 'ss-aes256': 32, 'ss-chacha': 32, 'ss-legacy': 20}
+    # The same key is what the listener authenticates and what every link carries.
+    assert tp.ss_key({'uuid': 'someone-else'}, tp.SS_CIPHERS[0]) == keys['ss']
     from app import xray
-    assert xray._ss_server_key(16) != xray._ss_server_key(32)
-    assert len(__import__('base64').b64decode(xray._ss_server_key(32))) == 32
+    assert xray._protocol_settings(dict(tp.SS_CIPHERS[2], protocol='ss'))['password'] == keys['ss-chacha']
+
+    uuid_value = client.post('/api/users', headers=h(), json={'username': 'ssuser'}).json()['uuid']
+
+    # SIP002 links: every SS node is importable, and the edge rides a plugin.
+    lines = [line for line in client.get(f'/sub/{uuid_value}?target=ss').text.splitlines()
+             if line.startswith('ss://')]
+    assert len(lines) == 2 * len([p for p in data['profiles'] if p['protocol'] == 'ss'])
+    assert all('plugin=v2ray-plugin' in line and 'mode%3Dwebsocket' in line for line in lines)
+    userinfo = lines[0].split('://', 1)[1].split('@', 1)[0]
+    method, secret = b64.b64decode(userinfo + '=' * (-len(userinfo) % 4)).decode().split(':', 1)
+    assert method in methods and secret == tp.ss_key(user, {'method': method})
 
     # Every cipher lands in the JSON subscriptions with its own method.
-    uuid_value = client.post('/api/users', headers=h(), json={'username': 'ssuser'}).json()['uuid']
     outbounds = json.loads(client.get(f'/sub/{uuid_value}?target=singbox').text)['outbounds']
     shadowsocks = [o for o in outbounds if o['type'] == 'shadowsocks']
     assert {o['method'] for o in shadowsocks} == methods
     assert len({o['password'] for o in shadowsocks}) == len(tp.SS_CIPHERS)
+    assert all(o['plugin'] == 'v2ray-plugin' and 'mode=websocket' in o['plugin_opts'] for o in shadowsocks)
     clash = json.loads(client.get(f'/sub/{uuid_value}?target=clash').text)['proxies']
     assert {p['cipher'] for p in clash if p['type'] == 'ss'} == methods
     xray_out = json.loads(client.get(f'/sub/{uuid_value}?target=xray').text)['outbounds']
     assert {o['settings']['servers'][0]['method'] for o in xray_out if o['protocol'] == 'shadowsocks'} == methods
+
+
+def test_shadowsocks_keys_can_be_rotated_from_the_panel():
+    """A key shared by every link needs a revoke path: rotating changes them all."""
+    from app.subscriptions import transports as tp
+
+    before = {c['id']: tp.ss_key({}, c) for c in tp.SS_CIPHERS}
+    response = client.post('/api/settings/rotate-shadowsocks', headers=h(), json={})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data['rotated'] == [c['id'] for c in tp.SS_CIPHERS]
+    after = {c['id']: tp.ss_key({}, c) for c in tp.SS_CIPHERS}
+    assert set(after) == set(before) and all(after[cipher] != before[cipher] for cipher in before)
+    # The panel learns the new state (served profiles + keys) from the same call.
+    assert data['transports']['protocols'] and 'ss' in data['transports']['protocols']
 
 
 def test_ping_probes_every_node_and_records_the_result():

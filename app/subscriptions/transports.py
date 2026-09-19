@@ -17,12 +17,12 @@ Adding a transport here is the only edit needed for the generator, the panel
 coverage view and the Xray config to pick it up.
 """
 import base64
-import hashlib
 import json
 import os
+import secrets
 
 from app.config import settings
-from app.db import row
+from app.db import row, execute
 
 EDGE = 'edge'
 DIRECT = 'direct'
@@ -33,10 +33,23 @@ WARP = 'warp'
 PROTOCOLS = ('vless', 'vmess', 'trojan', 'ss')
 ALL_PROTOCOLS = 'all'
 
-# Shadowsocks-2022 needs a fixed-length key per user, so each cipher family gets
-# its own profile/listener. ``key_len`` is the cipher's key size in bytes (0 for
-# a legacy cipher, whose password is free-form); deriving the key from the UUID
-# keeps one credential per user across every protocol.
+# Shadowsocks ciphers, one profile/listener per cipher and path shape.
+#
+# Every cipher is served in **single-user** mode (one PSK per cipher, shared by
+# the clients that hold a link). That is deliberate, and it is what made
+# Shadowsocks disappear from every client list before:
+#
+# * Xray 26 refuses to build a *multi-user* Shadowsocks-2022 inbound for anything
+#   but ``blake3-aes-*-gcm`` ("only blake3-aes-*-gcm methods are supported"), and
+#   one such inbound aborts the whole engine — every protocol stopped answering,
+#   not just Shadowsocks;
+# * even where multi-user builds, clients disagree about the key a user has to
+#   present (user PSK alone vs ``userPSK:serverPSK``), so a published link would
+#   silently fail to authenticate.
+#
+# A single PSK is accepted by every client (Xray, sing-box, mihomo, v2rayNG,
+# NekoBox, Shadowrocket) in the plain SIP002 form, so Shadowsocks now works
+# everywhere. ``key_len`` is the cipher's key size in bytes.
 SS_CIPHERS = (
     {'id': 'ss', 'method': '2022-blake3-aes-128-gcm', 'key_len': 16,
      'tag': 'SS-2022 · AES-128', 'path': '/ws/ss', 'cdn_path': '/cdn/ss'},
@@ -44,18 +57,43 @@ SS_CIPHERS = (
      'tag': 'SS-2022 · AES-256', 'path': '/ws/ss-aes256', 'cdn_path': '/cdn/ss-aes256'},
     {'id': 'ss-chacha', 'method': '2022-blake3-chacha20-poly1305', 'key_len': 32,
      'tag': 'SS-2022 · ChaCha20', 'path': '/ws/ss-chacha', 'cdn_path': '/cdn/ss-chacha'},
+    {'id': 'ss-legacy', 'method': 'chacha20-ietf-poly1305', 'key_len': 0,
+     'tag': 'SS · ChaCha20-IETF (سازگاری بالا)', 'path': '/ws/ss-legacy', 'cdn_path': '/cdn/ss-legacy'},
 )
 # The first cipher is the one the panel calls "Shadowsocks" in one-click presets.
 SS_METHOD = SS_CIPHERS[0]['method']
 REALITY_SNI = 'www.cloudflare.com'
 
+# The engine that Xray actually built on the last successful (re)start. Links are
+# never published for a listener that does not exist, so this is what keeps the
+# subscription honest when a transport has to be dropped to keep the engine
+# alive. ``None`` means "not known yet" (fresh process, tests): publish the full
+# matrix so the panel and the generator still have something to show.
+_served_profiles = None
+
+
+def set_served(profile_ids):
+    """Remember which profiles the running Xray config really contains."""
+    global _served_profiles
+    _served_profiles = None if profile_ids is None else {str(p) for p in profile_ids}
+
+
+def served_profiles():
+    return None if _served_profiles is None else set(_served_profiles)
+
+
+def is_served(profile_id):
+    served = _served_profiles
+    return served is None or str(profile_id) in served
+
 
 def _ss_profiles():
     """One profile per cipher, in both edge path shapes.
 
-    Shadowsocks has no single-line sharing URI, so these only surface in the
-    JSON formats (sing-box/Clash/Xray) — but each cipher still needs its own
-    listener and its own subscription target.
+    Each cipher gets its own listener, its own key and its own subscription
+    target, and each is published as a SIP002 link (`ss://`) carrying the
+    ``v2ray-plugin`` WebSocket edge, so it lands in a client's config list like
+    every other protocol.
     """
     items = []
     for cipher in SS_CIPHERS:
@@ -140,7 +178,7 @@ def protocol_catalog():
         'all': ALL_PROTOCOLS,
         'protocols': [{'id': p, 'label': labels[p]} for p in PROTOCOLS],
         'shadowsocks': [{'id': c['id'], 'method': c['method'], 'key_bytes': c['key_len'],
-                         'tag': c['tag']} for c in SS_CIPHERS],
+                         'tag': c['tag'], 'linkable': True} for c in SS_CIPHERS],
     }
 
 # Reality terminates TLS inside Xray with the certificate of a real site, so the
@@ -175,9 +213,10 @@ WARP_PROFILE = {'id': 'warp-ws', 'protocol': 'vless', 'network': 'ws', 'path': '
                 'security': 'tls', 'tag': 'WARP · WS', 'port_setting': 'xray_warp_port'}
 
 # Every protocol that can be expressed as a one-line sharing URI. Shadowsocks
-# over WebSocket has no URI form, so it ships in the JSON formats only rather
-# than as a link that would silently dial the wrong endpoint.
-URI_PROTOCOLS = ('vless', 'trojan', 'vmess')
+# rides the edge through the ``v2ray-plugin`` SIP003 plugin, which is exactly what
+# the SIP002 ``plugin=`` parameter is for, so it is a first-class link too: the
+# Shadowsocks nodes now show up in v2rayNG/NekoBox config lists like the rest.
+URI_PROTOCOLS = ('vless', 'trojan', 'vmess', 'ss')
 
 TRANSPORT_GROUPS = (
     ('all', 'همه'),
@@ -259,18 +298,27 @@ def available_profiles(protocols=None):
     """Every profile this deployment can actually serve right now.
 
     ``protocols`` narrows the list to one user's enabled protocol set; the
-    default (``None``) is the whole deployment-wide matrix.
+    default (``None``) is the whole deployment-wide matrix. A profile the running
+    Xray config does not contain (dropped to keep the engine alive) is never
+    returned, so no subscription can point at a dead listener.
     """
     items = [dict(p, group=EDGE) for p in EDGE_PROFILES]
     if warp_config():
         items.append(dict(WARP_PROFILE, group=WARP))
     if direct_endpoint() and reality_keys():
         items.extend(dict(p, group=DIRECT) for p in DIRECT_PROFILES)
+    served = _served_profiles
+    if served is not None:
+        items = [item for item in items if item['id'] in served]
     if protocols is not None:
         wanted = set(protocols)
         items = [item for item in items if item['protocol'] in wanted]
     for index, item in enumerate(items):
         item.setdefault('order', index)
+        # The internal listener port: what the edge bridges to (and what an
+        # admin sees in the panel next to every published link).
+        item['listener_port'] = profile_port(item)
+        item.setdefault('path', item.get('path') or '')
     return items
 
 
@@ -299,8 +347,12 @@ def by_network(network):
 def catalog():
     """Panel view of the profile set (labels, counts, availability)."""
     direct = direct_endpoint()
+    served = _served_profiles
     return {
         'profiles': available_profiles(),
+        'served': None if served is None else sorted(served),
+        'withheld': [] if served is None else [p['id'] for p in EDGE_PROFILES if p['id'] not in served],
+        'ss_shared_keys': [c['id'] for c in SS_CIPHERS],
         'uri_profiles': [p['id'] for p in uri_profiles()],
         'protocols': sorted({p['protocol'] for p in available_profiles()}),
         'protocol_catalog': protocol_catalog(),
@@ -324,22 +376,75 @@ def ss_key_len(profile=None):
         return 16
 
 
-def ss_key(user, profile=None):
-    """Deterministic Shadowsocks-2022 key for one user and cipher.
+def ss_key_setting(profile=None):
+    """Settings key holding the PSK of one cipher."""
+    method = str((profile or {}).get('method') or SS_METHOD)
+    return 'ss_psk:' + method
 
-    Shadowsocks-2022 requires a key of exactly the cipher's size, so the digest
-    is stretched to ``key_len`` and base64-encoded. The cipher name is part of
-    the seed, so two ciphers of the same length get unrelated keys; the same
-    UUID always yields the same key for a given cipher.
+
+def ss_shared_key(profile=None, create=True):
+    """The PSK a cipher's listener and its links use (created once).
+
+    Shadowsocks needs a key of exactly the cipher's size for 2022 methods (any
+    string for the older ones), so it is generated from the OS entropy pool once
+    and then reused: every restart, and therefore every published link, keeps
+    working. Rotating it is what revokes Shadowsocks access for everyone.
     """
-    identity = str((user or {}).get('uuid') or (user or {}).get('username') or 'nexus')
-    length = ss_key_len(profile)
-    method = str((profile or {}).get('method') or '')
-    seed = f'{identity}|{method}|{length}'.encode()
-    raw = hashlib.sha256(seed).digest()
-    while len(raw) < length:
-        raw += hashlib.sha256(raw).digest()
-    return base64.b64encode(raw[:length]).decode()
+    setting = ss_key_setting(profile)
+    found = _setting(setting)
+    if found or not create:
+        return found
+    length = ss_key_len(profile) if str((profile or {}).get('method') or '').startswith('2022-') else 20
+    value = base64.b64encode(secrets.token_bytes(max(16, length))).decode()
+    try:
+        execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                (setting, value))
+    except Exception:
+        pass
+    return value
+
+
+def rotate_ss_keys():
+    """Regenerate every Shadowsocks PSK (revokes the old links)."""
+    rotated = []
+    for cipher in SS_CIPHERS:
+        profile = {'method': cipher['method'], 'key_len': cipher['key_len']}
+        setting = ss_key_setting(profile)
+        length = ss_key_len(profile) if str(cipher['method']).startswith('2022-') else 20
+        value = base64.b64encode(secrets.token_bytes(max(16, length))).decode()
+        try:
+            execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                    (setting, value))
+            rotated.append(cipher['id'])
+        except Exception:
+            continue
+    return rotated
+
+
+def ss_key(user, profile=None):
+    """The password a Shadowsocks client must present for this cipher.
+
+    One cipher = one key: the same value the listener authenticates, so the key
+    is identical for every user of that cipher and cannot be derived per user
+    without breaking the clients (see :data:`SS_CIPHERS`).
+    """
+    return ss_shared_key(profile) or ''
+
+
+def ss_plugin_opts(profile, host, leading_name=True):
+    """SIP003 plugin options for Shadowsocks over the WebSocket edge.
+
+    Shadowsocks has no transport of its own, so the client reaches the edge with
+    ``v2ray-plugin`` in WebSocket+TLS mode — the one plugin every mainstream
+    client implements (sing-box, mihomo, v2rayNG, NekoBox, Shadowrocket).
+
+    ``leading_name`` controls the two spellings in use: a SIP002 link carries the
+    plugin name first (``v2ray-plugin;tls;mode=websocket;…``) while sing-box takes
+    bare options (``tls;mode=websocket;…``) next to its own ``plugin`` field.
+    """
+    path = str((profile or {}).get('path') or '')
+    opts = f'tls;mode=websocket;host={host};path={path}'
+    return f'v2ray-plugin;{opts}' if leading_name else opts
 
 
 def node_address(node, profile):

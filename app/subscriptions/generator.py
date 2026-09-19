@@ -114,6 +114,23 @@ def trojan_uri(user, node, profile, prefix=''):
     return f"trojan://{urllib.parse.quote(user['uuid'], safe='')}@{address}:{port}?{_params(profile_query(node, profile, user))}#{name}"
 
 
+def ss_uri(user, node, profile, prefix=''):
+    """Shadowsocks as a SIP002 link, in the form every client imports.
+
+    Shadowsocks has no transport of its own, so the edge is reached with the
+    ``v2ray-plugin`` SIP003 plugin in WebSocket+TLS mode — the plugin sing-box,
+    mihomo, v2rayNG, NekoBox and Shadowrocket all implement. This is what puts
+    Shadowsocks into the client config list next to VLESS/VMess/Trojan.
+    """
+    address, port = tp.node_address(node, profile)
+    method = profile.get('method') or tp.SS_METHOD
+    secret = tp.ss_key(user, profile)
+    userinfo = base64.urlsafe_b64encode(f'{method}:{secret}'.encode()).decode().rstrip('=')
+    query = {'plugin': tp.ss_plugin_opts(profile, tp.node_host_header(node))}
+    name = urllib.parse.quote(label(user, node, profile, prefix), safe='')
+    return f"ss://{userinfo}@{address}:{port}?{_params(query)}#{name}"
+
+
 def vmess_uri(user, node, profile, prefix=''):
     """VMess has no parameterised URI: it is one base64 JSON blob."""
     address, port = tp.node_address(node, profile)
@@ -136,7 +153,7 @@ def vmess_uri(user, node, profile, prefix=''):
     return 'vmess://' + base64.b64encode(json.dumps(payload, ensure_ascii=False).encode()).decode()
 
 
-URI_BUILDERS = {'vless': vless_uri, 'trojan': trojan_uri, 'vmess': vmess_uri}
+URI_BUILDERS = {'vless': vless_uri, 'trojan': trojan_uri, 'vmess': vmess_uri, 'ss': ss_uri}
 
 
 def uri(user, node, profile, prefix=''):
@@ -173,21 +190,28 @@ def _transport(node, profile):
 
 def singbox(user, node, profile, prefix=''):
     address, port = tp.node_address(node, profile)
+    protocol = profile['protocol']
+    if protocol == 'ss':
+        # sing-box has no ``transport`` field on a Shadowsocks outbound: the
+        # WebSocket edge belongs in the plugin options, and an unknown field
+        # there would make the whole subscription fail to import.
+        return {'tag': label(user, node, profile, prefix), 'type': 'shadowsocks',
+                'server': address, 'server_port': port,
+                'method': profile.get('method') or tp.SS_METHOD,
+                'password': tp.ss_key(user, profile),
+                'plugin': 'v2ray-plugin',
+                'plugin_opts': tp.ss_plugin_opts(profile, tp.node_host_header(node), leading_name=False)}
     entry = {'tag': label(user, node, profile, prefix), 'server': address, 'server_port': port,
              'tls': _tls_block(node, profile, user)}
     transport = _transport(node, profile)
     if transport:
         entry['transport'] = transport
-    protocol = profile['protocol']
     if protocol == 'vless':
         entry.update({'type': 'vless', 'uuid': user['uuid'], 'flow': ''})
     elif protocol == 'vmess':
         entry.update({'type': 'vmess', 'uuid': user['uuid'], 'alter_id': 0, 'security': 'auto'})
     elif protocol == 'trojan':
         entry.update({'type': 'trojan', 'password': user['uuid']})
-    elif protocol == 'ss':
-        entry.update({'type': 'shadowsocks', 'method': profile.get('method') or tp.SS_METHOD,
-                      'password': tp.ss_key(user, profile)})
     else:
         raise ValueError('unsupported protocol: ' + protocol)
     return entry
@@ -195,6 +219,18 @@ def singbox(user, node, profile, prefix=''):
 
 def clash(user, node, profile, prefix=''):
     address, port = tp.node_address(node, profile)
+    if profile['protocol'] == 'ss':
+        # mihomo takes the WebSocket edge as ``plugin-opts`` (network: ws on an
+        # ss proxy is not a thing, and would silently dial plain Shadowsocks).
+        return {'name': label(user, node, profile, prefix), 'type': 'ss', 'server': address,
+                'port': port, 'udp': True,
+                'cipher': profile.get('method') or tp.SS_METHOD,
+                'password': tp.ss_key(user, profile),
+                'plugin': 'v2ray-plugin',
+                'plugin-opts': {'mode': 'websocket', 'tls': True,
+                                'host': tp.node_host_header(node),
+                                'path': profile.get('path') or ''},
+                'client-fingerprint': user.get('fingerprint') or 'chrome'}
     reality = profile.get('security') == 'reality'
     keys = tp.reality_keys() or {}
     entry = {'name': label(user, node, profile, prefix), 'server': address, 'port': port,
@@ -213,9 +249,6 @@ def clash(user, node, profile, prefix=''):
         entry.update({'type': 'vmess', 'uuid': user['uuid'], 'alterId': 0, 'cipher': 'auto'})
     elif protocol == 'trojan':
         entry.update({'type': 'trojan', 'password': user['uuid']})
-    elif protocol == 'ss':
-        entry.update({'type': 'ss', 'cipher': profile.get('method') or tp.SS_METHOD,
-                      'password': tp.ss_key(user, profile)})
     else:
         raise ValueError('unsupported protocol: ' + protocol)
     return entry
@@ -366,9 +399,9 @@ def render(user, base, target, nodes=None, prefix=''):
     line_profiles = [p for p in profiles if p['protocol'] in tp.URI_PROTOCOLS]
     if not line_profiles:
         if profiles:
-            # Shadowsocks-over-WebSocket has no sharing-URI form at all, so a
-            # subscription that asks for exactly that still returns something a
-            # client can import instead of a 400 who reads as "broken".
+            # A profile set with no link form at all (Reality only, when it is
+            # the sole published transport) still returns something a client can
+            # import instead of a 400 that reads as "broken".
             return _json_subscription(user, nodes, profiles, 'singbox', prefix)
         raise ValueError(f"{target}: روی این نصب هنوز منتشر نشده است "
                          f"(نیازمند پورت TCP اختصاصی یا فعال‌سازی WARP)")

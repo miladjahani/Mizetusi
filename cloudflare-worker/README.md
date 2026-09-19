@@ -29,6 +29,7 @@ You rarely need to edit the file by hand: the panel serves the same source with 
   | `/ws/ss`, `/cdn/ss` | Shadowsocks-2022 · AES-128-GCM |
   | `/ws/ss-aes256`, `/cdn/ss-aes256` | Shadowsocks-2022 · AES-256-GCM |
   | `/ws/ss-chacha`, `/cdn/ss-chacha` | Shadowsocks-2022 · ChaCha20-Poly1305 |
+  | `/ws/ss-legacy`, `/cdn/ss-legacy` | Shadowsocks · ChaCha20-IETF (widest client support) |
   | `/ws/warp` | VLESS over WebSocket, exiting through WARP |
   | `/ws` | legacy VLESS alias |
 
@@ -40,7 +41,7 @@ You rarely need to edit the file by hand: the panel serves the same source with 
 
 ## What the Worker does for you
 
-- Proxies the whole published transport matrix, not a hand-picked subset: VLESS, VMess, Trojan, every Shadowsocks-2022 cipher, the CDN path shapes and WARP.
+- Proxies the whole published transport matrix, not a hand-picked subset: VLESS, VMess, Trojan, all four Shadowsocks ciphers, the CDN path shapes and WARP.
 - Strips Cloudflare/hop-by-hop headers (`cf-connecting-ip`, `cf-ray`, …) so the origin never sees spoofed client metadata — but keeps `Connection: upgrade` / `Upgrade: websocket`, which the origin's WebSocket handshake requires.
 - Pins `X-Forwarded-Proto: https`, forwards the original `Host`/`X-Forwarded-Host` (the origin builds absolute subscription and status-window URLs from it) and forwards the real client IP as `X-Forwarded-For`, so IP limits and quota attribution stay correct through Cloudflare.
 - Marks its own requests with `X-Nexus-Edge`, so the origin can tell a Worker-fronted request apart.

@@ -255,7 +255,7 @@ export class SettingsView {
     if (!version) this.app.safe(() => this.loadVersion());
     const count = metrics ? `${Fmt.num(metrics.totals.users)} کل · ${Fmt.num(metrics.totals.active_users)} فعال` : '—';
     const rows = [
-      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 8.0.0'],
+      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 8.1.0'],
       ['آدرس پایه', settings.resolved_base_url || location.origin],
       ['کاربران', count],
       ['نودهای فعال', metrics ? `${Fmt.num(metrics.totals.nodes_enabled)} از ${Fmt.num(metrics.totals.nodes)}` : '—'],
@@ -263,6 +263,10 @@ export class SettingsView {
       ['ترنسپورت', core.transport || 'WebSocket + TLS'],
       ['پروتکل‌های منتشرشده', (core.protocols || []).join(' · ')],
       ['اندپوینت‌های WebSocket', (core.endpoints || []).join(' · ')],
+      // What the running engine really contains: a transport it rejected at startup
+      // is never published, so this is where an admin sees the difference.
+      ['پروفایل‌های سروشده', Array.isArray(core.served) ? `${Fmt.num(core.served.length)} پروفایل` : 'در انتظار راه‌اندازی هسته'],
+      ['پروفایل‌های کنارگذاشته', (core.withheld || []).length ? (core.withheld || []).join(' · ') : 'ندارد'],
       ['ترکیب‌های نود × پروتکل', (settings.subscription?.transports || []).map((item) => item.label).join(' · ')],
       ['حالت Reality', (core.transports || []).includes('vless-reality') ? 'فعال (پورت مستقیم)' : 'نیازمند پورت TCP اختصاصی'],
       ['فرمت‌های سابلینک', (settings.subscription?.targets || []).join(' · ')],
@@ -415,6 +419,28 @@ export class SettingsView {
         this.toasts.ok('نشست‌ها باطل شد');
         this.app.session.clear();
         setTimeout(() => location.reload(), 700);
+      });
+    }
+    // Shadowsocks uses one key per cipher, so this is how a leaked SS link is
+    // revoked: the old links stop authenticating the moment Xray reloads.
+    const rotateSs = $('#btnRotateSs');
+    if (rotateSs) {
+      rotateSs.onclick = () => this.app.safe(async () => {
+        const confirmed = await this.modals.ask('چرخش کلید شادوساکس',
+          'کلید همه سیفرهای شادوساکس عوض می‌شود؛ لینک‌های شادوساکس قدیمی از کار می‌افتند و کاربران باید سابلینک را دوباره وارد کنند.',
+          { confirmLabel: 'چرخش کن' });
+        if (!confirmed) return;
+        const original = rotateSs.textContent;
+        rotateSs.disabled = true;
+        rotateSs.innerHTML = '<span class="spin-inline"></span> چرخش…';
+        try {
+          const data = await this.api.post('/api/settings/rotate-shadowsocks', {});
+          this.toasts.ok(`${(data.rotated || []).length} کلید شادوساکس چرخید`);
+          await this.app.loadSettings();
+        } finally {
+          rotateSs.disabled = false;
+          rotateSs.textContent = original;
+        }
       });
     }
     const save = $('#btnSaveSettings');

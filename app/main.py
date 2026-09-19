@@ -44,7 +44,7 @@ PWA_ICONS={'192':'/static/icons/icon-192.png','512':'/static/icons/icon-512.png'
 # One label per accepted target: subscription formats plus client ids.
 SUB_LABELS={**FORMAT_LABELS, **{c['id']:f"{c['name']} · {c['platform']}" for c in CLIENTS}}
 WORKER_PATH=os.path.join(BASE_DIR,'cloudflare-worker','worker.js')
-APP_VERSION='8.0.0'
+APP_VERSION='8.1.0'
 
 def _asset_fingerprint():
     """Content hash of the shipped front-end.
@@ -237,7 +237,7 @@ async def lifespan(app:FastAPI):
         except asyncio.CancelledError: pass
         try: await xray._stop()
         except Exception: pass
-app=FastAPI(title=settings.app_name,version='7.0.0',lifespan=lifespan)
+app=FastAPI(title=settings.app_name,version=APP_VERSION,lifespan=lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=[],allow_methods=['GET','POST','PUT','DELETE','OPTIONS'],allow_headers=['Content-Type','X-Admin-Password'])
 templates=Jinja2Templates(directory=os.path.join(BASE_DIR,'templates'))
 app.mount('/static',StaticFiles(directory=os.path.join(BASE_DIR,'static')),name='static')
@@ -1100,6 +1100,22 @@ async def change_password(request:Request):
 def rotate_session(request:Request):
     auth(request); _set('jwt_secret',secrets.token_urlsafe(48)); _audit('settings.session','session secret rotated')
     return sessions.clear(JSONResponse({'success':True,'signed_out':True}))
+
+
+@app.post('/api/settings/rotate-shadowsocks')
+async def rotate_shadowsocks(request:Request):
+    """Rotate every Shadowsocks key and republish the engine.
+
+    Shadowsocks authenticates one PSK per cipher (see ``transports.SS_CIPHERS``),
+    so rotating is the only way to revoke access handed out on a link that has
+    already been copied. Every other protocol keeps its per-user credential and
+    is therefore revoked simply by disabling the user.
+    """
+    auth(request)
+    rotated=transports.rotate_ss_keys()
+    engine=await xray.start_or_reload(force=True)
+    _audit('settings.shadowsocks','rotated '+','.join(rotated) if rotated else 'nothing rotated')
+    return {'success':True,'rotated':rotated,'engine':engine,'transports':transports.catalog()}
 
 
 @app.delete('/api/logs')

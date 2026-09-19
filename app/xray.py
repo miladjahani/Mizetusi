@@ -19,7 +19,7 @@ The config is assembled from :mod:`app.subscriptions.transports`, which is also
 what the subscription generator and the panel read, so a transport is defined
 exactly once.
 """
-import asyncio, base64, hashlib, json, os, re, secrets, subprocess
+import asyncio, hashlib, json, os, re, secrets, subprocess
 from app.config import settings
 from app.db import rows, row, execute
 from app.subscriptions import transports as tp
@@ -50,7 +50,14 @@ def _users_for(protocol):
 
 
 def _clients_for(protocol, profile=None):
-    """Xray client entries for one protocol, one entry per active user."""
+    """Xray client entries for one protocol, one entry per active user.
+
+    Shadowsocks is the exception: its listener authenticates a single PSK (see
+    :data:`tp.SS_CIPHERS`), so it has no client list at all. Everything else gets
+    one credential per active user.
+    """
+    if protocol == 'ss':
+        return []
     users = _users_for(protocol)
     if protocol == 'vless':
         return [{'id': u['uuid'], 'email': _email(u), 'level': 0, 'flow': ''} for u in users]
@@ -58,14 +65,19 @@ def _clients_for(protocol, profile=None):
         return [{'id': u['uuid'], 'email': _email(u), 'level': 0, 'alterId': 0} for u in users]
     if protocol == 'trojan':
         return [{'password': u['uuid'], 'email': _email(u), 'level': 0} for u in users]
-    if protocol == 'ss':
-        return [{'password': tp.ss_key(u, profile), 'email': _email(u), 'level': 0} for u in users]
     return []
 
 
 def _protocol_settings(profile):
     """The ``settings`` block of one inbound (clients + protocol extras)."""
     protocol = profile['protocol']
+    if protocol == 'ss':
+        # Single-user Shadowsocks: one PSK per cipher, of exactly the cipher's
+        # key length. Multi-user 2022 inbounds are rejected by Xray for every
+        # method but blake3-aes-*-gcm, and *one* rejected inbound used to take
+        # the whole engine down - which is why no node answered at all.
+        return {'method': profile.get('method') or tp.SS_METHOD,
+                'password': tp.ss_shared_key(profile), 'network': 'tcp'}
     clients = _clients_for(protocol, profile)
     if protocol == 'vless':
         return {'clients': clients, 'decryption': 'none'}
@@ -73,31 +85,7 @@ def _protocol_settings(profile):
         return {'clients': clients}
     if protocol == 'trojan':
         return {'clients': clients}
-    if protocol == 'ss':
-        # Shadowsocks-2022 is multi-user: the server key (one per cipher, of the
-        # cipher's key length) authenticates the node, each user key is what
-        # that user - and its subscription link - must present.
-        key_len = tp.ss_key_len(profile)
-        return {'method': profile.get('method') or tp.SS_METHOD,
-                'password': _ss_server_key(key_len), 'network': 'tcp',
-                'clients': clients}
     return {'clients': clients}
-
-
-def _ss_server_key(key_len=16):
-    """Stable server PSK for one Shadowsocks-2022 cipher (created once, reused)."""
-    size = max(1, int(key_len or 16))
-    setting = 'ss_server_key' if size == 16 else f'ss_server_key_{size}'
-    found = row('SELECT value FROM settings WHERE key=?', (setting,))
-    if found and found.get('value'):
-        return found['value']
-    value = base64.b64encode(secrets.token_bytes(size)).decode()
-    try:
-        execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                (setting, value))
-    except Exception:
-        pass
-    return value
 
 
 def _transport_block(profile):
@@ -142,6 +130,12 @@ def edge_inbounds(profiles=None):
     if tp.warp_config() and tp.profile_port(tp.WARP_PROFILE):
         items.append(_inbound(tp.WARP_PROFILE, tp.profile_port(tp.WARP_PROFILE)))
     return items
+
+
+def edge_profile_ids(config=None):
+    """Profile tags of a config's inbounds (what the engine actually serves)."""
+    cfg = config if config is not None else _config()
+    return [item['tag'] for item in cfg['inbounds']]
 
 
 def _reality_settings():
@@ -201,17 +195,71 @@ def routing():
     return {'domainStrategy': 'AsIs', 'rules': rules}
 
 
-def _config():
+def _config(edge=None, with_warp=True, with_direct=True):
+    """The engine config.
+
+    ``edge``/``with_warp``/``with_direct`` exist so a transport the installed
+    Xray build refuses can be dropped **without** taking the whole engine down:
+    the candidates in :func:`_candidate_configs` are tried richest-first.
+    """
+    inbounds = list(edge_inbounds() if edge is None else edge)
+    if not with_warp:
+        inbounds = [item for item in inbounds if item['tag'] != tp.WARP_PROFILE['id']]
+    if with_direct:
+        inbounds += direct_inbounds()
+    outs = [item for item in outbounds() if with_warp or item.get('tag') != 'warp']
+    rules = routing()['rules'] if with_warp else []
     return {
         'log': {'loglevel': 'warning'},
         'api': {'tag': 'api', 'listen': f'127.0.0.1:{settings.xray_api_port}', 'services': ['StatsService']},
         'stats': {},
         'policy': {'levels': {'0': {'statsUserUplink': True, 'statsUserDownlink': True}},
                    'system': {'statsInboundUplink': True, 'statsInboundDownlink': True}},
-        'inbounds': edge_inbounds() + direct_inbounds(),
-        'outbounds': outbounds(),
-        'routing': routing(),
+        'inbounds': inbounds,
+        'outbounds': outs,
+        'routing': {'domainStrategy': 'AsIs', 'rules': rules},
     }
+
+
+def _edge_without_ciphers(keep):
+    """Edge **inbounds** keeping only the first ``keep`` Shadowsocks ciphers.
+
+    ``keep`` counts ciphers, not profiles: each cipher owns two path shapes, so a
+    rung drops 0, 2, 4 … inbounds at a time. Returns inbound dicts (not profiles),
+    because that is what :func:`_config` puts on the wire.
+    """
+    wanted = {cipher['id'] for cipher in tp.SS_CIPHERS[:keep]}
+    profiles = [profile for profile in tp.EDGE_PROFILES
+                if profile['protocol'] != 'ss' or _cipher_of(profile) in wanted]
+    return edge_inbounds(profiles=profiles)
+
+
+def _cipher_of(profile):
+    """``ss-aes256-cdn`` -> ``ss-aes256``."""
+    return str(profile.get('id') or '').rsplit('-', 1)[0]
+
+
+def _candidate_configs():
+    """Configs to try, richest first, with the profiles each one serves.
+
+    The ladder matters because Xray validates the whole file at once: a single
+    inbound it does not like (a Shadowsocks-2022 cipher it refuses to run in the
+    requested mode, a Reality/WARP build the host forbids) aborts startup and
+    every other protocol stops answering. Dropping the offender keeps the rest of
+    the service alive, and the dropped profiles are then withheld from the
+    subscription instead of being published as dead links.
+    """
+    def served(config):
+        return [item['tag'] for item in config['inbounds']]
+
+    full = _config()
+    yield full, served(full), ''
+    trimmed = _config(edge=edge_inbounds(), with_warp=False, with_direct=False)
+    yield trimmed, served(trimmed), 'WARP/Reality حذف شد'
+    for keep in range(len(tp.SS_CIPHERS) - 1, -1, -1):
+        reduced = _config(edge=_edge_without_ciphers(keep), with_warp=False, with_direct=False)
+        names = ', '.join(c['id'] for c in tp.SS_CIPHERS[:keep]) or 'هیچ'
+        yield reduced, served(reduced), f'شادوساکس محدود به {names}'
 
 
 # ------------------------------------------------------------------ reality keys
@@ -263,20 +311,6 @@ def write_config(config=None):
     return digest, cfg
 
 
-def _without_optional(cfg):
-    """The same config with the raw-TCP-only inbounds removed.
-
-    Reality/WARP run last and are additive: if the installed Xray build rejects
-    one of them the engine still starts on the transports every deployment can
-    serve, instead of staying down.
-    """
-    trimmed = dict(cfg)
-    trimmed['inbounds'] = edge_inbounds()
-    trimmed['outbounds'] = [o for o in cfg['outbounds'] if o.get('tag') != 'warp']
-    trimmed['routing'] = {'domainStrategy': 'AsIs', 'rules': []}
-    return trimmed
-
-
 async def _test(config_path):
     test = await asyncio.create_subprocess_exec(settings.xray_binary, 'run', '-test', '-config', config_path,
                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -305,20 +339,25 @@ async def start_or_reload(force=False):
         return {'running': False, 'reason': 'xray binary unavailable'}
     if tp.direct_endpoint():
         await asyncio.to_thread(ensure_reality_keys)
-    digest, cfg = write_config()
-    error = await _test(settings.xray_config)
-    if error:
-        # Retry without the transports that need a raw TCP endpoint so a build
-        # that rejects one cannot take the whole service down.
-        digest, cfg = write_config(_without_optional(cfg))
+    digest = cfg = error = served = None
+    note = ''
+    for candidate, candidate_served, candidate_note in _candidate_configs():
+        digest, cfg = write_config(candidate)
         error = await _test(settings.xray_config)
-        _last_warning = '' if not error else error
-    else:
-        _last_warning = ''
+        served, note = candidate_served, candidate_note
+        if not error:
+            break
     if error:
-        return {'running': False, 'reason': error}
+        # Even the smallest config is invalid; nothing can be served, so nothing
+        # may be published either.
+        tp.set_served([])
+        _last_warning = error
+        return {'running': False, 'reason': error, 'served': []}
+    # From here on, links are only generated for inbounds that really exist.
+    tp.set_served(served)
+    _last_warning = note
     if not force and digest == _last_hash and _proc and _proc.returncode is None:
-        return {'running': True, 'pid': _proc.pid, 'reloaded': False}
+        return {'running': True, 'pid': _proc.pid, 'reloaded': False, 'warning': note or None, 'served': served}
     await _stop()
     _proc = await asyncio.create_subprocess_exec(
         settings.xray_binary, 'run', '-config', settings.xray_config,
@@ -328,8 +367,8 @@ async def start_or_reload(force=False):
     await asyncio.sleep(0.25)
     if _proc.returncode is not None:
         err = (await _proc.stderr.read()).decode(errors='ignore')[-1000:]
-        return {'running': False, 'reason': err or 'xray exited'}
-    return {'running': True, 'pid': _proc.pid, 'reloaded': True}
+        return {'running': False, 'reason': err or 'xray exited', 'served': served}
+    return {'running': True, 'pid': _proc.pid, 'reloaded': True, 'warning': note or None, 'served': served}
 
 
 async def sync_traffic_stats():
@@ -372,9 +411,13 @@ async def loop():
 
 def status():
     profiles = tp.available_profiles()
+    served = tp.served_profiles()
     return {'enabled': bool(settings.xray_enabled), 'binary': settings.xray_binary,
             'running': bool(_proc and _proc.returncode is None),
             'pid': _proc.pid if _proc else None,
+            'served': sorted(served) if served is not None else None,
+            'withheld': ([p['id'] for p in tp.EDGE_PROFILES if served is not None and p['id'] not in served]
+                         + ([tp.WARP_PROFILE['id']] if served is not None and tp.WARP_PROFILE['id'] not in served else [])),
             'vless_listener': settings.xray_vless_port,
             'trojan_listener': settings.xray_trojan_port,
             'vmess_listener': settings.xray_vmess_port,

@@ -12,6 +12,10 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const SOURCE = readFileSync(new URL('../cloudflare-worker/worker.js', import.meta.url), 'utf8');
+// The Worker's own path table, so a path added to the deployment but forgotten
+// here (or vice versa) shows up as a failure rather than as an untested route.
+const ADVERTISED = SOURCE.split('const EDGE_PATHS = [', 2)[1].split('];', 1)[0]
+  .match(/'([^']+)'/g).map((quoted) => quoted.slice(1, -1));
 
 // Node treats a bare .js as CommonJS, so the ESM source is imported from a copy
 // with an .mjs extension — this is the same text Cloudflare would deploy.
@@ -23,10 +27,10 @@ const worker = (await import(pathToFileURL(file).href)).default;
 // Every path the panel publishes (ws + cdn shapes, all Shadowsocks ciphers).
 const EDGE_PATHS = [
   '/ws', '/ws/vless', '/ws/vmess', '/ws/trojan',
-  '/ws/ss', '/ws/ss-aes256', '/ws/ss-chacha',
+  '/ws/ss', '/ws/ss-aes256', '/ws/ss-chacha', '/ws/ss-legacy',
   '/ws/warp',
   '/cdn/vless', '/cdn/vmess', '/cdn/trojan',
-  '/cdn/ss', '/cdn/ss-aes256', '/cdn/ss-chacha',
+  '/cdn/ss', '/cdn/ss-aes256', '/cdn/ss-chacha', '/cdn/ss-legacy',
 ];
 const ORIGIN = 'https://nexus-production.up.railway.app';
 const EDGE = 'https://nexus-edge.example.workers.dev';
@@ -75,7 +79,11 @@ const check = (ok, label) => { if (!ok) failures.push(label); };
 }
 
 // ------------------------------------------------- every published WS path
-for (const path of EDGE_PATHS) {
+check(ADVERTISED.length === EDGE_PATHS.length
+  && ADVERTISED.every((path) => EDGE_PATHS.includes(path))
+  && EDGE_PATHS.every((path) => ADVERTISED.includes(path)),
+  `path list drifted from worker.js: ${ADVERTISED.join(' ')}`);
+for (const path of ADVERTISED) {
   const response = await call(path, { headers: ws });
   const proxied = seen.find((request) => new URL(request.url).pathname === path);
   check(response.status === 101, `${path} should be proxied (got ${response.status})`);
@@ -158,4 +166,4 @@ if (failures.length) {
   failures.forEach((line) => console.error(' -', line));
   process.exit(1);
 }
-console.log(`OK — worker routed ${EDGE_PATHS.length} edge paths, ${failures.length} failures`);
+console.log(`OK — worker routed ${ADVERTISED.length} edge paths, ${failures.length} failures`);

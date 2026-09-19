@@ -11,13 +11,27 @@ a dedicated subscription per client.
   single `protocol` column, so a VLESS user's VMess/Trojan/Shadowsocks links were published
   but rejected by the engine. One credential is now registered on every inbound, and the
   panel's protocol field became a multi-select with all protocols on by default.
-- **Shadowsocks is three cipher families**, not one: AES-128-GCM, AES-256-GCM and
-  ChaCha20-Poly1305, each with its own listener, its own key length and its own subscription
-  target, across both edge path shapes.
+- **Shadowsocks is four ciphers, each a real client link.** AES-128-GCM, AES-256-GCM,
+  ChaCha20-Poly1305 and the broadly compatible `chacha20-ietf-poly1305`, each with its own
+  listener, its own key and its own subscription target across both edge path shapes, now
+  published as SIP002 `ss://` links (with the `v2ray-plugin` WebSocket edge) instead of
+  being visible only in the JSON formats.
+- **Shadowsocks is served single-user, on purpose.** A multi-user Shadowsocks-2022 inbound is
+  rejected by Xray for every method but `blake3-aes-*-gcm`, and a single rejected inbound
+  used to abort startup and take *every* protocol down; clients also disagree about which key
+  a user has to present. One key per cipher is accepted by every client, so the panel rotates
+  keys per cipher (Settings → «چرخش کلید شادوساکس») to revoke a leaked link.
+- **A transport the engine refuses can no longer kill the deployment.** The config is tried
+  richest-first (full → without WARP/Reality → Shadowsocks reduced cipher by cipher), and only
+  the profiles the running engine really contains are published, so a subscription can never
+  point at a listener that does not exist.
 - **The Cloudflare Worker proxies the whole matrix.** It only knew `/ws`, `/ws/vless` and
   `/ws/trojan`, so every VMess, Shadowsocks, CDN and WARP node 404'd behind Cloudflare while
   working on the Railway origin. It also forwards the real client IP, keeps the handshake
   headers the origin needs, and answers an unreachable origin with a JSON `502`.
+- **A local end-to-end proof.** `scripts/e2e_tunnel_check.py` boots the generated server
+  config, the FastAPI edge and one client outbound per published transport, then pushes a real
+  HTTP request through every tunnel on a host that has Xray installed.
 - **Freebuff-side hardening.** Edge routes and the Worker's path table are now generated from
   (and asserted against) the transport profile table, and two new headless probes cover them:
   `tests/worker_smoke.mjs` and the protocol/Shadowsocks cases in `tests/test_panel_api.py`.
@@ -136,6 +150,7 @@ panel. Every node publishes all of these **by default**, with no admin action:
 | `ss-ws` / `ss-cdn` | Shadowsocks-2022 · AES-128-GCM | WebSocket + TLS | `/ws/ss`, `/cdn/ss` |
 | `ss-aes256-ws` / `ss-aes256-cdn` | Shadowsocks-2022 · AES-256-GCM | WebSocket + TLS | `/ws/ss-aes256`, `/cdn/ss-aes256` |
 | `ss-chacha-ws` / `ss-chacha-cdn` | Shadowsocks-2022 · ChaCha20-Poly1305 | WebSocket + TLS | `/ws/ss-chacha`, `/cdn/ss-chacha` |
+| `ss-legacy-ws` / `ss-legacy-cdn` | Shadowsocks · ChaCha20-IETF | WebSocket + TLS | `/ws/ss-legacy`, `/cdn/ss-legacy` |
 | `vless-reality` | VLESS | Reality (TCP) | the direct port, when one exists |
 | `warp-ws` | VLESS | WebSocket → WARP exit | `/ws/warp`, once WARP is enabled |
 
@@ -153,7 +168,13 @@ never be published without a route on both edges.
 A user is not tied to a single protocol. The `protocol` column holds a **set**
 (comma-separated), every user is registered on **every** inbound by default, and the panel
 renders it as a multi-select with all protocols switched on — so VLESS, VMess, Trojan and
-all three Shadowsocks ciphers work for the same UUID/password with no extra step. Narrowing
+all four Shadowsocks ciphers work for the same UUID/password with no extra step. VLESS, VMess
+and Trojan keep one credential **per user** (disabling the user revokes it everywhere);
+Shadowsocks authenticates one key **per cipher**, because Xray refuses a multi-user
+Shadowsocks-2022 inbound for every method but `blake3-aes-*-gcm` and a single rejected
+listener used to abort startup for the whole engine. Rotating those keys is therefore the SS
+revoke path (Settings → «امنیت پنل»), and the panel reports which profiles the running engine
+really serves so no link ever points at a listener that was dropped. Narrowing
 the set is optional and only removes the links that were turned off (a subscription target
 for a disabled protocol answers `400` instead of returning an empty list). Rows written by
 older releases carry a single value, which still means "all protocols", because that is what
@@ -185,8 +206,8 @@ is advertised.
 ## Public endpoints
 
 - VLESS: `/ws/vless` · VMess: `/ws/vmess` · Trojan: `/ws/trojan` · WARP: `/ws/warp`
-- Shadowsocks-2022: `/ws/ss` (AES-128-GCM) · `/ws/ss-aes256` · `/ws/ss-chacha`
-- CDN path shapes: `/cdn/vless`, `/cdn/vmess`, `/cdn/trojan`, `/cdn/ss`, `/cdn/ss-aes256`, `/cdn/ss-chacha` · legacy `/ws`
+- Shadowsocks: `/ws/ss` (2022 · AES-128-GCM) · `/ws/ss-aes256` · `/ws/ss-chacha` · `/ws/ss-legacy`
+- CDN path shapes: `/cdn/vless`, `/cdn/vmess`, `/cdn/trojan`, `/cdn/ss`, `/cdn/ss-aes256`, `/cdn/ss-chacha`, `/cdn/ss-legacy` · legacy `/ws`
 - Subscription: `/sub/<UUID>?target=auto|all|vless|trojan|vmess|ss|base64|singbox|clash|xray|json`
 - By transport: `?target=ws|cdn|reality|warp` or one exact profile, e.g. `?target=vless-cdn`
 - Per-client: `/sub/<UUID>?target=bettbox|exclusive|nekoboxplus|v2rayng|hiddify|karing|streisand|shadowrocket|v2box|foxray|nekobox|amnezia|smart`
@@ -195,17 +216,27 @@ is advertised.
 - Panel API: `/api/metrics`, `/api/users`, `/api/users/<name>/links`, `/api/users/quick`,
   `/api/presets`, `/api/clients`, `/api/transports`, `/api/warp`, `/api/nodes`,
   `/api/nodes/ping`, `/api/nodes/sync`, `/api/settings`, `/api/logs`, `/api/backup`,
-  `/api/core/status`
+  `/api/core/status`, `/api/settings/rotate-shadowsocks`
 - Cloudflare Worker: `/api/cloudflare/worker-code`, `/api/cloudflare/worker-download`, `/api/cloudflare/worker-test`
 - PWA: `/manifest.webmanifest`, `/sw.js`, `/static/icons/*`
 
 `target=auto` (and `all`, and the `smart` client) returns **every node × every transport**:
-the default subscription already carries VLESS, VMess and Trojan for each node, ordered
-fastest-node-first. `base64` is the same matrix encoded for the clients that only read
-base64 blobs. Shadowsocks-over-WebSocket has no sharing-URI form, so `?target=ss` returns
-the sing-box JSON for exactly those profiles instead of a link that would dial the wrong
-endpoint; the panel marks such rows. Every response carries `X-NEXUS-Format`,
-`X-NEXUS-Node-Count`, `X-NEXUS-Transports` and `X-NEXUS-Target`.
+the default subscription already carries VLESS, VMess, Trojan and Shadowsocks for each node,
+ordered fastest-node-first. `base64` is the same matrix encoded for the clients that only
+read base64 blobs. Every response carries `X-NEXUS-Format`, `X-NEXUS-Node-Count`,
+`X-NEXUS-Transports` and `X-NEXUS-Target`.
+
+Shadowsocks is published as a **SIP002 link**: the method and key travel as base64 userinfo
+and the WebSocket edge as the `v2ray-plugin` SIP003 plugin, which is what v2rayNG, NekoBox,
+sing-box, mihomo and Shadowrocket all implement — so SS nodes appear in a client's config
+list next to the other protocols and `?target=ss` returns links. A profile set with no link
+form at all (Reality alone, on an install with no raw TCP port) still answers with the
+sing-box JSON instead of a `400` that reads as "broken".
+
+Because a Shadowsocks listener authenticates one key per cipher, that key is what a link
+carries — disabling a user revokes VLESS/VMess/Trojan immediately, while Shadowsocks access
+is revoked by rotating its keys (`POST /api/settings/rotate-shadowsocks`, or the button in
+Settings → «امنیت پنل»), which reloads the engine so old links stop authenticating at once.
 
 ## The Cloudflare Worker
 

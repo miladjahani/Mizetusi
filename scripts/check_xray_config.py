@@ -5,9 +5,12 @@ Run it after touching the transport/profile set or :mod:`app.xray`:
     XRAY_BIN=/usr/local/bin/xray python scripts/check_xray_config.py
 
 It fabricates a throwaway database with one user per protocol, a Reality key
-pair and an optionally supplied WARP peer, then runs ``xray run -test`` on both
-the full config and the trimmed fallback config. Exit code is non-zero when
-either one is rejected, so this can guard a deploy.
+pair and an optionally supplied WARP peer, then runs ``xray run -test`` on every
+rung of the startup ladder — the full config first, then the configs with WARP /
+Reality removed and Shadowsocks reduced cipher by cipher. The first accepted rung
+is what the deployment will actually serve (and what its subscriptions publish),
+so a rung that silently drops a transport is visible here. Exit code is non-zero
+only when *no* rung is accepted, i.e. the engine could serve nothing at all.
 """
 import json
 import os
@@ -57,15 +60,27 @@ print('inbound tags:', [i['tag'] for i in config['inbounds']])
 print('outbound tags:', [o['tag'] for o in config['outbounds']])
 
 failures = 0
-for label, payload in (('full', config), ('fallback', xray._without_optional(config))):
-    path = os.path.join(tempfile.gettempdir(), f'nexus-xray-{label}.json')
+accepted = None
+for index, (payload, served, note) in enumerate(xray._candidate_configs()):
+    label = f'rung{index}' + (f' ({note})' if note else '')
+    path = os.path.join(tempfile.gettempdir(), f'nexus-xray-rung{index}.json')
     with open(path, 'w', encoding='utf-8') as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
     result = subprocess.run([binary, 'run', '-test', '-config', path], capture_output=True, text=True)
     tail = (result.stdout + result.stderr).strip().splitlines()
-    print(f'[{label}] rc={result.returncode} :: {tail[-1] if tail else ""}')
+    print(f'[{label}] rc={result.returncode} served={len(served)} :: {tail[-1] if tail else ""}')
     if result.returncode:
         failures += 1
         print('\n'.join(tail[-12:]))
+    elif accepted is None:
+        accepted = (index, served, note)
 
-raise SystemExit(1 if failures else 0)
+if accepted is None:
+    print('every rung was rejected — this deployment could serve nothing')
+    raise SystemExit(1)
+index, served, note = accepted
+print(f'first accepted rung: {index} ({note or "full matrix"}), serving {len(served)} profiles')
+if index:
+    print('transports withheld from every subscription:',
+          [p['id'] for p in tp.EDGE_PROFILES if p['id'] not in set(served)])
+raise SystemExit(0)
