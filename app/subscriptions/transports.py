@@ -28,6 +28,7 @@ from app.db import row, execute
 EDGE = 'edge'
 DIRECT = 'direct'
 WARP = 'warp'
+HY2 = 'hy2'
 
 # The protocols a user can be subscribed to. Every user is created with the full
 # set, so every path is live by default and an admin only narrows it on purpose.
@@ -52,6 +53,13 @@ ALL_PROTOCOLS = 'all'
 # NekoBox, Shadowrocket) in the plain SIP002 form, so Shadowsocks now works
 # everywhere. ``key_len`` is the cipher's key size in bytes.
 SS_CIPHERS = (
+    # The classic AEAD cipher comes first, on purpose. It is the one method
+    # *every* client implements (v2rayNG, NekoBox, sing-box, mihomo,
+    # Shadowrocket, Happ), so the default Shadowsocks node shows up — and can be
+    # pinged — in all of them, not only in the clients that learned SIP022. The
+    # 2022 ciphers stay available right after it for the clients that do.
+    {'id': 'ss-classic', 'method': 'aes-256-gcm', 'key_len': 0,
+     'tag': 'SS · AES-256-GCM (سازگاری کامل)', 'path': '/ws/ss-classic', 'cdn_path': '/cdn/ss-classic'},
     {'id': 'ss', 'method': '2022-blake3-aes-128-gcm', 'key_len': 16,
      'tag': 'SS-2022 · AES-128', 'path': '/ws/ss', 'cdn_path': '/cdn/ss'},
     {'id': 'ss-aes256', 'method': '2022-blake3-aes-256-gcm', 'key_len': 32,
@@ -61,7 +69,9 @@ SS_CIPHERS = (
     {'id': 'ss-legacy', 'method': 'chacha20-ietf-poly1305', 'key_len': 0,
      'tag': 'SS · ChaCha20-IETF (سازگاری بالا)', 'path': '/ws/ss-legacy', 'cdn_path': '/cdn/ss-legacy'},
 )
-# The first cipher is the one the panel calls "Shadowsocks" in one-click presets.
+# The first cipher is the one the panel calls "Shadowsocks" in one-click presets:
+# the universally supported one, so a link handed out by a preset works in every
+# client rather than only in the SIP022-aware ones.
 SS_METHOD = SS_CIPHERS[0]['method']
 REALITY_SNI = 'www.cloudflare.com'
 
@@ -213,11 +223,22 @@ PLANNED_PROFILES = [
 WARP_PROFILE = {'id': 'warp-ws', 'protocol': 'vless', 'network': 'ws', 'path': '/ws/warp',
                 'security': 'tls', 'tag': 'WARP · WS', 'port_setting': 'xray_warp_port'}
 
+# Hysteria2 is a QUIC protocol of its own, not an Xray inbound: it terminates UDP
+# in a hysteria2 server, which Xray does not implement. NEXUS therefore publishes
+# it the honest way — an **external** node an admin configures (their own
+# hysteria2 server), which every sing-box/mihomo based client (Hiddify, NekoBox,
+# Karing, v2rayN, Streisand…) imports. It appears nowhere until the admin saves a
+# working endpoint, so it can never advertise something that does not answer.
+HY2_PROFILE = {'id': 'hysteria2', 'protocol': HY2, 'network': 'quic', 'path': '',
+               'security': 'tls', 'tag': 'Hysteria2 · QUIC (UDP)'}
+HY2_KEYS = ('hy2_enabled', 'hy2_host', 'hy2_port', 'hy2_password', 'hy2_sni',
+            'hy2_obfs', 'hy2_obfs_password', 'hy2_insecure', 'hy2_label')
+
 # Every protocol that can be expressed as a one-line sharing URI. Shadowsocks
 # rides the edge through the ``v2ray-plugin`` SIP003 plugin, which is exactly what
 # the SIP002 ``plugin=`` parameter is for, so it is a first-class link too: the
 # Shadowsocks nodes now show up in v2rayNG/NekoBox config lists like the rest.
-URI_PROTOCOLS = ('vless', 'trojan', 'vmess', 'ss')
+URI_PROTOCOLS = ('vless', 'trojan', 'vmess', 'ss', HY2)
 
 TRANSPORT_GROUPS = (
     ('all', 'همه'),
@@ -227,6 +248,7 @@ TRANSPORT_GROUPS = (
     ('httpupgrade', 'HTTPUpgrade'),
     ('xhttp', 'XHTTP · H2/H3'),
     ('warp', 'WARP'),
+    ('hy2', 'Hysteria2 · QUIC'),
 )
 
 
@@ -305,19 +327,23 @@ def available_profiles(protocols=None):
     ``protocols`` narrows the list to one user's enabled protocol set; the
     default (``None``) is the whole deployment-wide matrix. A profile the running
     Xray config does not contain (dropped to keep the engine alive) is never
-    returned, so no subscription can point at a dead listener.
+    returned, so no subscription can point at a dead listener. The Hysteria2 node
+    is exempt from the per-user protocol filter on purpose: it is one shared
+    external endpoint, not something a user is enrolled in on this server.
     """
     items = [dict(p, group=EDGE) for p in EDGE_PROFILES]
     if warp_config():
         items.append(dict(WARP_PROFILE, group=WARP))
+    if hysteria_config():
+        items.append(dict(HY2_PROFILE, group=HY2))
     if direct_endpoint() and reality_keys():
         items.extend(dict(p, group=DIRECT) for p in DIRECT_PROFILES)
     served = _served_profiles
     if served is not None:
-        items = [item for item in items if item['id'] in served]
+        items = [item for item in items if item['id'] in served or item['group'] == HY2]
     if protocols is not None:
         wanted = set(protocols)
-        items = [item for item in items if item['protocol'] in wanted]
+        items = [item for item in items if item['protocol'] in wanted or item['group'] == HY2]
     for index, item in enumerate(items):
         item.setdefault('order', index)
         # The internal listener port: what the edge bridges to (and what an
@@ -353,6 +379,7 @@ def catalog():
     """Panel view of the profile set (labels, counts, availability)."""
     direct = direct_endpoint()
     served = _served_profiles
+    hy2 = hysteria_config()
     return {
         'profiles': available_profiles(),
         'served': None if served is None else sorted(served),
@@ -365,6 +392,9 @@ def catalog():
         'direct': direct,
         'reality_sni': REALITY_SNI,
         'warp': bool(warp_config()),
+        'hysteria2': ({'configured': True, 'host': hy2['host'], 'port': hy2['port'],
+                       'sni': hy2['sni'], 'label': hy2['label'],
+                       'obfs': bool(hy2['obfs'])} if hy2 else {'configured': False}),
         'ss_method': SS_METHOD,
         'ss_methods': [c['method'] for c in SS_CIPHERS],
         'paths': edge_paths(),
@@ -443,17 +473,26 @@ def ss_plugin_opts(profile, host, leading_name=True):
     ``v2ray-plugin`` in WebSocket+TLS mode — the one plugin every mainstream
     client implements (sing-box, mihomo, v2rayNG, NekoBox, Shadowrocket).
 
+    The option order follows the spelling the widely deployed clients parse
+    without complaint: the plugin name first, then ``mode``/``path``/``host`` and
+    the bare ``tls`` flag last (``v2ray-plugin;mode=websocket;path=…;host=…;tls``).
+    ``mux=0`` is included because several clients otherwise wrap the connection in
+    an inner mux stream the edge does not terminate.
+
     ``leading_name`` controls the two spellings in use: a SIP002 link carries the
-    plugin name first (``v2ray-plugin;tls;mode=websocket;…``) while sing-box takes
-    bare options (``tls;mode=websocket;…``) next to its own ``plugin`` field.
+    plugin name first, while sing-box takes bare options next to its own
+    ``plugin`` field.
     """
     path = str((profile or {}).get('path') or '')
-    opts = f'tls;mode=websocket;host={host};path={path}'
+    opts = f'mode=websocket;path={path};mux=0;host={host};tls'
     return f'v2ray-plugin;{opts}' if leading_name else opts
 
 
 def node_address(node, profile):
     """The host:port a client dials for this profile."""
+    if profile.get('group') == HY2:
+        hy2 = hysteria_config() or {}
+        return str(hy2.get('host') or ''), int(hy2.get('port') or 443)
     if profile['group'] == DIRECT:
         endpoint = direct_endpoint() or {}
         return str(endpoint.get('host') or node.get('server') or ''), int(endpoint.get('port') or 443)
@@ -479,3 +518,85 @@ def node_provider(node):
     from app.edge.sources import parse_metadata
     raw = parse_metadata((node or {}).get('metadata'))
     return str(raw.get('provider') or (node or {}).get('source') or '').strip().lower()
+
+
+def node_flag(node):
+    """The country flag of a node's location ('' when unknown or switched off)."""
+    if not flags_enabled():
+        return ''
+    from app.edge.sources import parse_metadata
+    from app.subscriptions import flags
+    raw = parse_metadata((node or {}).get('metadata'))
+    return flags.flag_for(raw.get('location') or '', (node or {}).get('name') or '',
+                          raw.get('provider') or (node or {}).get('source') or '')
+
+
+def flags_enabled():
+    """Country flags on node names (on unless an admin switched them off)."""
+    return (_setting('flags_enabled') or '1') != '0'
+
+
+def node_label(node):
+    """``flag name`` for any node list the panel or the status window renders.
+
+    This is the one place a subscription entry name is composed, so the
+    «پرچم کشور روی نام نودها» switch in the panel governs the links, the panel
+    lists and the status window at the same time.
+    """
+    name = str((node or {}).get('name') or '')
+    flag = node_flag(node)
+    return f'{flag} {name}'.strip() if flag else name
+
+
+# ------------------------------------------------------------------- hysteria2
+def hysteria_config():
+    """The external Hysteria2 endpoint an admin configured, if any.
+
+    Hysteria2 is QUIC/UDP and has no Xray inbound, so the panel is explicit about
+    it: this is *your* hysteria2 server, published to clients that speak it. Until
+    a host and a password are saved nothing about it appears in any subscription.
+    """
+    if (_setting('hy2_enabled') or '') != '1':
+        return None
+    host = (_setting('hy2_host') or '').strip()
+    password = (_setting('hy2_password') or '').strip()
+    if not host or not password:
+        return None
+    try:
+        port = int(_setting('hy2_port') or 443)
+    except (TypeError, ValueError):
+        port = 443
+    if not 1 <= port <= 65535:
+        port = 443
+    return {
+        'host': host, 'port': port, 'password': password,
+        'sni': (_setting('hy2_sni') or '').strip() or host,
+        'obfs': (_setting('hy2_obfs') or '').strip().lower(),
+        'obfs_password': (_setting('hy2_obfs_password') or '').strip(),
+        'insecure': (_setting('hy2_insecure') or '') == '1',
+        'label': (_setting('hy2_label') or '').strip(),
+    }
+
+
+# ------------------------------------------------------------------- user limits
+def user_max_configs(user):
+    """How many configs one user may receive (0 = every published combination).
+
+    The value is stored inside the user's ``metadata`` JSON, so no schema
+    migration is needed for a setting that only the generator reads.
+    """
+    raw = (user or {}).get('max_configs')
+    if raw in (None, ''):
+        meta = (user or {}).get('metadata')
+        if isinstance(meta, dict):
+            raw = meta.get('max_configs')
+        elif isinstance(meta, str) and meta.strip().startswith('{'):
+            try:
+                raw = json.loads(meta).get('max_configs')
+            except Exception:
+                raw = None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0

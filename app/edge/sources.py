@@ -34,6 +34,11 @@ from app import runtime
 #   json        a JSON object with the addresses under ``field``
 #   json-list   a JSON array of addresses
 #   aws         AWS ip-ranges.json: ``field`` entries filtered by ``match``
+#   static      the provider ships its known edge addresses here (``seed``):
+#               plenty of CDNs publish no machine-readable list at all, so a
+#               curated seed is the only honest way to offer the location — the
+#               probe still decides which addresses are actually usable.
+# ``live`` False means ``urls`` is documentation only (there is nothing to parse).
 PROVIDERS = (
     {'id': 'cloudflare', 'label': 'Cloudflare', 'format': 'text-lines', 'port': 443, 'tls': 1,
      'urls': ['https://www.cloudflare.com/ips-v4'],
@@ -54,6 +59,66 @@ PROVIDERS = (
      'ip_field': 'ip_prefix', 'match': {'service': 'CLOUDFRONT'}, 'port': 443, 'tls': 1,
      'urls': ['https://ip-ranges.amazonaws.com/ip-ranges.json'],
      'note': 'پیشوندهای CloudFront از فهرست رسمی AWS.'},
+    # --- the wider CDN edge -------------------------------------------------
+    # Every one of these is a real anycast edge in front of a huge share of the
+    # web; a client that dials it with this deployment's Host/SNI reaches the
+    # origin through a network path that may be far better than the panel's own.
+    {'id': 'akamai', 'label': 'Akamai', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://techdocs.akamai.com/origin-ip-acl/docs/update-your-origin-ip-acl'],
+     'seed': ['23.32.0.1', '23.192.0.1', '184.24.0.1', '2.16.0.1', '104.64.0.1'],
+     'note': 'لبهٔ Akamai (بزرگ‌ترین شبکهٔ توزیع محتوا)؛ در ایران معمولاً پایدار و پرسرعت.'},
+    {'id': 'google', 'label': 'Google CDN', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://www.gstatic.com/ipranges/goog.json'],
+     'seed': ['142.250.0.1', '172.217.0.1', '216.58.192.1', '34.96.0.1'],
+     'note': 'لبهٔ گوگل؛ مسیر خیلی خوب برای ایرانسل/همراه اول در ساعات شلوغی.'},
+    {'id': 'azure', 'label': 'Azure Front Door', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://learn.microsoft.com/en-us/azure/frontdoor/front-door-faq'],
+     'seed': ['152.199.0.1', '13.107.0.1', '204.79.197.1'],
+     'note': 'Azure Front Door؛ نقطهٔ ورود مایکروسافت با پوشش خوب در خاورمیانه.'},
+    {'id': 'edgio', 'label': 'Edgio (Limelight)', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://docs.edg.io/guides/configuration'],
+     'seed': ['192.229.128.1', '68.142.64.1', '209.197.0.1'],
+     'note': 'شبکهٔ Edgio/Limelight — هم‌اکنون بخش بزرگی از ترافیک مایکروسافت را حمل می‌کند.'},
+    {'id': 'cdn77', 'label': 'CDN77', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://www.cdn77.com/network'],
+     'seed': ['185.59.220.1', '185.93.0.1', '37.48.0.1'],
+     'note': 'CDN77 (DataCamp) — لبهٔ اروپایی ارزان با PoP های متعدد.'},
+    {'id': 'stackpath', 'label': 'StackPath', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://www.stackpath.com/products/edge-compute/'],
+     'seed': ['151.139.0.1', '68.232.32.1', '209.235.0.1'],
+     'note': 'StackPath؛ برای بعضی شبکه‌های ایران مسیر متفاوتی از کلودفلر می‌دهد.'},
+    {'id': 'cachefly', 'label': 'CacheFly', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://www.cachefly.com/network/'],
+     'seed': ['205.234.175.1', '66.204.0.1'],
+     'note': 'CacheFly — لبهٔ کوچک ولی پایدار با پینگ کم در اروپا.'},
+    {'id': 'keycdn', 'label': 'KeyCDN', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://www.keycdn.com/network'],
+     'seed': ['185.146.168.1', '193.203.0.1'],
+     'note': 'KeyCDN؛ PoP های اروپایی و خاورمیانه.'},
+    {'id': 'imperva', 'label': 'Imperva / Incapsula', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://docs.imperva.com/bundle/cloud-application-security/page/more/ips.htm'],
+     'seed': ['199.83.128.1', '198.143.32.1', '149.126.72.1', '45.60.0.1', '107.154.0.1'],
+     'note': 'Imperva/Incapsula؛ رنج‌های ثابت و قابل‌اعتماد (مناسب فیلترشکن‌های سازمانی).'},
+    {'id': 'sucuri', 'label': 'Sucuri', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://docs.sucuri.net/website-firewall/configuration/operational-questions/'],
+     'seed': ['192.124.249.1', '185.93.228.1'],
+     'note': 'Sucuri Firewall؛ لبهٔ کوچک با رنج‌های ثابت.'},
+    {'id': 'edgecast', 'label': 'Verizon / Edgecast', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://docs.edgecast.com/cdn/Content/About/CDN_IP_Blocks.htm'],
+     'seed': ['72.21.80.1', '152.195.0.1', '192.16.0.1', '68.232.32.1'],
+     'note': 'Verizon Edgecast — لبهٔ قدیمی و پرقدرت سیسکو/ورایزن.'},
+    {'id': 'cdnnetworks', 'label': 'CDNetworks', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://www.cdnetworks.com/'],
+     'seed': ['117.18.0.1', '119.31.0.1'],
+     'note': 'CDNetworks؛ پوشش خوب در آسیا و خاورمیانه.'},
+    {'id': 'quantil', 'label': 'QUANTIL (ChinaNetCenter)', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://www.quantil.com/network/'],
+     'seed': ['117.18.232.1', '124.108.0.1'],
+     'note': 'QUANTIL؛ لبهٔ چینی‌-آمریکایی برای مسیرهای جایگزین.'},
+    {'id': 'chinacache', 'label': 'ChinaCache', 'format': 'static', 'live': False, 'port': 443, 'tls': 1,
+     'urls': ['https://en.chinacache.com/'],
+     'seed': ['220.181.0.1', '118.26.0.1'],
+     'note': 'ChinaCache؛ آخرین گزینهٔ مسیر آسیایی.'},
     {'id': 'custom', 'label': 'آی‌پی دستی', 'format': 'manual', 'port': 443, 'tls': 1, 'urls': [],
      'note': 'هر آی‌پی تمیزی که خودتان دارید را اینجا وارد کنید.'},
 )
@@ -161,10 +226,20 @@ def sample(cidrs, limit=64, per_net=4):
 
 
 def fetch(provider_id, limit=64, per_net=4):
-    """Download a provider's published ranges and return sample addresses."""
+    """The clean addresses one provider can offer right now.
+
+    Providers with a published, machine-readable list are downloaded (and the
+    answer is the real sample of their ranges). Providers that publish nothing
+    parsable answer from their curated seed instead — the probe still decides
+    which of those addresses is actually usable, so a stale seed degrades into a
+    failed ping rather than into a dead link.
+    """
     spec = provider(provider_id)
     if not spec or spec.get('format') == 'manual':
         return [], 'manual provider'
+    if spec.get('format') == 'static':
+        seed = [str(item) for item in (spec.get('seed') or [])]
+        return sample(seed, limit=limit, per_net=per_net), None if seed else 'empty seed'
     errors = []
     for url in spec.get('urls') or []:
         try:
@@ -282,6 +357,12 @@ def provider_summary():
         stats = counts.get(spec['id']) or {}
         out.append({**{k: spec[k] for k in ('id', 'label', 'note', 'format', 'port')},
                     'total': int(stats.get('total') or 0), 'healthy': int(stats.get('healthy') or 0),
+                    # ``seeded`` providers ship their own known edge addresses (the
+                    # CDNs that publish no parsable list); ``scannable`` is what the
+                    # panel uses to decide whether the provider can be dialled at all.
+                    'seeded': spec.get('format') == 'static',
+                    'seed_count': len(spec.get('seed') or []),
+                    'docs': (spec.get('urls') or [''])[0],
                     'scannable': spec.get('format') != 'manual'})
     return out
 
@@ -371,6 +452,9 @@ def normalize_source(payload, existing=None):
         'ips': cleaned,
         'max': max(1, min(maximum, MAX_SOURCE_NODES)),
         'enabled': int(bool(data.get('enabled', 1))),
+        # Which pack (or import) created this location, so a pack can be listed,
+        # re-installed idempotently or removed as a whole.
+        'pack': _slug(data.get('pack') or '', '') or '',
         'created_at': int(data.get('created_at') or time.time()),
     }
 

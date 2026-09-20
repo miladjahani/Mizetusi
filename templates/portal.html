@@ -49,6 +49,31 @@
   .big-bar.bad i{background:linear-gradient(90deg,#ff8b9c,#ff6b81)}
   .portal-foot{text-align:center;color:var(--muted-2);font-size:10.5px;line-height:2}
   .tbtn svg,.copy-btn svg,.icon-btn svg{width:13px;height:13px}
+  /* Sublink lists are grouped by client engine and shipped collapsed: the page
+     stays short, and nobody pastes a YAML link into an Xray client. */
+  details.fam{border-radius:18px;padding:0;overflow:hidden}
+  details.fam>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;padding:14px}
+  details.fam>summary::-webkit-details-marker{display:none}
+  details.fam .fam-title{font-size:13.5px;font-weight:600}
+  details.fam[open] .fam-title{color:#bfe2ff}
+  details.fam .fam-meta{font-size:10.5px;color:var(--muted);font-family:var(--mono)}
+  details.fam .reco{font-size:9.5px;padding:3px 7px;border-radius:99px;border:1px solid rgba(90,209,255,.35);
+    background:rgba(90,209,255,.1);color:#bfe2ff}
+  details.fam .chev{width:15px;height:15px;margin-inline-start:auto;color:var(--muted);transition:transform .25s var(--ease)}
+  details.fam[open] .chev{transform:rotate(180deg)}
+  .fam-body{padding:0 14px 15px;display:flex;flex-direction:column;gap:10px}
+  .fam-hint{font-size:10.5px;color:var(--muted);line-height:1.8;margin:0}
+  .client-row{border-top:1px solid var(--line);padding-top:11px;display:flex;flex-direction:column;gap:7px}
+  .client-row:first-of-type{border-top:0;padding-top:0}
+  .client-row .row-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .client-row .row-head b{font-size:12.5px}
+  .client-row .plat{font-size:10px;color:var(--muted)}
+  details.alt>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted)}
+  details.alt>summary::-webkit-details-marker{display:none}
+  details.alt[open]>summary{color:#bfe2ff}
+  details.alt .chips{margin-top:8px}
+  .loc-chips .copy-btn{padding:7px 11px;font-size:11px}
+  .flag{font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif}
 </style>
 </head>
 <body>
@@ -60,6 +85,8 @@
   <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3 5.5 13.4h5L10 21l8.2-10.6h-5z"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M12 7.6V12l3 1.8"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 13.4a3.6 3.6 0 0 0 5.1 0l3-3a3.6 3.6 0 0 0-5.1-5.1l-1 1"/><path d="M13.4 10.6a3.6 3.6 0 0 0-5.1 0l-3 3a3.6 3.6 0 0 0 5.1 5.1l1-1"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9.5 6 6 6-6"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6c2.2 2.3 3.4 5.2 3.4 8.4S14.2 18.1 12 20.4c-2.2-2.3-3.4-5.2-3.4-8.4S9.8 5.9 12 3.6z"/></symbol>
 </defs></svg>
 
 <div class="aurora"><span></span><span></span><span></span></div>
@@ -77,9 +104,14 @@
     <div class="top-actions">
       <span class="pill {% if p.allowed %}ok{% else %}bad{% endif %}" id="statusPill"><i class="dot{% if not p.allowed %} bad{% endif %}"></i> <span id="statusText">{{ p.reason_label }}</span></span>
       <span class="pill info"><svg width="13" height="13"><use href="#i-clock"/></svg> <span id="clock">--:--:--</span></span>
+      {% if p.support_url %}<a class="tbtn" href="{{ p.support_url }}" target="_blank" rel="noopener">پشتیبانی</a>{% endif %}
       <button class="tbtn" id="btnRefresh"><svg><use href="#i-refresh"/></svg> بروزرسانی</button>
     </div>
   </header>
+
+  {% if p.banner %}
+  <div class="notice info">{{ p.banner }}</div>
+  {% endif %}
 
   {% if not p.allowed %}
   <div class="notice">
@@ -102,6 +134,7 @@
       <div class="u-mini"><div class="lbl">دستگاه‌های همزمان</div><div class="val">{{ p.ip_limit or '∞' }}</div></div>
       <div class="u-mini"><div class="lbl">درخواست‌ها</div><div class="val">{{ p.used_req }}<small>از {{ p.limit_req or '∞' }}</small></div></div>
       <div class="u-mini"><div class="lbl">نودهای آنلاین</div><div class="val"><span id="nodesOnline">{{ p.nodes_online }}</span><small>از {{ p.nodes_total }}</small></div></div>
+      <div class="u-mini"><div class="lbl">تعداد کانفیگ</div><div class="val">{{ p.config_count }}{% if p.max_configs %}<small>سقف {{ p.max_configs }}</small>{% else %}<small>بدون سقف</small>{% endif %}</div></div>
       <div class="u-mini"><div class="lbl">پروتکل‌های فعال</div><div class="val">{{ p.transports|length }}<small>ترکیب نود × پروتکل</small></div></div>
       <div class="u-mini"><div class="lbl">شروع از اولین اتصال</div><div class="val" style="font-size:13px">{{ 'فعال' if p.start_on_first_connect else 'خاموش' }}</div></div>
     </div>
@@ -125,47 +158,91 @@
     </div>
   </section>
 
+  {% if p.locations %}
   <section>
-    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-shield"/></svg> سابلینک اختصاصی هر کلاینت <span class="count">{{ p.clients|length }} کلاینت</span></h2>
-    <div class="card-grid">
-      {% for c in p.clients %}
-      <div class="glass client-card">
-        <div class="top">
-          <b>{{ c.name }}</b>
-          <span class="plat">{{ c.platform }}</span>
-        </div>
-        <span class="pill info" style="align-self:flex-start">{{ c.format_label }}</span>
-        {% if c.note %}<p class="note">{{ c.note }}</p>{% endif %}
-        <div class="link-box">
-          <div class="lb-main"><code>{{ c.url }}</code></div>
-          <button class="copy-btn" data-copy="{{ c.url }}" title="کپی سابلینک"><svg><use href="#i-copy"/></svg></button>
-        </div>
-        <div class="acts">
-          {% if c.download %}<a class="tbtn" href="{{ c.download }}" target="_blank" rel="noopener"><svg><use href="#i-download"/></svg> دانلود کلاینت</a>{% endif %}
-        </div>
-        {% if c.alternatives %}
-        <div class="chips">
-          {% for alt in c.alternatives %}
-          <button class="copy-btn" data-copy="{{ alt.url }}"><svg><use href="#i-copy"/></svg> {{ alt.label }}</button>
+    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-globe"/></svg> لوکیشن‌ها <span class="count">هر کشور یک سابلینک جدا</span></h2>
+    <details class="glass fam">
+      <summary>
+        <span class="fam-title">سابلینک لوکیشن‌محور</span>
+        <span class="fam-meta">{{ p.locations|length }} لوکیشن</span>
+        <svg class="chev"><use href="#i-chevron"/></svg>
+      </summary>
+      <div class="fam-body">
+        <div class="chips loc-chips">
+          {% for loc in p.locations %}
+          <button class="copy-btn" data-copy="{{ loc.url }}"><span class="flag">{{ loc.flag }}</span> {{ loc.label }} · {{ loc.nodes }} نود</button>
           {% endfor %}
         </div>
-        {% endif %}
+        <p class="fam-hint">با انتخاب یک لوکیشن، فقط نودهای همان کشور در سابلینک می‌آیند — مناسب وقتی یک لوکیشن خاص روی شبکهٔ شما سریع‌تر است.</p>
       </div>
-      {% endfor %}
-    </div>
+    </details>
+  </section>
+  {% endif %}
+
+  <section>
+    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-shield"/></svg> سابلینک اختصاصی هر کلاینت
+      <span class="count">{{ p.clients|length }} کلاینت در {{ p.client_groups|length }} خانواده</span></h2>
+    {% for g in p.client_groups %}
+    <details class="glass fam"{% if loop.first %} open{% endif %}>
+      <summary>
+        <span class="fam-title">{{ g.label }}</span>
+        <span class="fam-meta">{{ g.clients|length }} کلاینت</span>
+        {% if p.default_format in g.formats %}<span class="reco">پیشنهادی</span>{% endif %}
+        <svg class="chev"><use href="#i-chevron"/></svg>
+      </summary>
+      <div class="fam-body">
+        <p class="fam-hint">{{ g.hint }}</p>
+        {% for c in g.clients %}
+        <div class="client-row">
+          <div class="row-head">
+            <b>{{ c.name }}</b>
+            <span class="plat">{{ c.platform }}</span>
+            <span class="pill info" style="padding:2px 8px;font-size:9.5px">{{ c.format_label }}</span>
+            {% if c.download %}<a class="tbtn" href="{{ c.download }}" target="_blank" rel="noopener"><svg><use href="#i-download"/></svg> دانلود کلاینت</a>{% endif %}
+          </div>
+          <div class="link-box">
+            <div class="lb-main"><code>{{ c.url }}</code></div>
+            <button class="copy-btn" data-copy="{{ c.url }}" title="کپی سابلینک"><svg><use href="#i-copy"/></svg></button>
+          </div>
+          {% if c.note %}<p class="fam-hint">{{ c.note }}</p>{% endif %}
+          {% if c.alternatives %}
+          <details class="alt">
+            <summary><svg width="12" height="12"><use href="#i-chevron"/></svg> سایر فرمت‌های همین کلاینت ({{ c.alternatives|length }})</summary>
+            <div class="chips">
+              {% for alt in c.alternatives %}
+              <button class="copy-btn" data-copy="{{ alt.url }}"><svg><use href="#i-copy"/></svg> {{ alt.label }}</button>
+              {% endfor %}
+            </div>
+          </details>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% endfor %}
   </section>
 
   <section>
     <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-link"/></svg> سابلینک به تفکیک پروتکل و ترنسپورت <span class="count">{{ p.transports|length }} ترکیب</span></h2>
-    <div class="glass sub-card">
+    <details class="glass fam">
+      <summary>
+        <span class="fam-title">لیست ترکیب‌های نود × پروتکل</span>
+        <span class="fam-meta">{{ p.transports|length }} لینک</span>
+        <svg class="chev"><use href="#i-chevron"/></svg>
+      </summary>
+      <div class="fam-body">
       {% for t in p.transports %}
       <div class="link-box">
         <div class="lb-main"><b>{{ t.label }} <span class="muted" style="font-weight:400">{{ t.protocol|upper }} · {{ t.network }}</span></b><code>{{ t.url }}</code></div>
         <button class="copy-btn" data-copy="{{ t.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
       </div>
       {% endfor %}
-      <p class="note">هر لینک فقط همان پروتکل را روی همه نودهای سالم منتشر می‌کند؛ «اتصال هوشمند» همه ترکیب‌ها را یکجا می‌دهد. کلاینت با هر بار بروزرسانی، نودها و حجم را تازه می‌گیرد.</p>
-    </div>
+      {% if p.hysteria.configured %}
+      <p class="fam-hint">نود <b>Hysteria2</b> روی {{ p.hysteria.host }}:{{ p.hysteria.port }} فعال است و در سابلینک‌های sing-box، Clash و لینک عادی می‌آید (کلاینت‌های Hiddify، NekoBox، Karing و v2rayN از آن پشتیبانی می‌کنند).</p>
+      {% endif %}
+      <p class="fam-hint">هر لینک فقط همان پروتکل را روی همه نودهای سالم منتشر می‌کند؛ «اتصال هوشمند» همه ترکیب‌ها را یکجا می‌دهد. کلاینت با هر بار بروزرسانی، نودها و حجم را تازه می‌گیرد. نودهای Shadowsocks با روش <b>aes-256-gcm</b> هم منتشر می‌شوند تا در همهٔ کلاینت‌ها (نه فقط Happ) دیده و پینگ شوند.</p>
+      </div>
+    </details>
   </section>
 
   <section>
@@ -175,10 +252,10 @@
       <div class="node-row">
         <div class="node-icon{% if n.kind == 'cloudflare' %} cf{% endif %}">{{ 'CF' if n.kind == 'cloudflare' else 'RW' }}</div>
         <div class="node-main">
-          <b>{{ n.name }}</b>
+          <b>{% if p.flags and n.flag %}<span class="flag">{{ n.flag }}</span> {% endif %}{{ n.name }}</b>
           <span>{{ n.server }}:{{ n.port }}</span>
         </div>
-        <span class="kind {% if n.kind == 'cloudflare' %}cf{% else %}rw{% endif %}">{{ 'Cloudflare IP' if n.kind == 'cloudflare' else 'Railway' }}</span>
+        <span class="kind {% if n.kind == 'cloudflare' %}cf{% else %}rw{% endif %}">{% if n.location %}{{ n.location|upper }} · {% endif %}{{ 'Cloudflare IP' if n.kind == 'cloudflare' else ('Edge' if n.kind == 'edge' else 'Railway') }}</span>
         <span class="lat {% if not n.online %}off{% elif n.latency_ms < 120 %}good{% elif n.latency_ms < 320 %}mid{% else %}bad{% endif %}" data-latency="{{ n.name }}">
           {% if n.online %}{{ '%.0f'|format(n.latency_ms) }} ms{% else %}قطع{% endif %}
         </span>

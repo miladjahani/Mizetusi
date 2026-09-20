@@ -27,10 +27,10 @@ const worker = (await import(pathToFileURL(file).href)).default;
 // Every path the panel publishes (ws + cdn shapes, all Shadowsocks ciphers).
 const EDGE_PATHS = [
   '/ws', '/ws/vless', '/ws/vmess', '/ws/trojan',
-  '/ws/ss', '/ws/ss-aes256', '/ws/ss-chacha', '/ws/ss-legacy',
+  '/ws/ss-classic', '/ws/ss', '/ws/ss-aes256', '/ws/ss-chacha', '/ws/ss-legacy',
   '/ws/warp',
   '/cdn/vless', '/cdn/vmess', '/cdn/trojan',
-  '/cdn/ss', '/cdn/ss-aes256', '/cdn/ss-chacha', '/cdn/ss-legacy',
+  '/cdn/ss-classic', '/cdn/ss', '/cdn/ss-aes256', '/cdn/ss-chacha', '/cdn/ss-legacy',
 ];
 const ORIGIN = 'https://nexus-production.up.railway.app';
 const EDGE = 'https://nexus-edge.example.workers.dev';

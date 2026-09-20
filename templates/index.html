@@ -49,6 +49,7 @@
   <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="12" r="4"/><path d="M12 12h8.5M18 12v3M15.5 12v2.4"/></symbol>
   <symbol id="i-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></symbol>
   <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 6.5h12M8 12h12M8 17.5h12M4 6.5h.01M4 12h.01M4 17.5h.01"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9.5 6 6 6-6"/></symbol>
 </defs></svg>
 
 <div class="aurora"><span></span><span></span><span></span></div>
@@ -308,6 +309,168 @@
         <div id="cfBars" class="bar-list" style="margin-bottom:12px"></div>
         <div class="table-wrap">
           <table><thead><tr><th>IP</th><th>منبع</th><th>تاخیر</th><th>وضعیت</th><th>آخرین Probe</th></tr></thead><tbody id="cfTable"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CUSTOMIZATION ================= -->
+    <section class="section" id="section-customize">
+      <div class="grid-2b">
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>ظاهر و متن پنجرهٔ وضعیت</h2><p class="sub">هر چیزی که کاربر نهایی می‌بیند: بنر، لینک پشتیبانی، پرچم کشورها و سابلینک پیشنهادی</p></div><span class="pill" id="czTag">—</span></div>
+          <label>متن بنر بالای پنجرهٔ وضعیت <span class="hint">خالی = بدون بنر</span></label>
+          <input id="czBanner" placeholder="مثال: تمدید اشتراک از طریق پشتیبانی تلگرام" maxlength="200">
+          <label>لینک پشتیبانی</label>
+          <input id="czSupport" dir="ltr" placeholder="https://t.me/your_support">
+          <div class="field-grid">
+            <div><label>نام برنامه <span class="hint">روی آیکون نصب‌شده و عنوان پنل</span></label><input id="czAppName" dir="ltr" placeholder="NEXUS"></div>
+            <div><label>فرمت پیشنهادی <span class="hint">خانوادهٔ همان کلاینت در پنجرهٔ وضعیت برجسته می‌شود</span></label>
+              <select id="czFormat"><option value="auto">عادی (متن ساده)</option><option value="base64">Base64 (V2Ray)</option><option value="singbox">sing-box JSON</option><option value="clash">Clash / Mihomo</option></select></div>
+          </div>
+          <div class="field-grid">
+            <div><label>رنگ اصلی</label><input id="czAccent" dir="ltr" placeholder="#5ad1ff"></div>
+            <div><label>رنگ دوم</label><input id="czAccent2" dir="ltr" placeholder="#8b7bff"></div>
+          </div>
+          <div class="switch-row"><div class="txt"><b>پرچم کشور روی نام نودها</b><span>نام هر نود در سابلینک با پرچم کشورش می‌آید (🇩🇪 آلمان · ...)</span></div>
+            <div class="switch on" id="czFlags"></div></div>
+          <div class="actions">
+            <button class="primary" id="czSave">ذخیره شخصی‌سازی</button>
+            <button class="secondary" id="czReload">بازخوانی</button>
+          </div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>پیش‌فرض ساخت کاربر</h2><p class="sub">تعداد کانفیگی که کاربر سریع‌ساخت به‌طور پیش‌فرض می‌گیرد</p></div></div>
+          <div class="field-grid">
+            <div><label>تعداد کانفیگ پیش‌فرض <span class="hint">خالی = بدون سقف</span></label><input id="czMaxConfigs" type="number" min="1" max="500" dir="ltr" placeholder="12"></div>
+            <div><label>وضعیت فعلی</label><input id="czMaxState" dir="ltr" value="—" disabled></div>
+          </div>
+          <p class="muted">تعداد کانفیگ همان تعداد ورودی‌هایی است که سابلینک کاربر برمی‌گرداند (نود × پروتکل). هنگام ساخت یا ویرایش هر کاربر هم می‌توان آن را جداگانه تعیین کرد.</p>
+          <div class="panel-head" style="margin-top:14px"><div><h3>پیش‌نمایش</h3><p class="sub">همان چیزی که کاربر در پنجرهٔ وضعیت می‌بیند</p></div></div>
+          <div id="czPreview"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= NETWORK TOOLS ================= -->
+    <section class="section" id="section-tools">
+      <div class="panel glass">
+        <div class="panel-head">
+          <div><h2>CDN Scanner Pro</h2><p class="sub">کاوشگر چند-شبکه: providerها را انتخاب کنید، آی‌پی‌های لبه را اسکن کنید و نتیجه با پینگ واقعی به کاتالوگ نودها می‌رود</p></div>
+          <div class="actions" style="margin:0">
+            <button class="secondary compact" id="tlSelectAll">انتخاب همه</button>
+            <button class="secondary compact" id="tlSelectNone">حذف انتخاب</button>
+            <button class="primary compact" id="tlScan">اسکن providerهای انتخاب‌شده</button>
+          </div>
+        </div>
+        <div class="stats" style="margin-top:0" id="tlProviderStats"></div>
+        <div class="toolbar">
+          <div class="search"><svg><use href="#i-search"/></svg><input id="tlProviderSearch" placeholder="جست‌وجوی نام provider…"></div>
+          <span class="pill info" id="tlProviderCount">—</span>
+        </div>
+        <div id="tlProviders" class="stagger"></div>
+        <div id="tlScanResult"></div>
+      </div>
+
+      <div class="grid-2b">
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>بررسی دسترسی (TCP / TLS)</h2><p class="sub">از سمت همین سرور به یک هاست:پورت وصل می‌شود و تاخیر دست‌دادن TLS را می‌گوید</p></div><span class="pill" id="tlCheckTag">—</span></div>
+          <div class="field-grid">
+            <div><label>هاست یا آدرس</label><input id="tlHost" dir="ltr" placeholder="cdn.example.com"></div>
+            <div><label>پورت</label><input id="tlPort" type="number" min="1" max="65535" value="443" dir="ltr"></div>
+            <div><label>SNI <span class="hint">اختیاری — برای آی‌پی تمیز</span></label><input id="tlSni" dir="ltr" placeholder="worker.example.workers.dev"></div>
+            <div><label>دست‌دادن TLS</label><select id="tlTls"><option value="1">فعال</option><option value="0">فقط TCP</option></select></div>
+          </div>
+          <div class="actions"><button class="primary" id="tlCheck">بررسی کن</button></div>
+          <div class="kv-list" id="tlCheckOut"></div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>جست‌وجوی DNS (DoH)</h2><p class="sub">مقاوم در برابر DNS آلودهٔ محلی — از Cloudflare و Google استفاده می‌کند</p></div></div>
+          <label>دامنه</label>
+          <input id="tlDnsName" dir="ltr" placeholder="example.com">
+          <div class="actions"><button class="primary" id="tlDns">جست‌وجو</button></div>
+          <div class="kv-list" id="tlDnsOut"></div>
+          <div class="panel-head" style="margin-top:16px"><div><h3>محاسبه‌گر CIDR</h3><p class="sub">تعداد آدرس‌ها و نمونه‌ای از آی‌پی‌هایی که اسکن می‌شوند</p></div></div>
+          <label>آی‌پی یا CIDR <span class="hint">چند مقدار با کاما</span></label>
+          <input id="tlCidr" dir="ltr" placeholder="104.16.0.0/13, 151.101.0.0/16">
+          <div class="actions"><button class="primary" id="tlCidrRun">محاسبه</button></div>
+          <div class="kv-list" id="tlCidrOut"></div>
+        </div>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head">
+          <div><h2>تحلیل سابلینک</h2><p class="sub">متن کانفیگ‌ها یا آدرس سابلینک را بدهید: پروتکل‌ها، هاست‌ها و پرچم کشورها را جدا می‌کند و در صورت خواستن، به لوکیشن تبدیل می‌کند</p></div>
+          <div class="actions" style="margin:0">
+            <button class="secondary compact" id="tlParseRun">تحلیل</button>
+            <button class="primary compact" id="tlParseImport">ساخت لوکیشن از این سابلینک</button>
+          </div>
+        </div>
+        <div class="field-grid">
+          <div><label>آدرس سابلینک <span class="hint">یا خالی بگذارید و متن را پایین بریزید</span></label><input id="tlSubUrl" dir="ltr" placeholder="https://subs.example.com/sub/xxxx"></div>
+          <div><label>حداکثر آی‌پی هر لوکیشن</label><input id="tlImportMax" type="number" min="1" max="30" value="3" dir="ltr"></div>
+        </div>
+        <label>متن کانفیگ‌ها</label>
+        <textarea id="tlSubText" rows="4" dir="ltr" placeholder="vless://…  یا متن Base64 سابلینک"></textarea>
+        <div id="tlParseOut" style="margin-top:12px"></div>
+      </div>
+    </section>
+
+    <!-- ================= ADVANCED ================= -->
+    <section class="section" id="section-advanced">
+      <div class="grid-2b">
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>نود Hysteria2</h2><p class="sub">Hysteria2 روی QUIC کار می‌کند و در Xray اینباند ندارد؛ آدرس سرور هاستریزیای خودتان را بدهید تا در سابلینک‌ها منتشر شود</p></div><span class="pill" id="adHy2Tag">—</span></div>
+          <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>تا فعال نشود هیچ چیزی در سابلینک‌ها اضافه نمی‌شود</span></div>
+            <div class="switch" id="adHy2Enabled"></div></div>
+          <div class="field-grid">
+            <div><label>هاست</label><input id="adHy2Host" dir="ltr" placeholder="hy2.example.com"></div>
+            <div><label>پورت <span class="hint">معمولاً 443 یا 8443</span></label><input id="adHy2Port" type="number" min="1" max="65535" value="443" dir="ltr"></div>
+            <div><label>رمز / مسیر</label><input id="adHy2Password" type="password" dir="ltr" placeholder="خالی = بدون تغییر"></div>
+            <div><label>SNI <span class="hint">خالی = همان هاست</span></label><input id="adHy2Sni" dir="ltr"></div>
+            <div><label>Obfs</label><select id="adHy2Obfs"><option value="">بدون obfs</option><option value="salamander">salamander</option></select></div>
+            <div><label>Obfs password</label><input id="adHy2ObfsPassword" type="password" dir="ltr"></div>
+            <div><label>برچسب نود</label><input id="adHy2Label" dir="ltr" placeholder="Hysteria2 · DE"></div>
+            <div><label>گواهی نامعتبر را بپذیر</label><select id="adHy2Insecure"><option value="0">نه (امن)</option><option value="1">بله</option></select></div>
+          </div>
+          <div class="actions">
+            <button class="primary" id="adHy2Save">ذخیره و انتشار</button>
+            <button class="secondary" id="adHy2Disable">غیرفعال</button>
+            <button class="danger-btn" id="adHy2Clear">حذف نود</button>
+          </div>
+          <div class="kv-list" id="adHy2Info"></div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>لوکیشن‌های آماده (چند لوکیشن)</h2><p class="sub">با یک کلیک، برای هر کشور یک دامنهٔ تمیز ساخته می‌شود و کل ماتریس پروتکل‌ها روی آن منتشر می‌گردد</p></div></div>
+          <div id="adPacks"></div>
+          <label>دامنه‌های جایگزین <span class="hint">اختیاری — هر خط/کاما یک دامنه، به ترتیب روی لوکیشن‌ها می‌نشیند</span></label>
+          <input id="adPackHosts" dir="ltr" placeholder="cdn1.example.com, cdn2.example.com">
+        </div>
+      </div>
+
+      <div class="grid-2b" style="margin-top:13px">
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>ورود لوکیشن از سابلینک</h2><p class="sub">آدرس هر سابلینکی را بدهید؛ هاست‌های داخلش با پرچم کشور به لوکیشن تبدیل می‌شوند</p></div></div>
+          <label>آدرس سابلینک</label>
+          <input id="adImportUrl" dir="ltr" placeholder="https://subs.example.com/sub/xxxxxxx">
+          <div class="field-grid">
+            <div><label>provider</label><select id="adImportProvider"></select></div>
+            <div><label>حداکثر آی‌پی هر لوکیشن</label><input id="adImportMax" type="number" min="1" max="30" value="3" dir="ltr"></div>
+          </div>
+          <div class="actions">
+            <button class="secondary" id="adImportPreview">پیش‌نمایش</button>
+            <button class="primary" id="adImportApply">ساخت لوکیشن‌ها</button>
+          </div>
+          <div id="adImportOut"></div>
+        </div>
+        <div class="panel glass">
+          <div class="panel-head"><div><h2>ترنسپورت‌های منتشرشده</h2><p class="sub">چه چیزی این هسته واقعاً سرو می‌کند و چه چیزی کنار گذاشته شده است</p></div>
+            <button class="secondary compact" id="adProfilesReload">بروزرسانی</button></div>
+          <div class="kv-list" id="adProfiles"></div>
+          <div class="actions">
+            <button class="secondary" id="adRotateSs">چرخش کلید شادوساکس</button>
+            <button class="secondary" id="adSyncNodes">Sync نودها و پینگ</button>
+          </div>
+          <p class="muted">شادوساکس با روش سازگار <b>aes-256-gcm</b> هم منتشر می‌شود تا در همهٔ کلاینت‌ها (v2rayNG، NekoBox، Hiddify، Clash، نه فقط Happ) در لیست بیاید و پینگ بگیرد.</p>
         </div>
       </div>
     </section>

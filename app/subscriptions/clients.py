@@ -3,7 +3,11 @@
 Everything here is data, not logic:
 
 * ``CLIENTS`` tells the panel which subscription format each client imports and
-  where the end user downloads it.
+  where the end user downloads it. Every client also belongs to a ``family``
+  (core / Xray / sing-box / Clash-Mihomo / tool cores), which is what the sublink
+  lists are grouped by: a Clash client is only ever handed YAML, an Xray client
+  only Base64 or plain text, so nobody has to guess which of a dozen links to
+  paste.
 * ``PRESETS`` describes the "best settings" bundles the quick-create button
   applies (fragment tuning, fingerprint, limits, expiry...).
 
@@ -41,86 +45,116 @@ FORMAT_LABELS = {
     'httpupgrade': 'HTTPUpgrade (نیازمند پورت اختصاصی)',
 }
 
+# Client engines, in the order the sublink sections are listed. ``order`` drives
+# the grouping in the panel and in the public status window; ``label``/``hint``
+# explain which link belongs to which family so an end user never mixes a YAML
+# link into an Xray client (or the other way around).
+FAMILIES = [
+    {'id': 'core', 'order': 0, 'label': 'شروع سریع', 'hint': 'یک لینک برای همه‌چیز؛ سریع‌ترین نود بر اساس پینگ، مناسب هر کلاینتی.'},
+    {'id': 'xray', 'order': 1, 'label': 'خانواده Xray — Base64 / متن ساده',
+     'hint': 'v2rayNG، Exclusive، Amnezia، Streisand، Shadowrocket، V2Box و FoXray سابلینک Base64 (یا متن ساده) می‌خوانند.'},
+    {'id': 'singbox', 'order': 2, 'label': 'خانواده sing-box — JSON',
+     'hint': 'Hiddify، NekoBox، NekoBoxPlus، Karing و خود sing-box خروجی sing-box JSON را مستقیم ایمپورت می‌کنند.'},
+    {'id': 'mihomo', 'order': 3, 'label': 'خانواده Clash / Mihomo — فقط YAML',
+     'hint': 'Bettbox، Clash Verge، FlClash، Mihomo و Stash فقط فایل YAML می‌گیرند؛ لینک Base64 روی این کلاینت‌ها کار نمی‌کند.'},
+    {'id': 'tools', 'order': 4, 'label': 'هسته‌ها و ابزارها', 'hint': 'خروجی خام برای هسته‌ها، ربات‌ها و ست‌کردن دستی.'},
+]
+
+FAMILY_IDS = [item['id'] for item in FAMILIES]
+
+# The format a family publishes first — a client can never drift away from it.
+FAMILY_FORMAT = {'core': 'auto', 'xray': 'base64', 'singbox': 'singbox', 'mihomo': 'clash', 'tools': 'xray'}
+
+
+def family_by_id(family_id):
+    for item in FAMILIES:
+        if item['id'] == family_id:
+            return item
+    return FAMILIES[0]
+
+
 # One row per client. ``format`` is what the client imports best, ``alt`` lists
-# the extra formats it also accepts (offered as secondary chips).
+# the extra formats it also accepts (offered behind «سایر فرمت‌ها»), and
+# ``family`` is the engine that format belongs to — the key the sublink lists are
+# grouped by in the panel and in the public status window.
 CLIENTS = [
     {
-        'id': 'smart', 'name': 'اتصال هوشمند', 'platform': 'همه پلتفرم‌ها', 'format': 'auto', 'alt': [],
+        'id': 'smart', 'name': 'اتصال هوشمند', 'platform': 'همه پلتفرم‌ها', 'format': 'auto', 'alt': [], 'family': 'core',
         'download': '',
         'note': 'سریع‌ترین نود بر اساس پینگ واقعی؛ مناسب شروع سریع.',
     },
     {
-        'id': 'v2rayng', 'name': 'v2rayNG', 'platform': 'Android', 'format': 'base64', 'alt': ['all', 'vless'],
+        'id': 'v2rayng', 'name': 'v2rayNG', 'platform': 'Android', 'format': 'base64', 'alt': ['all', 'vless'], 'family': 'xray',
         'download': 'https://github.com/2dust/v2rayNG/releases/latest',
         'note': 'پرکاربردترین کلاینت اندروید؛ فرگمنت، sni و vless را کامل پشتیبانی می‌کند.',
     },
     {
-        'id': 'bettbox', 'name': 'Bettbox', 'platform': 'Android', 'format': 'base64', 'alt': ['all', 'vless'],
+        'id': 'bettbox', 'name': 'Bettbox', 'platform': 'Android', 'format': 'clash', 'alt': [], 'family': 'mihomo',
         'download': 'https://play.google.com/store/search?q=bettbox&c=apps',
-        'note': 'کلاینت فارسی اندروید؛ سابلینک Base64 و فرگمنت را می‌خواند.',
+        'note': 'کلاینت فارسی اندروید روی هسته Clash/Mihomo؛ فقط سابلینک YAML را ایمپورت می‌کند.',
     },
     {
-        'id': 'exclusive', 'name': 'Exclusive', 'platform': 'Android', 'format': 'base64', 'alt': ['all', 'vless'],
+        'id': 'exclusive', 'name': 'Exclusive', 'platform': 'Android', 'format': 'base64', 'alt': ['all', 'vless'], 'family': 'xray',
         'download': 'https://play.google.com/store/search?q=exclusive%20vpn%20v2ray&c=apps',
         'note': 'کلاینت اندروید؛ از سابلینک استاندارد Base64 استفاده می‌کند.',
     },
     {
-        'id': 'nekoboxplus', 'name': 'NekoBoxPlus', 'platform': 'Android', 'format': 'singbox', 'alt': ['base64', 'all'],
+        'id': 'nekoboxplus', 'name': 'NekoBoxPlus', 'platform': 'Android', 'format': 'singbox', 'alt': ['base64', 'all'], 'family': 'singbox',
         'download': 'https://github.com/search?q=nekoboxplus&type=repositories',
         'note': 'هسته sing-box؛ خروجی sing-box JSON یا سابلینک Base64.',
     },
     {
-        'id': 'amnezia', 'name': 'Amnezia VPN', 'platform': 'Android · iOS · دسکتاپ', 'format': 'base64', 'alt': ['all', 'reality'],
+        'id': 'amnezia', 'name': 'Amnezia VPN', 'platform': 'Android · iOS · دسکتاپ', 'format': 'base64', 'alt': ['all', 'reality'], 'family': 'xray',
         'download': 'https://github.com/amnezia-vpn/amnezia-client/releases/latest',
         'note': 'کلاینت Amnezia؛ پروفایل VLESS/Reality و سابلینک Base64 را ایمپورت می‌کند.',
     },
     {
-        'id': 'nekobox', 'name': 'NekoBox', 'platform': 'Android', 'format': 'singbox', 'alt': ['base64'],
+        'id': 'nekobox', 'name': 'NekoBox', 'platform': 'Android', 'format': 'singbox', 'alt': ['base64'], 'family': 'singbox',
         'download': 'https://github.com/MatsuriDayo/NekoBoxForAndroid/releases/latest',
         'note': 'خانواده sing-box؛ بهترین نتیجه با خروجی sing-box.',
     },
     {
-        'id': 'hiddify', 'name': 'Hiddify', 'platform': 'Android · iOS · دسکتاپ', 'format': 'singbox', 'alt': ['base64', 'clash'],
+        'id': 'hiddify', 'name': 'Hiddify', 'platform': 'Android · iOS · دسکتاپ', 'format': 'singbox', 'alt': ['base64'], 'family': 'singbox',
         'download': 'https://github.com/hiddify/hiddify-next/releases/latest',
         'note': 'چندسکویی؛ sing-box JSON را مستقیم ایمپورت می‌کند.',
     },
     {
-        'id': 'karing', 'name': 'Karing', 'platform': 'Android · iOS · دسکتاپ', 'format': 'singbox', 'alt': ['base64'],
+        'id': 'karing', 'name': 'Karing', 'platform': 'Android · iOS · دسکتاپ', 'format': 'singbox', 'alt': ['base64'], 'family': 'singbox',
         'download': 'https://github.com/KaringX/karing/releases/latest',
         'note': 'رابط ساده و مناسب موبایل؛ خروجی sing-box.',
     },
     {
-        'id': 'streisand', 'name': 'Streisand', 'platform': 'iOS · macOS', 'format': 'base64', 'alt': ['all', 'vless'],
+        'id': 'streisand', 'name': 'Streisand', 'platform': 'iOS · macOS', 'format': 'base64', 'alt': ['all', 'vless'], 'family': 'xray',
         'download': 'https://apps.apple.com/app/streisand/id6450534064',
         'note': 'رایگان روی iOS؛ سابلینک Base64 و فرگمنت پشتیبانی می‌شود.',
     },
     {
-        'id': 'shadowrocket', 'name': 'Shadowrocket', 'platform': 'iOS · macOS', 'format': 'base64', 'alt': ['all', 'vless'],
+        'id': 'shadowrocket', 'name': 'Shadowrocket', 'platform': 'iOS · macOS', 'format': 'base64', 'alt': ['all', 'vless'], 'family': 'xray',
         'download': 'https://apps.apple.com/app/shadowrocket/id932747118',
         'note': 'کلاینت حرفه‌ای iOS؛ سابلینک Base64.',
     },
     {
-        'id': 'v2box', 'name': 'V2Box', 'platform': 'iOS · macOS', 'format': 'base64', 'alt': ['all'],
+        'id': 'v2box', 'name': 'V2Box', 'platform': 'iOS · macOS', 'format': 'base64', 'alt': ['all'], 'family': 'xray',
         'download': 'https://apps.apple.com/app/v2box-v2ray-client/id6446814690',
         'note': 'گزینه جایگزین روی iOS.',
     },
     {
-        'id': 'foxray', 'name': 'FoXray', 'platform': 'iOS', 'format': 'base64', 'alt': ['all'],
+        'id': 'foxray', 'name': 'FoXray', 'platform': 'iOS', 'format': 'base64', 'alt': ['all'], 'family': 'xray',
         'download': 'https://apps.apple.com/app/foxray/id6448898396',
         'note': 'کلاینت سبک iOS با پشتیبانی از fragment.',
     },
     {
-        'id': 'clash', 'name': 'Clash Verge / Mihomo', 'platform': 'Windows · macOS · Linux', 'format': 'clash', 'alt': ['base64'],
+        'id': 'clash', 'name': 'Clash Verge / Mihomo', 'platform': 'Windows · macOS · Linux', 'format': 'clash', 'alt': [], 'family': 'mihomo',
         'download': 'https://github.com/clash-verge-rev/clash-verge-rev/releases/latest',
-        'note': 'روی دسکتاپ؛ خروجی Clash/Mihomo (YAML proxies).',
+        'note': 'روی دسکتاپ؛ فقط خروجی Clash/Mihomo (YAML proxies).',
     },
     {
-        'id': 'singbox', 'name': 'sing-box', 'platform': 'دسکتاپ · سرور', 'format': 'singbox', 'alt': ['base64'],
+        'id': 'singbox', 'name': 'sing-box', 'platform': 'دسکتاپ · سرور', 'format': 'singbox', 'alt': ['base64'], 'family': 'singbox',
         'download': 'https://github.com/SagerNet/sing-box/releases/latest',
         'note': 'هسته رسمی sing-box؛ خروجی outbounds.',
     },
     {
-        'id': 'xray', 'name': 'Xray-core', 'platform': 'دسکتاپ · سرور', 'format': 'xray', 'alt': [],
+        'id': 'xray', 'name': 'Xray-core', 'platform': 'دسکتاپ · سرور', 'format': 'xray', 'alt': [], 'family': 'tools',
         'download': 'https://github.com/XTLS/Xray-core/releases/latest',
         'note': 'برای ست‌کردن کلاینت‌های دستی و ربات‌ها.',
     },
@@ -130,6 +164,17 @@ CLIENT_IDS = [c['id'] for c in CLIENTS]
 
 # client id -> subscription format
 CLIENT_FORMATS = {c['id']: c['format'] for c in CLIENTS}
+
+# client id -> engine family, so the panel can group links without a lookup table.
+CLIENT_FAMILIES = {c['id']: c.get('family') for c in CLIENTS}
+
+# A client can never publish a format its engine does not import (the reason the
+# YAML link used to show up in Xray client cards): the pairing is asserted once,
+# at import time, instead of being re-checked at every render.
+for _client in CLIENTS:
+    _expected = FAMILY_FORMAT.get(_client.get('family'))
+    if _expected and _client['format'] != _expected:
+        raise ValueError(f"client {_client['id']}: format {_client['format']} does not belong to family {_client['family']}")
 
 # --------------------------------------------------------------------------- presets
 # ``limit_gb``/``expiry_days``/``ip_limit`` are only used when the panel has no
@@ -222,13 +267,18 @@ def download_overrides():
 
 
 def catalog(overrides=None):
-    """Client list with download links resolved and formats flattened."""
+    """Client list with download links resolved, formats flattened and the
+    engine family spelled out (label/hint/order) for the grouped link lists."""
     links = download_overrides() if overrides is None else overrides
     items = []
     for item in CLIENTS:
         entry = dict(item)
         entry['download'] = links.get(item['id']) or item['download']
         entry['targets'] = [item['format']] + [f for f in item['alt'] if f != item['format']]
+        meta = family_by_id(item.get('family'))
+        entry['family_label'] = meta['label']
+        entry['family_hint'] = meta['hint']
+        entry['family_order'] = meta['order']
         items.append(entry)
     return items
 
@@ -255,7 +305,34 @@ def client_links(base, token, node='', overrides=None):
             'format_label': FORMAT_LABELS.get(item['format'], item['format']),
             'note': item['note'],
             'download': item['download'],
+            'family': item.get('family'),
+            'family_label': item['family_label'],
+            'family_hint': item['family_hint'],
+            'family_order': item['family_order'],
             'url': subscription_url(base, token, item['id'], node),
             'alternatives': alts,
         })
     return rows_out
+
+
+def client_groups(base, token, node='', overrides=None):
+    """The client links split by engine family, in ``FAMILIES`` order.
+
+    This is what both the status window and the panel drawer render: one collapsed
+    section per family (Xray, sing-box, Clash/Mihomo, tool cores) instead of one
+    flat list where every client was offered every format.
+    """
+    by_id = {item['id']: item for item in client_links(base, token, node, overrides)}
+    groups = []
+    for meta in FAMILIES:
+        members = [by_id[item['id']] for item in CLIENTS
+                   if item.get('family') == meta['id'] and item['id'] in by_id]
+        if not members:
+            continue
+        groups.append({
+            'id': meta['id'], 'label': meta['label'], 'hint': meta['hint'], 'order': meta['order'],
+            'format': FAMILY_FORMAT.get(meta['id'], 'auto'),
+            'formats': sorted({member['format'] for member in members}),
+            'clients': members,
+        })
+    return groups

@@ -11,6 +11,9 @@ export const SECTIONS = [
   { id: 'nodes', label: 'نودها', icon: 'nodes', crumb: 'NODE CATALOG', title: 'نودها' },
   { id: 'users', label: 'کاربران', icon: 'users', crumb: 'USER MANAGEMENT', title: 'کاربران' },
   { id: 'cloudflare', label: 'Cloudflare', icon: 'cloud', crumb: 'EDGE NETWORK', title: 'Cloudflare' },
+  { id: 'customize', label: 'شخصی‌سازی', icon: 'edit', crumb: 'CUSTOMIZATION', title: 'شخصی‌سازی' },
+  { id: 'tools', label: 'ابزار شبکه', icon: 'globe', crumb: 'NETWORK TOOLS', title: 'ابزار شبکه' },
+  { id: 'advanced', label: 'پیشرفته', icon: 'server', crumb: 'ADVANCED', title: 'پیشرفته' },
   { id: 'settings', label: 'تنظیمات', icon: 'cog', crumb: 'SYSTEM SETTINGS', title: 'تنظیمات' },
 ];
 
@@ -25,6 +28,12 @@ export class PanelStore {
       logs: [],
       cfIps: [],
       worker: null,
+      edge: null,
+      customization: null,
+      hysteria: null,
+      packs: null,
+      transports: null,
+      locations: [],
       presets: [],
       workerCode: '',
       uptimeBase: null,

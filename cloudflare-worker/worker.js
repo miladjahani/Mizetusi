@@ -40,8 +40,10 @@ const EDGE_PATHS = [
   '/ws/vless', '/cdn/vless',
   '/ws/vmess', '/cdn/vmess',
   '/ws/trojan', '/cdn/trojan',
-  // Shadowsocks, one listener per cipher family (the last one is the widely
-  // compatible chacha20-ietf-poly1305 profile).
+  // Shadowsocks, one listener per cipher family. The first pair is the classic
+  // aes-256-gcm profile every client implements; the rest are the 2022 ciphers
+  // plus the widely compatible chacha20-ietf-poly1305 one.
+  '/ws/ss-classic', '/cdn/ss-classic',
   '/ws/ss', '/cdn/ss',
   '/ws/ss-aes256', '/cdn/ss-aes256',
   '/ws/ss-chacha', '/cdn/ss-chacha',

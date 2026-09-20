@@ -16,6 +16,10 @@ class UserCreate(BaseModel):
     expiry_days:Optional[int]=Field(default=None,ge=0)
     limit_req:Optional[int]=Field(default=None,ge=0)
     ip_limit:Optional[int]=Field(default=None,ge=1)
+    # How many configs this user's subscription may contain (empty = every
+    # published combination). Stored in ``metadata`` so no schema migration is
+    # needed for a value only the generator reads.
+    max_configs:Optional[int]=Field(default=None,ge=1,le=500)
     start_on_first_connect:bool=False
     ips:str=''; fingerprint:str='chrome'; tls:str='on'; port:int=Field(default=443,ge=1,le=65535)
     sni:Optional[str]=None; host:Optional[str]=None; frag_len:str=''; frag_int:str=''

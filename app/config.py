@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     xray_ss_chacha_cdn_port: int = 10013
     xray_ss_legacy_port: int = 10014
     xray_ss_legacy_cdn_port: int = 10015
+    # The universally supported classic cipher (aes-256-gcm), published first so
+    # every client — not only the SIP022-aware ones — lists and pings it.
+    xray_ss_classic_port: int = 10016
+    xray_ss_classic_cdn_port: int = 10017
     # Reality + fallback children (gRPC/HTTPUpgrade/H2/XHTTP) share ONE public
     # TCP port. Off until a direct endpoint exists (Railway TCP proxy env vars
     # or the direct_host/direct_port settings).

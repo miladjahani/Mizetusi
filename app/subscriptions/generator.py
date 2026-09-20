@@ -48,10 +48,25 @@ def normalize_target(target):
 
 
 def label(user, node, profile=None, prefix=''):
-    parts = [p for p in (prefix or '', node.get('name', '')) if p]
+    parts = [p for p in (prefix or '', tp.node_label(node)) if p]
     if profile and profile.get('tag'):
         parts.append(profile['tag'])
     return ' · '.join(parts)
+
+
+def hy2_node():
+    """A pseudo-node describing the external Hysteria2 endpoint.
+
+    Hysteria2 does not belong to the Node Catalog (it is not this server's
+    listener), but it must still be named and flagged like the others, so it is
+    rendered through exactly the same label path.
+    """
+    hy2 = tp.hysteria_config() or {}
+    host = str(hy2.get('host') or '')
+    return {'name': hy2.get('label') or host or 'Hysteria2', 'kind': 'hy2', 'server': host,
+            'port': int(hy2.get('port') or 443), 'tls': 1, 'host': host,
+            'sni': hy2.get('sni') or host, 'latency_ms': None,
+            'metadata': {'role': 'hysteria2', 'provider': 'hysteria2'}}
 
 
 def _profile_for(profile_id):
@@ -131,6 +146,26 @@ def ss_uri(user, node, profile, prefix=''):
     return f"ss://{userinfo}@{address}:{port}?{_params(query)}#{name}"
 
 
+def hy2_uri(user, node, profile, prefix=''):
+    """Hysteria2 as the ``hysteria2://`` link its clients import.
+
+    The one-line form is understood by every sing-box/mihomo based client
+    (Hiddify, NekoBox, Karing, v2rayN, Streisand). The password is the endpoint's
+    own, since a hysteria2 server authenticates its users itself.
+    """
+    hy2 = tp.hysteria_config()
+    if not hy2:
+        raise ValueError('Hysteria2 is not configured yet')
+    query = {'sni': hy2['sni'], 'insecure': '1' if hy2['insecure'] else ''}
+    if hy2['obfs']:
+        query['obfs'] = hy2['obfs']
+        if hy2['obfs_password']:
+            query['obfs-password'] = hy2['obfs_password']
+    name = urllib.parse.quote(label(user, hy2_node(), profile, prefix), safe='')
+    return (f"hysteria2://{urllib.parse.quote(hy2['password'], safe='')}@"
+            f"{hy2['host']}:{int(hy2['port'])}?{_params(query)}#{name}")
+
+
 def vmess_uri(user, node, profile, prefix=''):
     """VMess has no parameterised URI: it is one base64 JSON blob."""
     address, port = tp.node_address(node, profile)
@@ -153,7 +188,8 @@ def vmess_uri(user, node, profile, prefix=''):
     return 'vmess://' + base64.b64encode(json.dumps(payload, ensure_ascii=False).encode()).decode()
 
 
-URI_BUILDERS = {'vless': vless_uri, 'trojan': trojan_uri, 'vmess': vmess_uri, 'ss': ss_uri}
+URI_BUILDERS = {'vless': vless_uri, 'trojan': trojan_uri, 'vmess': vmess_uri, 'ss': ss_uri,
+                'hy2': hy2_uri}
 
 
 def uri(user, node, profile, prefix=''):
@@ -191,6 +227,15 @@ def _transport(node, profile):
 def singbox(user, node, profile, prefix=''):
     address, port = tp.node_address(node, profile)
     protocol = profile['protocol']
+    if profile.get('group') == tp.HY2:
+        hy2 = tp.hysteria_config() or {}
+        entry = {'tag': label(user, node, profile, prefix), 'type': 'hysteria2',
+                 'server': address, 'server_port': port, 'password': hy2.get('password') or '',
+                 'tls': {'enabled': True, 'server_name': hy2.get('sni') or address,
+                         'insecure': bool(hy2.get('insecure'))}}
+        if hy2.get('obfs'):
+            entry['obfs'] = {'type': hy2['obfs'], 'password': hy2.get('obfs_password') or ''}
+        return entry
     if protocol == 'ss':
         # sing-box has no ``transport`` field on a Shadowsocks outbound: the
         # WebSocket edge belongs in the plugin options, and an unknown field
@@ -219,6 +264,16 @@ def singbox(user, node, profile, prefix=''):
 
 def clash(user, node, profile, prefix=''):
     address, port = tp.node_address(node, profile)
+    if profile.get('group') == tp.HY2:
+        hy2 = tp.hysteria_config() or {}
+        entry = {'name': label(user, node, profile, prefix), 'type': 'hysteria2',
+                 'server': address, 'port': port, 'password': hy2.get('password') or '',
+                 'sni': hy2.get('sni') or address,
+                 'skip-cert-verify': bool(hy2.get('insecure'))}
+        if hy2.get('obfs'):
+            entry['obfs'] = hy2['obfs']
+            entry['obfs-password'] = hy2.get('obfs_password') or ''
+        return entry
     if profile['protocol'] == 'ss':
         # mihomo takes the WebSocket edge as ``plugin-opts`` (network: ws on an
         # ss proxy is not a thing, and would silently dial plain Shadowsocks).
@@ -257,6 +312,11 @@ def clash(user, node, profile, prefix=''):
 def xray(user, node, profile, prefix=''):
     address, port = tp.node_address(node, profile)
     protocol = profile['protocol']
+    if protocol == 'hy2':
+        # Xray has no Hysteria2 outbound at all: QUIC terminates in a hysteria2
+        # server, so the Xray JSON subscription simply omits this entry instead of
+        # emitting a line every Xray client would reject.
+        raise ValueError('xray cannot express hysteria2')
     if protocol == 'vless':
         settings = {'vnext': [{'address': address, 'port': port, 'users': [
             {'id': user['uuid'], 'encryption': 'none', 'flow': '', 'level': 0}]}]}
@@ -371,14 +431,35 @@ def _disabled_message(protocol):
     return f"پروتکل {str(protocol).upper()} برای این کاربر فعال نشده است"
 
 
-def _json_subscription(user, nodes, profiles, kind, prefix=''):
+def entry_pairs(user, nodes, profiles, include_hy2=True):
+    """The (node × profile) pairs a subscription really contains.
+
+    This is the **only** place the per-user config cap is applied, so the line
+    formats, sing-box, Clash and Xray hand out exactly the same set and a client
+    that imports several of them sees one consistent list. The Hysteria2 node is
+    appended once (it is a single external endpoint), and included only when the
+    caller wants it — a per-node subscription must not drag it in.
+    """
+    node_profiles = [p for p in profiles if p.get('group') != tp.HY2]
+    pairs = [(n, p) for n in nodes for p in node_profiles]
+    if include_hy2:
+        pairs += [(hy2_node(), p) for p in profiles if p.get('group') == tp.HY2]
+    limit = tp.user_max_configs(user)
+    return pairs[:limit] if limit else pairs
+
+
+def _json_subscription(user, nodes, profiles, kind, prefix='', include_hy2=True):
     builder = {'singbox': singbox, 'clash': clash, 'xray': xray}[kind]
     key = 'proxies' if kind == 'clash' else 'outbounds'
-    return json.dumps({key: [builder(user, n, p, prefix) for n in nodes for p in profiles]},
-                      ensure_ascii=False, indent=2)
+    entries = []
+    for node, profile in entry_pairs(user, nodes, profiles, include_hy2):
+        if kind == 'xray' and profile.get('group') == tp.HY2:
+            continue  # Xray simply has no hysteria2 outbound
+        entries.append(builder(user, node, profile, prefix))
+    return json.dumps({key: entries}, ensure_ascii=False, indent=2)
 
 
-def render(user, base, target, nodes=None, prefix=''):
+def render(user, base, target, nodes=None, prefix='', include_hy2=True):
     target = normalize_target(target)
     nodes = nodes if nodes is not None else active_nodes()
     if not nodes:
@@ -390,7 +471,7 @@ def render(user, base, target, nodes=None, prefix=''):
     # A client id resolves to the format that client imports best.
     resolved = CLIENT_FORMATS.get(target, target)
     if resolved in ('singbox', 'clash', 'xray'):
-        return _json_subscription(user, nodes, profiles_for('all', protocols), resolved, prefix)
+        return _json_subscription(user, nodes, profiles_for('all', protocols), resolved, prefix, include_hy2)
     if resolved == 'json':
         return json.dumps({'transports': [{'id': p['id'], 'tag': p['tag'], 'protocol': p['protocol'],
                                           'network': p['network'], 'group': p['group']}
@@ -407,12 +488,14 @@ def render(user, base, target, nodes=None, prefix=''):
             # A profile set with no link form at all (Reality only, when it is
             # the sole published transport) still returns something a client can
             # import instead of a 400 that reads as "broken".
-            return _json_subscription(user, nodes, profiles, 'singbox', prefix)
+            return _json_subscription(user, nodes, profiles, 'singbox', prefix, include_hy2)
         raise ValueError(f"{target}: روی این نصب هنوز منتشر نشده است "
                          f"(نیازمند پورت TCP اختصاصی یا فعال‌سازی WARP)")
     # Node-major and fastest-first: the first entries of the subscription are the
     # fastest node's full transport set, which is what a client shows on top.
-    lines = [uri(user, n, p, prefix) for n in nodes for p in line_profiles]
+    # Every entry name carries its country flag, so a mixed-location list stays
+    # readable in a client that shows nothing but the remark.
+    lines = [uri(user, n, p, prefix) for n, p in entry_pairs(user, nodes, line_profiles, include_hy2)]
     body = '\n'.join(lines) + '\n'
     if resolved == 'base64':
         return base64.b64encode(body.encode()).decode()
@@ -431,11 +514,14 @@ def node_links(user, node, prefix=''):
             entry['link'] = uri(user, node, profile, prefix)
         entry['singbox'] = singbox(user, node, profile, prefix)
         entry['clash'] = clash(user, node, profile, prefix)
-        entry['xray'] = xray(user, node, profile, prefix)
+        # Hysteria2 has no Xray outbound, so that column stays empty for it
+        # rather than failing the whole drawer.
+        entry['xray'] = None if profile.get('group') == tp.HY2 else xray(user, node, profile, prefix)
         entries.append(entry)
     primary = next((p for p in entries if p['id'] == 'vless-ws'), entries[0] if entries else None)
     return {
-        'name': node.get('name'), 'kind': node.get('kind'), 'server': node.get('server'),
+        'name': node.get('name'), 'label': tp.node_label(node), 'flag': tp.node_flag(node),
+        'kind': node.get('kind'), 'server': node.get('server'),
         'port': int(node.get('port') or 443), 'tls': bool(node.get('tls')),
         'sni': node.get('sni'), 'host': node.get('host'), 'latency_ms': node.get('latency_ms'),
         'enabled': bool(node.get('enabled', 1)),

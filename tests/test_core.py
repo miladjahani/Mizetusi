@@ -59,7 +59,8 @@ def test_default_subscription_carries_every_protocol_by_default():
  assert blob['id'] == u['uuid'] and blob['tls'] == 'tls'
  assert blob['sni'] and blob['host']
 
- # base64 container (v2rayNG/bettbox) carries the same full matrix.
+ # The base64 container (v2rayNG, Shadowrocket, …) carries the same full matrix.
+ # A Shadowsocks-only path never appears here: it lives in the JSON formats.
  decoded=base64.b64decode(render(u,'https://railway.example.com','base64')).decode()
  assert 'vmess://' in decoded and 'trojan://' in decoded and 'vless://' in decoded
  # A single transport can be subscribed to on its own.

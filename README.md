@@ -7,6 +7,54 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **Shadowsocks finally pings in every client, not only Happ.** The 2022 ciphers are what
+  sing-box and mihomo parse best, but v2rayNG, NekoBox, Shadowrocket and every device that
+  only learned SIP022 showed the Shadowsocks node greyed out. The classic AEAD method
+  `aes-256-gcm` now ships first (`ss-classic`, `/ws/ss-classic` + `/cdn/ss-classic`), reached
+  through `v2ray-plugin` exactly the way the working reference link does it —
+  `mode=websocket;path=…;mux=0;host=…;tls` — and the 2022 cipher families stay right behind
+  it. `tests/test_v9_features.py` decodes a real `ss://` link and asserts the method, the
+  key and the plugin options.
+- **Every node names its country.** `app/subscriptions/flags.py` maps a location slug, an
+  English or Persian country name, a provider hostname — or a flag emoji read out of
+  someone else's remark — to a flag, so a subscription entry reads `🇩🇪 آلمان · de-cdn-01`
+  instead of a bare slug. `transports.node_flag`/`node_label` are the single place a link
+  name is composed, so the «پرچم کشور روی نام نودها» switch in the new **شخصی‌سازی** tab
+  governs links, panel lists and the status window together.
+- **A Hysteria2 node, published only when it is real.** Hysteria2 is QUIC and has no Xray
+  inbound, so the new **پیشرفته** tab stores *your* hysteria2 endpoint (host, port,
+  password, SNI, `salamander` obfs, insecure) and publishes it as one extra entry — with its
+  flag — across the line formats, sing-box and Clash, never into the Xray config (which has
+  no such outbound) and never into a per-node subscription. A half-configured endpoint is
+  refused rather than handed to users.
+- **The status window keeps its shape, but the client list is split by engine.** Every client
+  belongs to a family (`app/subscriptions/clients.py`) and each family is one collapsed
+  dropdown: Xray clients (v2rayNG, Exclusive, Streisand, Shadowrocket, V2Box, FoXray) get
+  Base64/text, sing-box clients (Hiddify, NekoBox, Karing, sing-box) get JSON, and
+  Clash/Mihomo clients (Bettbox, Clash Verge) get **YAML only** — a client can never be handed
+  a format its engine cannot import. Alternate formats stay hidden behind a second collapsed
+  list, the admin's preferred family is marked recommended, and the window still carries the
+  smart link, the banner, the support link and the config counter (`config_count` /
+  `max_configs`).
+- **How many configs a user gets is now a number you set.** The create/edit form has a
+  **تعداد کانفیگ** field (and «شخصی‌سازی» holds the default quick-create uses). The cap is
+  applied in exactly one place (`entry_pairs`), so the line formats, Base64, sing-box,
+  Clash and Xray all hand out the same set — a client importing two of them sees one list.
+- **Real multi-location, from packs or from any subscription.** Edge locations are no longer
+  Cloudflare-only: the provider catalog grew to nineteen (Akamai, Google CDN, Azure Front
+  Door, Edgio, CDN77, StackPath, CacheFly, KeyCDN, Imperva, Sucuri, Verizon/Edgecast,
+  CDNetworks, QUANTIL, ChinaCache…), the **پیشرفته** tab installs ready-made location packs
+  (one clean domain per country, or your own domains), and «ورود از سابلینک» turns any
+  `subs.bikara.net`-style subscription into locations — host, port and country read from the
+  entries themselves. Every location publishes the whole protocol matrix with its own
+  Host/SNI, and one location can be handed out on its own (`/sub/<uuid>?location=de`).
+- **Three new panel tabs.** **شخصی‌سازی** (the end-user experience: banner, support link,
+  flags, recommended format, branding, default config count), **ابزار شبکه** (a multi-CDN
+  scanner console, TCP/TLS reachability from the server, DoH lookup that bypasses a poisoned
+  resolver, CIDR maths, subscription analysis and one-click "لوكيشن بساز از این سابلینک"),
+  and **پیشرفته** (Hysteria2, location packs, subscription import, the transport truth — what
+  the running engine really serves and what it withheld — plus Shadowsocks key rotation and
+  a sync+ping button). All of it is wired in `static/js/app.js` with its own views.
 - **Ready-made node examples.** The Nodes section has a **«نمونه‌های آماده»** button that
   creates nodes with genuinely different settings in one click: clean IPs of Cloudflare,
   Fastly, Gcore and آروان‌کلود, Cloudflare's alternative HTTPS ports (2053/2087/2096/8443), a
@@ -114,6 +162,10 @@ a dedicated subscription per client.
 | `app/services/audit.py` | `AuditLog` — append-only admin trail with Persian labels |
 | `app/nodes.py` | `NodeCatalog` (CRUD/sync/bootstrap) and `NodeProbe` (real latency) |
 | `app/subscriptions/generator.py` | Subscription rendering for every target/format |
+| `app/subscriptions/flags.py` | Country → flag lookup for node names (slug, name, provider or emoji) |
+| `app/api_extra.py` | The newer admin APIs: customization, Hysteria2, location packs, network tools |
+| `app/edge/packs.py` | Multi-location packs + the subscription importer |
+| `app/subscriptions/transports.py` | Transport profiles and the Shadowsocks cipher table |
 | `app/subscriptions/clients.py` | Client catalog + the Iran-ready quick-create presets |
 | `app/xray.py` | Xray-core supervisor: config generation, reload, StatsService sync |
 
@@ -133,7 +185,7 @@ providers, the clean domains and the locations they form.
 | `api.js` | `ApiClient`/`ApiError` — timeouts, JSON, single-flight 401 |
 | `store.js` | `PanelStore` state container, `Router` |
 | `pwa.js` | `PwaManager` — service worker + install prompt |
-| `views/*.js` | `DashboardView`, `NodesView`, `UsersView`, `CloudflareView`, `SettingsView` |
+| `views/*.js` | `DashboardView`, `NodesView`, `UsersView`, `CloudflareView`, `CustomizeView`, `ToolsView`, `AdvancedView`, `SettingsView` |
 | `app.js` | `NexusApp` — wiring, loaders, clock, polling, auth recovery |
 
 ## Session model
@@ -238,8 +290,8 @@ is advertised.
 ## Public endpoints
 
 - VLESS: `/ws/vless` · VMess: `/ws/vmess` · Trojan: `/ws/trojan` · WARP: `/ws/warp`
-- Shadowsocks: `/ws/ss` (2022 · AES-128-GCM) · `/ws/ss-aes256` · `/ws/ss-chacha` · `/ws/ss-legacy`
-- CDN path shapes: `/cdn/vless`, `/cdn/vmess`, `/cdn/trojan`, `/cdn/ss`, `/cdn/ss-aes256`, `/cdn/ss-chacha`, `/cdn/ss-legacy` · legacy `/ws`
+- Shadowsocks: `/ws/ss-classic` (AES-256-GCM, every client) · `/ws/ss` (2022 · AES-128-GCM) · `/ws/ss-aes256` · `/ws/ss-chacha` · `/ws/ss-legacy`
+- CDN path shapes: `/cdn/vless`, `/cdn/vmess`, `/cdn/trojan`, `/cdn/ss-classic`, `/cdn/ss`, `/cdn/ss-aes256`, `/cdn/ss-chacha`, `/cdn/ss-legacy` · legacy `/ws`
 - Subscription: `/sub/<UUID>?target=auto|all|vless|trojan|vmess|ss|base64|singbox|clash|xray|json`
 - By transport: `?target=ws|cdn|reality|warp` or one exact profile, e.g. `?target=vless-cdn`
 - Per-client: `/sub/<UUID>?target=bettbox|exclusive|nekoboxplus|v2rayng|hiddify|karing|streisand|shadowrocket|v2box|foxray|nekobox|amnezia|smart`
@@ -249,6 +301,8 @@ is advertised.
   `/api/presets`, `/api/clients`, `/api/transports`, `/api/warp`, `/api/nodes`,
   `/api/nodes/ping`, `/api/nodes/sync`, `/api/settings`, `/api/logs`, `/api/backup`,
   `/api/core/status`, `/api/settings/rotate-shadowsocks`
+- Newer admin API: `/api/customization`, `/api/hysteria`, `/api/edge/packs`,
+  `/api/edge/import`, `/api/tools/check`, `/api/tools/dns`, `/api/tools/cidr`, `/api/tools/parse`
 - Cloudflare Worker: `/api/cloudflare/worker-code`, `/api/cloudflare/worker-download`, `/api/cloudflare/worker-test`
 - PWA: `/manifest.webmanifest`, `/sw.js`, `/static/icons/*`
 
@@ -287,9 +341,9 @@ the panel's «تست ورکر» button proves the Worker, the origin URL and the
 
 `app/subscriptions/clients.py` holds the client catalog (import format, platform, download
 link, notes) and the presets used by quick create. Client ids are accepted as subscription
-targets, so every client gets its own URL — `/sub/<uuid>?target=bettbox` returns the Base64
-(V2Ray) list and `?target=nekoboxplus` returns sing-box JSON — and `&node=<name>` narrows it
-to a single node.
+targets, so every client gets its own URL — `/sub/<uuid>?target=bettbox` returns the Clash
+YAML (Bettbox is a Mihomo client), `?target=v2rayng` returns the Base64 (V2Ray) list and
+`?target=nekoboxplus` returns sing-box JSON — and `&node=<name>` narrows it to a single node.
 
 Quick create precedence is request values, then the panel defaults, then the preset. Each
 created user gets a status window at `/portal/<uuid>` listing the smart link, the per-client

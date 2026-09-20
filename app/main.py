@@ -9,11 +9,14 @@ import jwt
 from app.config import settings
 from app.db import init_db, row, rows, execute
 from app.core.models import UserCreate, TrafficEvent, PROTOCOL_LIST
-from app.users.service import list_users, get_user, get_by_token, create_user, delete_user, toggle_user, reset_user, track, allowed, reset_due
-from app.subscriptions.generator import render, active_nodes, node_links, normalize_target, profiles_for, TARGETS as SUB_TARGETS
-from app.subscriptions.clients import (CLIENTS, PRESETS, FORMAT_LABELS, DEFAULT_PRESET, catalog as client_catalog,
-    client_links, download_overrides, preset as get_preset, subscription_url as client_subscription_url)
+from app.users.service import (list_users, get_user, get_by_token, create_user, delete_user, toggle_user,
+    reset_user, track, allowed, reset_due, set_metadata_value)
+from app.subscriptions.generator import (render, active_nodes, node_links, normalize_target, profiles_for,
+    entry_pairs, TARGETS as SUB_TARGETS)
+from app.subscriptions.clients import (CLIENTS, PRESETS, FAMILIES, FORMAT_LABELS, DEFAULT_PRESET, catalog as client_catalog,
+    client_links, client_groups, download_overrides, preset as get_preset, subscription_url as client_subscription_url)
 from app.subscriptions import transports as transports
+from app.subscriptions import flags as sub_flags
 from app import warp as warp_service
 from app.proxy.manager import add as add_proxy, list_all as list_proxies, check as check_proxy
 from app.dns.service import doh
@@ -24,6 +27,8 @@ from app.nodes import (ensure as ensure_nodes, list_nodes, upsert as upsert_node
     origin_node_name)
 from app.edge import sources as edge_sources
 from app.edge import samples as edge_samples
+from app.edge import packs as edge_packs
+from app.api_extra import router as extra_router
 from app import runtime
 from app.core.settings_store import store
 from app.core.security import SessionManager, LoginThrottle
@@ -43,7 +48,15 @@ sessions=SessionManager(secret_provider=lambda: store.get('jwt_secret') or setti
 throttle=LoginThrottle(limit=10,window=300)
 audit=AuditLog(actor='admin')
 BASE_DIR=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GENERAL_SETTING_KEYS=('public_base_url','sub_prefix','default_protocol','default_limit_gb','default_expiry_days','default_ip_limit','session_days','ping_interval','accent','accent_secondary','app_name')
+GENERAL_SETTING_KEYS=('public_base_url','sub_prefix','default_protocol','default_limit_gb','default_expiry_days','default_ip_limit','session_days','ping_interval','accent','accent_secondary','app_name',
+                     # Customization (the «شخصی‌سازی» tab) and the new defaults.
+                     'portal_banner','support_url','flags_enabled','default_format','default_max_configs',
+                     # Hysteria2 endpoint (the password is deliberately absent: it is
+                     # never echoed back to the panel, only its presence is reported).
+                     'hy2_enabled','hy2_host','hy2_port','hy2_sni','hy2_obfs','hy2_insecure','hy2_label')
+# Subscription shapes the status window offers as its four main buttons. The
+# matching validation lives next to the endpoints that own them
+# (``app/api_extra.py``), so nothing is declared twice here.
 PWA_ICONS={'192':'/static/icons/icon-192.png','512':'/static/icons/icon-512.png','maskable':'/static/icons/icon-maskable-512.png','apple':'/static/icons/apple-touch-icon.png','favicon':'/static/icons/favicon-32.png','logo':'/static/icons/nexus.svg'}
 # One label per accepted target: subscription formats plus client ids.
 SUB_LABELS={**FORMAT_LABELS, **{c['id']:f"{c['name']} · {c['platform']}" for c in CLIENTS}}
@@ -82,11 +95,22 @@ def _set(key,value):
 def _audit(action,detail=''):
     audit.record(action,detail)
 
+def _flags_on():
+    """Whether subscription labels carry the country flag (on by default)."""
+    return (_setting('flags_enabled') or '1') != '0'
+
+
 def _brand():
     """Panel identity: also feeds the PWA manifest so the icon name matches."""
     return {'app_name':(_setting('app_name') or 'NEXUS').strip()[:24] or 'NEXUS',
             'accent':(_setting('accent') or '#5ad1ff').strip(),
             'accent_secondary':(_setting('accent_secondary') or '#8b7bff').strip(),
+            # The status window is skinned from these, so a rebrand reaches the
+            # end user without touching the template.
+            'banner':(_setting('portal_banner') or '').strip(),
+            'support_url':(_setting('support_url') or '').strip(),
+            'flags':_flags_on(),
+            'default_format':(_setting('default_format') or 'auto').strip().lower(),
             'logo':PWA_ICONS['logo'],'icons':PWA_ICONS,'short_name':'NEXUS'}
 
 def _ping_interval():
@@ -247,6 +271,9 @@ app=FastAPI(title=settings.app_name,version=APP_VERSION,lifespan=lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=[],allow_methods=['GET','POST','PUT','DELETE','OPTIONS'],allow_headers=['Content-Type','X-Admin-Password'])
 templates=Jinja2Templates(directory=os.path.join(BASE_DIR,'templates'))
 app.mount('/static',StaticFiles(directory=os.path.join(BASE_DIR,'static')),name='static')
+# The newer capability endpoints (customization, Hysteria2, location packs, the
+# network tools) live in their own router so this module keeps owning the core.
+app.include_router(extra_router)
 @app.get('/health')
 def health():
     try:
@@ -346,6 +373,7 @@ def _user_payload(u):
     """A user row plus the derived protocol view the panel renders."""
     if not u: return u
     item=dict(u)
+    item['max_configs']=transports.user_max_configs(u) or None
     enabled=[p for p in transports.PROTOCOLS if p in transports.user_protocols(u)]
     item['protocols']=enabled
     item['protocol_label']=('همه پروتکل‌ها' if len(enabled)==len(transports.PROTOCOLS)
@@ -376,15 +404,15 @@ def get_presets(request:Request):
     return {'default':DEFAULT_PRESET,'presets':PRESETS,'protocols':_protocol_catalog(),'defaults':{
         'protocol':_setting('default_protocol') or 'all',
         'limit_gb':_setting('default_limit_gb') or '',
-        'expiry_days':_setting('default_expiry_days') or '',
-        'ip_limit':_setting('default_ip_limit') or ''}}
+        'expiry_days':_setting('default_expiry_days') or '','ip_limit':_setting('default_ip_limit') or '',
+        'max_configs':_setting('default_max_configs') or ''}}
 
 @app.get('/api/clients')
 def get_clients(request:Request):
     """Client catalog: import format, download link and notes."""
     auth(request)
-    return {'clients':client_catalog(),'targets':SUB_TARGETS,'labels':SUB_LABELS,'base_url':public_base(request),
-            'transports':_transport_targets()}
+    return {'clients':client_catalog(),'families':FAMILIES,'targets':SUB_TARGETS,'labels':SUB_LABELS,
+            'base_url':public_base(request),'transports':_transport_targets()}
 
 @app.get('/api/transports')
 def get_transports(request:Request):
@@ -447,7 +475,8 @@ async def quick_create(request:Request):
     admin_protocols=(_setting('default_protocol') or '').strip().lower()
     if admin_protocols=='all' or admin_protocols in transports.PROTOCOLS:
         fields['protocol']=admin_protocols
-    for key,setting_key in (('limit_gb','default_limit_gb'),('expiry_days','default_expiry_days'),('ip_limit','default_ip_limit')):
+    for key,setting_key in (('limit_gb','default_limit_gb'),('expiry_days','default_expiry_days'),
+                            ('ip_limit','default_ip_limit'),('max_configs','default_max_configs')):
         configured=(_setting(setting_key) or '').strip()
         if configured:
             try: fields[key]=float(configured) if key=='limit_gb' else int(float(configured))
@@ -475,6 +504,14 @@ def update(request:Request,username:str,body:dict):
     if body.get('reset_action'): return _user_payload(reset_user(username,body['reset_action']))
     allowed_keys={'protocol','limit_gb','expiry_days','limit_req','ip_limit','is_active','ips','port','sni','host','fingerprint','tls','user_proxy','frag_len','frag_int','advanced_frag','cipher_suites','tls_mask','block_ads','block_porn','auto_rotate_ip','rotate_time','ip_operator','ip_count'}
     payload=dict(body)
+    # The config cap is not a column: it lives in the user's metadata JSON, so it
+    # is written through its own helper instead of the generic UPDATE below.
+    if 'max_configs' in payload:
+        try: cap=int(payload.pop('max_configs')) if str(payload.get('max_configs')).strip() not in ('','None') else None
+        except (TypeError,ValueError): raise HTTPException(400,'max_configs must be a number')
+        if cap is not None and not 1<=cap<=500: raise HTTPException(400,'max_configs must be between 1 and 500')
+        set_metadata_value(username,'max_configs',cap)
+        _audit('user.update',f"{username} · max_configs={cap or 'unlimited'}")
     if 'protocol' in payload:
         # The protocol set is a multi-select: validate it here and store the
         # canonical comma-separated form so an empty selection cannot lock the
@@ -516,11 +553,15 @@ def subscription(request:Request,token:str,target:str='auto',node:str='',locatio
     # Generate from the live Node Catalog on every request. This means a client
     # refresh automatically receives the current origin node plus every healthy
     # clean IP / clean domain of every configured location.
-    try: text=render(u,public_base(request),target,nodes,_sub_prefix())
+    # The Hysteria2 entry belongs to the whole subscription, not to one node, so a
+    # per-node address (``?node=``) leaves it out.
+    try: text=render(u,public_base(request),target,nodes,_sub_prefix(),include_hy2=not node)
     except ValueError as e: raise HTTPException(400,str(e))
+    cap=transports.user_max_configs(u)
     headers={'Cache-Control':'no-store, max-age=0','X-Content-Type-Options':'nosniff',
              'X-NEXUS-Node-Count':str(len(nodes)),'X-NEXUS-Target':normalize_target(target),
              'X-NEXUS-Format':'singbox' if text.lstrip().startswith('{') else 'lines',
+             'X-NEXUS-Max-Configs':str(cap),'X-NEXUS-Flags':'1' if _flags_on() else '0',
              'X-NEXUS-Transports':str(len(transports.available_profiles()))}
     if location: headers['X-NEXUS-Location']=str(location)
     return PlainTextResponse(text,headers=headers)
@@ -649,27 +690,80 @@ def _register_edge_routes():
 _register_edge_routes()
 
 
+def _sub_url(base,token,target='auto',node='',location=''):
+    """One subscription URL, with the optional location filter appended."""
+    url=client_subscription_url(base,token,target,node)
+    if location:
+        url += '&location=' + urllib.parse.quote(str(location))
+    return url
+
+
+def _portal_transports(base,token,protocols=None):
+    """One ready-to-copy subscription URL per published transport profile.
+
+    The window's transport list used to render only the profile metadata, so
+    every row came out with an empty link; the URL is built here, next to the
+    profile it belongs to.
+    """
+    return [{'target':p['target'],'label':p['label'],'protocol':p['protocol'],'network':p['network'],
+             'group':p['group'],'url':_sub_url(base,token,p['target'])}
+            for p in _transport_targets(protocols)]
+
+
+def _core_subs(base,token,node=''):
+    """The four main subscription shapes the status window offers.
+
+    A user should never have to guess which format their client wants: normal
+    text, Base64 (V2Ray), sing-box JSON and Clash/Mihomo cover essentially every
+    client on the market.
+    """
+    return [
+        {'id':'auto','label':'سابلینک عادی','hint':'متن ساده VLESS/VMess/Trojan/Shadowsocks — همه کلاینت‌های مدرن',
+         'url':_sub_url(base,token,'auto',node)},
+        {'id':'base64','label':'Base64 (V2Ray)','hint':'برای v2rayNG، Bettbox، Shadowrocket، V2Box و هر کلاینت کلاسیک',
+         'url':_sub_url(base,token,'base64',node)},
+        {'id':'singbox','label':'sing-box JSON','hint':'برای Hiddify، NekoBox، Karing، sing-box و v2rayN (هسته sing-box)',
+         'url':_sub_url(base,token,'singbox',node)},
+        {'id':'clash','label':'Clash / Mihomo','hint':'برای Clash Verge، Mihomo، ClashX و Stash',
+         'url':_sub_url(base,token,'clash',node)},
+    ]
+
+
 def _portal_data(request:Request,u):
     """Public payload behind the subscription status window (no admin auth)."""
     base=public_base(request); token=urllib.parse.quote(u['uuid'],safe='')
     ok,reason=allowed(u)
     now=int(time.time()); used=float(u.get('used_gb') or 0); limit=u.get('limit_gb')
+    protocols=transports.user_protocols(u)
+    profiles=transports.available_profiles(protocols)
+    cap=transports.user_max_configs(u)
+    catalog_nodes=_sub_nodes('') or active_nodes()
     nodes=[]
-    for n in (_sub_nodes('') or active_nodes()):
-        try: meta=json.loads(n.get('metadata') or '{}')
-        except Exception: meta={}
-        if not isinstance(meta,dict): meta={}
+    for n in catalog_nodes:
         latency=n.get('latency_ms')
         nodes.append({
-            'name':n['name'],'kind':n['kind'],'server':n['server'],'port':int(n.get('port') or 443),
-            'latency_ms':latency,'online':bool(latency is not None and float(latency)>=0),'tls_ok':bool(meta.get('ping_tls')),
-            'subscription':client_subscription_url(base,token,_user_target(u),n['name']),
-            'subscription_all':client_subscription_url(base,token,'all',n['name']),
-            'transport_count':len(transports.available_profiles(transports.user_protocols(u))),
+            'name':n['name'],'label':transports.node_label(n),'flag':transports.node_flag(n),
+            'kind':n['kind'],'server':n['server'],'port':int(n.get('port') or 443),
+            'location':transports.node_location(n),'provider':transports.node_provider(n),
+            'latency_ms':latency,'online':bool(latency is not None and float(latency)>=0),
+            'subscription':_sub_url(base,token,_user_target(u),n['name']),
+            'subscription_all':_sub_url(base,token,'all',n['name']),
+            'location_url':_sub_url(base,token,_user_target(u),'',transports.node_location(n)) if transports.node_location(n) else '',
+            'transport_count':len(profiles),
             'transports':[{'target':p['id'],'label':p['tag'],'protocol':p['protocol'],
-                           'url':client_subscription_url(base,token,p['id'],n['name'])}
-                          for p in transports.available_profiles(transports.user_protocols(u))],
+                           'url':_sub_url(base,token,p['id'],n['name'])}
+                          for p in profiles],
         })
+    # Multi-location: one sublink per country, so "just the German edge" is one tap
+    # away instead of a URL the user has to build.
+    locations=[]
+    for location in sorted({n['location'] for n in nodes if n['location']}):
+        sample=next(n for n in nodes if n['location']==location)
+        locations.append({'location':location,'flag':sample['flag'],
+                          'label':(sub_flags.name(location) or location.upper()),
+                          'nodes':sum(1 for n in nodes if n['location']==location),
+                          'url':_sub_url(base,token,_user_target(u),'',location)})
+    configs=len(entry_pairs(u,catalog_nodes,profiles)) if catalog_nodes else 0
     return {
         'brand':'NEXUS','token':u['uuid'],'username':u['username'],'protocol':(u.get('protocol') or 'all'),
         'protocol_label':_user_payload(u)['protocol_label'],
@@ -678,13 +772,25 @@ def _portal_data(request:Request,u):
         'used_req':int(u.get('used_req') or 0),'limit_req':u.get('limit_req'),'ip_limit':u.get('ip_limit'),
         'expires_at':u.get('expires_at'),'start_on_first_connect':bool(u.get('start_on_first_connect')),
         'first_connection_time':u.get('first_connection_time'),
+        'max_configs':cap or None,'config_count':configs,'config_limit':cap or configs,
         'fragment':u.get('frag_len') or '','fragment_interval':u.get('frag_int') or '','fingerprint':u.get('fingerprint') or 'chrome',
         'server_time':now,'base_url':base,
         'portal_url':_portal_url(base,token),
-        'smart_url':client_subscription_url(base,token,'auto'),
+        'smart_url':_sub_url(base,token,'auto'),
+        # Client links, already split by engine family: a Clash client only ever
+        # sees YAML, an Xray client only Base64/text.
         'clients':client_links(base,token,'',None),
-        'transports':_transport_targets(transports.user_protocols(u)),
+        'client_groups':client_groups(base,token),
+        'transports':_portal_transports(base,token,protocols),
         'nodes':nodes,'nodes_total':len(nodes),'nodes_online':sum(1 for n in nodes if n['online']),
+        'locations':locations,
+        # Deployment-wide extras an end user should still see.
+        'hysteria':transports.catalog()['hysteria2'],
+        # Which of the four core sublinks the status window highlights, and whether
+        # node names carry their country flag.
+        'default_format':_brand()['default_format'],
+        'flags':_flags_on(),
+        'banner':_brand()['banner'],'support_url':_brand()['support_url'],
     }
 
 @app.get('/portal/{token}',response_class=HTMLResponse)

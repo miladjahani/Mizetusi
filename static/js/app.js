@@ -20,6 +20,9 @@ import { DashboardView } from './views/dashboard.js';
 import { NodesView } from './views/nodes.js';
 import { UsersView } from './views/users.js';
 import { CloudflareView, SettingsView } from './views/system.js';
+import { CustomizeView } from './views/customize.js';
+import { ToolsView } from './views/tools.js';
+import { AdvancedView } from './views/advanced.js';
 
 const POLL_SECONDS = 25;
 
@@ -37,6 +40,9 @@ export class NexusApp {
     this.nodes = new NodesView(this);
     this.users = new UsersView(this);
     this.cloudflare = new CloudflareView(this);
+    this.customize = new CustomizeView(this);
+    this.tools = new ToolsView(this);
+    this.advanced = new AdvancedView(this);
     this.settings = new SettingsView(this);
     this.clockTimer = null;
     this.polling = true;
@@ -128,6 +134,9 @@ export class NexusApp {
     set('users', Fmt.num(totals.active_users));
     set('nodes', Fmt.num(totals.nodes_enabled));
     set('cloudflare', Fmt.num(totals.cf_ips_ok));
+    set('customize', null);
+    set('tools', null);
+    set('advanced', null);
   }
 
   /* -------------------------------------------------------------------- data */
@@ -274,6 +283,18 @@ export class NexusApp {
       await this.cloudflare.loadWorkerCode(false);
       return;
     }
+    if (section === 'customize') {
+      await Promise.all([this.ensureSettings(), this.customize.load()]);
+      return;
+    }
+    if (section === 'tools') {
+      await Promise.all([this.loadNodes(), this.tools.load()]);
+      return;
+    }
+    if (section === 'advanced') {
+      await Promise.all([this.loadNodes(), this.advanced.load()]);
+      return;
+    }
     if (section === 'settings') await this.loadSettings();
   }
 
@@ -302,6 +323,13 @@ export class NexusApp {
         this.nodes.renderExplorerUsers();
       }
       if (section === 'cloudflare') await this.loadCloudflare();
+      if (section === 'customize') await this.customize.load();
+      // A CDN scan changes the node catalog, so the tools tab re-reads it too.
+      if (section === 'tools') {
+        await this.loadNodes();
+        this.tools.render();
+      }
+      if (section === 'advanced') await this.advanced.load();
       if (section === 'settings') await this.loadSettings();
       this.setLive(true);
     } catch (error) {
@@ -480,6 +508,9 @@ export class NexusApp {
     this.nodes.bindEvents();
     this.users.bindEvents();
     this.cloudflare.bindEvents();
+    this.customize.bindEvents();
+    this.tools.bindEvents();
+    this.advanced.bindEvents();
     this.settings.bindEvents();
   }
 }

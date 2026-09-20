@@ -29,6 +29,30 @@ const sortedClients = (clients) => (clients || []).slice().sort((a, b) => {
   return index(a) - index(b);
 });
 
+// Clients are published in engine families: Xray reads Base64/text, sing-box reads
+// JSON and Clash/Mihomo (Bettbox, Clash Verge…) reads YAML only. Grouping them is
+// what stops a Clash user from being handed a Base64 link — and vice versa — so
+// every family is rendered as its own collapsed dropdown.
+const groupClients = (clients) => {
+  const list = (clients || []).slice().sort((a, b) => {
+    const order = (item) => (Number.isFinite(item.family_order) ? item.family_order : 99);
+    return order(a) - order(b) || CLIENT_ORDER.indexOf(a.id) - CLIENT_ORDER.indexOf(b.id);
+  });
+  const groups = [];
+  for (const client of list) {
+    const id = client.family || 'core';
+    let group = groups.find((item) => item.id === id);
+    if (!group) {
+      group = { id, label: client.family_label || id, hint: client.family_hint || '', clients: [] };
+      groups.push(group);
+    }
+    group.clients.push(client);
+  }
+  return groups;
+};
+
+const chev = (size = 14) => `<svg class="chev" width="${size}" height="${size}" aria-hidden="true"><use href="#i-chevron"/></svg>`;
+
 export class UsersView {
   constructor(app) {
     this.app = app;
@@ -308,13 +332,28 @@ export class UsersView {
      fetched by the Settings section — load it first so the chips are never
      empty, then open the form. */
   async openForm(user = null) {
-    await this.app.ensureSettings();
+    await Promise.all([this.app.ensureSettings(), this.ensureCustomization()]);
     this.modal(user);
+  }
+
+  /* The default config count lives in the «شخصی‌سازی» payload, which is the one
+     place an admin sets it. Fetch it before the form opens so the field is
+     prefilled instead of always empty. */
+  async ensureCustomization() {
+    if (this.store.get('customization')) return;
+    try {
+      this.store.set('customization', await this.api.get('/api/customization'));
+    } catch (error) {
+      // The field falls back to "no cap", so a failed fetch must not block
+      // creating a user.
+      if (!error.unauthorized) console.warn('[nexus] customization unavailable', error);
+    }
   }
 
   modal(user = null) {
     const isEdit = !!user;
     const defaults = this.store.get('settings')?.defaults || {};
+    const capDefault = defaults.max_configs || this.store.get('customization')?.default_max_configs || '';
     const u = user || {};
     const pick = (value, fallback) => (value === null || value === undefined || value === '' ? (fallback ?? '') : value);
     const swClass = (value, fallback) => ((value === undefined ? fallback : !!value) ? ' on' : '');
@@ -336,6 +375,8 @@ export class UsersView {
         <div class="field-grid">
           <div><label>نام کاربری <span class="hint">حروف لاتین، عدد، _ . -</span></label>
             <input id="ufUsername" dir="ltr" placeholder="nexus-user1" value="${esc(pick(u.username, ''))}" ${isEdit ? 'disabled' : ''}></div>
+          <div><label>تعداد کانفیگ <span class="hint">خالی = بدون سقف</span></label>
+            <input id="ufMaxConfigs" type="number" min="1" max="500" dir="ltr" placeholder="${esc(capDefault || 'بدون سقف')}" value="${esc(pick(u.max_configs, capDefault))}"></div>
         </div>
         <label>پروتکل‌ها <span class="hint">هر تعداد را می‌توانید همزمان فعال کنید</span></label>
         <div class="picks" id="ufProtocols">${protocols.html}</div>
@@ -343,6 +384,7 @@ export class UsersView {
           <button type="button" class="fchip" id="ufAllProtocols">انتخاب همه / هیچ‌کدام</button>
         </div>
         <p class="muted" style="margin:11px 0 0;line-height:1.9">
+          <b>تعداد کانفیگ</b> یعنی همین کاربر حداکثر چند ورودی (نود × پروتکل) در سابلینکش می‌بیند؛ خالی بگذارید تا همه ترکیب‌های منتشرشده بیاید.
           کاربر روی همه اینباندهای Xray این سرور ساخته می‌شود و هر پروتکل انتخابی یک سابلینک واقعی می‌گیرد.
           ShadowSocks در سه نوع عرضه می‌شود (${esc(protocols.ciphers)}) و در خروجی sing-box و Clash می‌آید.
         </p>
@@ -439,6 +481,7 @@ export class UsersView {
       };
       const payload = {
         limit_gb: number('#ufLimit'), expiry_days: number('#ufExpiry'), limit_req: number('#ufReq'), ip_limit: number('#ufIpLimit'),
+        max_configs: number('#ufMaxConfigs'),
         start_on_first_connect: switchOn('#ufStartFirst'), is_active: switchOn('#ufActive') ? 1 : 0,
         auto_rotate_ip: field('#ufRotateEnabled').value === '1' ? 1 : 0, rotate_time: Number(field('#ufRotateTime').value) || 5,
         ip_operator: field('#ufIpOperator').value, ip_count: Number(field('#ufIpCount').value) || 5,
@@ -557,15 +600,36 @@ export class UsersView {
       </div>`).join('');
   }
 
+  /* One collapsed dropdown per engine family; every client shows the single format
+     it imports, with its other accepted formats tucked behind «سایر فرمت‌ها». */
   clientLinkRows(clients) {
-    const list = sortedClients(clients);
-    if (!list.length) return '<div class="empty">کلاینتی برای انتشار وجود ندارد</div>';
-    return list.map((client) => `<div class="link-box">
-        <div class="lb-main"><b>${esc(client.name)} <span class="muted" style="font-weight:400">· ${esc(client.platform || '')}</span>
-          <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(client.format_label || client.format)}</span></b><code>${esc(client.url)}</code></div>
-        <button class="copy-btn" data-copy="${esc(client.url)}" title="کپی سابلینک ${esc(client.name)}">${ico('copy', 14)}</button>
-        ${client.download ? `<a class="copy-btn" href="${esc(client.download)}" target="_blank" rel="noopener" title="دانلود ${esc(client.name)}">${ico('download', 14)}</a>` : ''}
-      </div>`).join('');
+    const groups = groupClients(clients);
+    if (!groups.length) return '<div class="empty">کلاینتی برای انتشار وجود ندارد</div>';
+    return groups.map((group) => `
+      <details class="sub-group">
+        <summary>
+          <span class="t">${esc(group.label)}</span>
+          <span class="m">${Fmt.num(group.clients.length)} کلاینت</span>
+          ${chev(14)}
+        </summary>
+        <div class="body">
+          ${group.hint ? `<p class="hint">${esc(group.hint)}</p>` : ''}
+          ${group.clients.map((client) => `
+            <div class="link-box">
+              <div class="lb-main"><b>${esc(client.name)} <span class="muted" style="font-weight:400">· ${esc(client.platform || '')}</span>
+                <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(client.format_label || client.format)}</span></b><code>${esc(client.url)}</code></div>
+              <button class="copy-btn" data-copy="${esc(client.url)}" title="کپی سابلینک ${esc(client.name)}">${ico('copy', 14)}</button>
+              ${client.download ? `<a class="copy-btn" href="${esc(client.download)}" target="_blank" rel="noopener" title="دانلود ${esc(client.name)}">${ico('download', 14)}</a>` : ''}
+            </div>
+            ${(client.alternatives || []).length ? `<details class="sub-alt">
+              <summary>${chev(12)} سایر فرمت‌های همین کلاینت (${Fmt.num(client.alternatives.length)})</summary>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+                ${client.alternatives.map((alt) => `<button class="tbtn" data-copy="${esc(alt.url)}" title="کپی ${esc(alt.label)}">${ico('copy', 12)} ${esc(alt.label)}</button>`).join('')}
+              </div>
+            </details>` : ''}
+          `).join('')}
+        </div>
+      </details>`).join('');
   }
 
   clientChips(clients, limit = 6) {

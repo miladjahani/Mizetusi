@@ -4,9 +4,28 @@ from app.core.models import UserCreate
 
 def create_user(m:UserCreate):
     uid=str(uuid.uuid4()); now=int(time.time()); exp=now+m.expiry_days*86400 if m.expiry_days is not None and not m.start_on_first_connect else None
+    # The config cap lives in metadata (a JSON column that already exists), so the
+    # "how many configs does this user get" answer needs no schema change and is
+    # carried by the row itself rather than by a settings key.
+    meta=dict(m.metadata or {})
+    if m.max_configs:
+        meta['max_configs']=int(m.max_configs)
     sql='''INSERT INTO users(username,uuid,protocol,limit_gb,expiry_days,limit_req,ip_limit,start_on_first_connect,created_at,expires_at,ips,fingerprint,tls,port,sni,host,frag_len,frag_int,advanced_frag,cipher_suites,tls_mask,block_ads,block_porn,auto_rotate_ip,rotate_time,ip_operator,ip_count,user_proxy,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'''
-    execute(sql,(m.username,uid,m.protocol,m.limit_gb,m.expiry_days,m.limit_req,m.ip_limit,int(m.start_on_first_connect),now,exp,m.ips,m.fingerprint,m.tls,m.port,m.sni,m.host,m.frag_len,m.frag_int,m.advanced_frag,m.cipher_suites,m.tls_mask,int(m.block_ads),int(m.block_porn),int(m.auto_rotate_ip),m.rotate_time,m.ip_operator,m.ip_count,m.user_proxy,json.dumps(m.metadata)))
+    execute(sql,(m.username,uid,m.protocol,m.limit_gb,m.expiry_days,m.limit_req,m.ip_limit,int(m.start_on_first_connect),now,exp,m.ips,m.fingerprint,m.tls,m.port,m.sni,m.host,m.frag_len,m.frag_int,m.advanced_frag,m.cipher_suites,m.tls_mask,int(m.block_ads),int(m.block_porn),int(m.auto_rotate_ip),m.rotate_time,m.ip_operator,m.ip_count,m.user_proxy,json.dumps(meta)))
     return get_user(m.username)
+
+
+def set_metadata_value(username,key,value):
+    """Patch one key inside a user's metadata JSON (used for the config cap)."""
+    u=get_user(username)
+    if not u: return None
+    try: meta=json.loads(u.get('metadata') or '{}')
+    except Exception: meta={}
+    if not isinstance(meta,dict): meta={}
+    if value in (None,''): meta.pop(key,None)
+    else: meta[key]=value
+    execute('UPDATE users SET metadata=? WHERE username=?',(json.dumps(meta),username))
+    return get_user(username)
 def get_user(username): return row('SELECT * FROM users WHERE username=?',(username,))
 def get_by_token(token): return row('SELECT * FROM users WHERE uuid=? OR username=?',(token,token))
 def list_users(): return rows('SELECT * FROM users ORDER BY id DESC')

@@ -56,7 +56,8 @@ process.on('unhandledRejection', (error) => failures.push(`unhandled: ${error.me
 // The panel modules are imported straight from the repository (Node detects the
 // ES-module syntax in .js files), so this needs no build step and no copy.
 const BASE = new URL('../static/js/', import.meta.url);
-const mods = ['core', 'ui', 'session', 'api', 'store', 'pwa', 'views/dashboard', 'views/nodes', 'views/users', 'views/system'];
+const mods = ['core', 'ui', 'session', 'api', 'store', 'pwa', 'views/dashboard', 'views/nodes', 'views/users',
+  'views/system', 'views/customize', 'views/tools', 'views/advanced'];
 const loaded = {};
 for (const name of mods) {
   loaded[name] = await import(new URL(`${name}.js`, BASE));
@@ -72,7 +73,9 @@ const checks = [
   [loaded.ui.Charts.bars !== undefined && loaded.ui.Charts.area !== undefined, 'Charts API'],
   [typeof loaded.session.SessionManager === 'function', 'SessionManager'],
   [typeof loaded.api.ApiClient === 'function', 'ApiClient'],
-  [loaded.store.SECTIONS.length === 5, 'SECTIONS'],
+  [loaded.store.SECTIONS.length === 8, 'SECTIONS'],
+  [loaded.store.SECTIONS.map((item) => item.id).join(',') ===
+    'dashboard,nodes,users,cloudflare,customize,tools,advanced,settings', 'SECTIONS order'],
   [typeof loaded.pwa.PwaManager === 'function', 'PwaManager'],
   [typeof loaded['views/dashboard'].DashboardView === 'function', 'DashboardView'],
   [typeof loaded['views/nodes'].NodesView === 'function', 'NodesView'],
@@ -81,6 +84,12 @@ const checks = [
   [typeof loaded['views/users'].UsersView === 'function', 'UsersView'],
   [typeof loaded['views/system'].CloudflareView === 'function', 'CloudflareView'],
   [typeof loaded['views/system'].SettingsView === 'function', 'SettingsView'],
+  [typeof loaded['views/customize'].CustomizeView === 'function', 'CustomizeView'],
+  [typeof loaded['views/customize'].CustomizeView.prototype.load === 'function', 'customization loader'],
+  [typeof loaded['views/tools'].ToolsView === 'function', 'ToolsView'],
+  [typeof loaded['views/tools'].ToolsView.prototype.scan === 'function', 'CDN scanner action'],
+  [typeof loaded['views/advanced'].AdvancedView === 'function', 'AdvancedView'],
+  [typeof loaded['views/advanced'].AdvancedView.prototype.saveHysteria === 'function', 'hysteria2 form'],
   [!!window.nexus, 'app bootstrapped'],
   [window.nexus?.store?.get('section') === 'dashboard', 'router default section'],
   [typeof window.nexus?.handleSessionLost === 'function', 'session recovery hook'],
@@ -150,6 +159,33 @@ try {
   window.nexus.store.set('settings', catalog);
 } catch (error) {
   failures.push(`protocol chips threw: ${error.message}`);
+}
+
+// The per-client sublink list groups by engine family: a Clash client (which
+// imports YAML only) must never sit next to a Base64 link, and every family is a
+// collapsed dropdown with its alternate formats hidden behind another one.
+try {
+  const rows = window.nexus.users.clientLinkRows([
+    { id: 'bettbox', name: 'Bettbox', platform: 'Android', format: 'clash', format_label: 'Clash / Mihomo',
+      family: 'mihomo', family_label: 'خانواده Clash / Mihomo — فقط YAML', family_hint: 'فقط YAML', family_order: 3,
+      url: 'https://panel.example.com/sub/1?target=bettbox', download: '', alternatives: [] },
+    { id: 'v2rayng', name: 'v2rayNG', platform: 'Android', format: 'base64', format_label: 'Base64 (V2Ray)',
+      family: 'xray', family_label: 'خانواده Xray — Base64 / متن ساده', family_hint: '', family_order: 1,
+      url: 'https://panel.example.com/sub/1?target=v2rayng', download: '',
+      alternatives: [{ target: 'all', label: 'همه ترکیب‌ها', url: 'https://panel.example.com/sub/1?target=all' }] },
+  ]);
+  if ((rows.match(/class="sub-group"/g) || []).length !== 2) failures.push('client links must be grouped per engine family');
+  if (!rows.includes('خانواده Xray') || !rows.includes('خانواده Clash')) failures.push('client groups must carry their family label');
+  if (!rows.includes('سایر فرمت')) failures.push('alternate formats must stay in a collapsed dropdown');
+  if (rows.includes('undefined')) failures.push('client groups rendered undefined');
+  if (!/class="sub-group"[\s\S]*class="sub-group"/.test(rows) || rows.indexOf('خانواده Xray') > rows.indexOf('خانواده Clash')) {
+    failures.push('client families must keep their configured order');
+  }
+  if (window.nexus.users.clientLinkRows([]) === '' || !window.nexus.users.clientLinkRows([]).includes('empty')) {
+    failures.push('client groups must render an empty state');
+  }
+} catch (error) {
+  failures.push(`client groups threw: ${error.message}`);
 }
 
 // The edge/locations card renders the runtime info, every configured location and

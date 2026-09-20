@@ -20,7 +20,8 @@ client = TestClient(app)
 
 PANEL_MODULES = [
     'js/core.js', 'js/ui.js', 'js/session.js', 'js/api.js', 'js/store.js', 'js/pwa.js',
-    'js/views/dashboard.js', 'js/views/nodes.js', 'js/views/users.js', 'js/views/system.js', 'js/app.js',
+    'js/views/dashboard.js', 'js/views/nodes.js', 'js/views/users.js', 'js/views/system.js',
+    'js/views/customize.js', 'js/views/tools.js', 'js/views/advanced.js', 'js/app.js',
 ]
 LEGACY_MODULES = ['app.js', 'app-dashboard.js', 'app-nodes.js', 'app-users.js', 'app-panel.js']
 
@@ -493,10 +494,15 @@ def test_client_catalog_covers_named_clients():
         if entry['id'] == 'smart':
             continue
         assert entry['download'].startswith('http'), entry['id']
+    # Bettbox runs on Clash/Mihomo, so it is only ever handed YAML — never Base64.
     bettbox = [c for c in data['clients'] if c['id'] == 'bettbox'][0]
-    assert bettbox['targets'][0] == 'base64'
+    assert bettbox['targets'][0] == 'clash'
+    assert bettbox['family'] == 'mihomo' and 'base64' not in bettbox['targets']
     nekobox = [c for c in data['clients'] if c['id'] == 'nekoboxplus'][0]
-    assert nekobox['targets'][0] == 'singbox'
+    assert nekobox['targets'][0] == 'singbox' and nekobox['family'] == 'singbox'
+    # Every client carries the engine family the sublink lists are grouped by.
+    assert {'core', 'xray', 'singbox', 'mihomo', 'tools'} <= {f['id'] for f in data['families']}
+    assert all(c.get('family') and c.get('family_label') for c in data['clients'])
 
 
 def test_quick_create_applies_iran_preset_and_returns_links():
@@ -520,10 +526,10 @@ def test_quick_create_applies_iran_preset_and_returns_links():
     assert data['portal_url'].endswith('/portal/' + user['uuid'])
     assert {c['id'] for c in data['clients']} >= {'bettbox', 'exclusive', 'nekoboxplus'}
     assert data['targets']
-    # And the generated subscription really renders (base64 for bettbox).
+    # And the generated subscription really renders (YAML for bettbox).
     sub = client.get(f"/sub/{user['uuid']}?target=bettbox")
     assert sub.status_code == 200
-    assert 'vless://' in base64.b64decode(sub.text).decode()
+    assert sub.headers['x-nexus-target'] == 'clash' and 'proxies' in sub.text
 
 
 def test_quick_create_precedence_and_validation():
@@ -550,10 +556,14 @@ def test_per_client_subscription_formats():
     execute('DELETE FROM users')
     uuid_value = client.post('/api/users', headers=h(), json={'username': 'clientuser'}).json()['uuid']
 
+    # Bettbox is a Clash/Mihomo client: YAML only, never a Base64 container.
     bettbox = client.get(f'/sub/{uuid_value}?target=bettbox')
     assert bettbox.status_code == 200
-    assert 'vless://' in base64.b64decode(bettbox.text).decode()
-    assert bettbox.headers['x-nexus-target'] == 'base64'
+    assert 'proxies' in bettbox.text and 'vless://' not in bettbox.text
+    assert bettbox.headers['x-nexus-target'] == 'clash'
+
+    clash = client.get(f'/sub/{uuid_value}?target=clash')
+    assert clash.headers['x-nexus-target'] == 'clash'
 
     exclusive = client.get(f'/sub/{uuid_value}/cloudflare-01?target=exclusive')
     assert exclusive.status_code == 200
@@ -654,26 +664,31 @@ def test_shadowsocks_ships_every_cipher_family():
     execute('DELETE FROM users')
     data = client.get('/api/transports', headers=h()).json()
     methods = {p['method'] for p in data['profiles'] if p['protocol'] == 'ss'}
-    assert methods == {'2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm',
+    # The classic aes-256-gcm cipher is published too, and first: it is the one
+    # method every client implements, so Shadowsocks shows up (and can be
+    # pinged) outside the SIP022-aware apps as well.
+    assert methods == {'aes-256-gcm', '2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm',
                        '2022-blake3-chacha20-poly1305', 'chacha20-ietf-poly1305'}
     assert set(data['ss_methods']) == methods
+    assert tp.SS_CIPHERS[0]['method'] == 'aes-256-gcm', 'the universal cipher must come first'
     variants = {variant['id'] for variant in data['protocol_catalog']['shadowsocks']}
-    assert variants == {'ss', 'ss-aes256', 'ss-chacha', 'ss-legacy'}
+    assert variants == {'ss-classic', 'ss', 'ss-aes256', 'ss-chacha', 'ss-legacy'}
     # Every cipher is linkable, so it reaches a client's config list.
     assert all(variant['linkable'] for variant in data['protocol_catalog']['shadowsocks'])
 
     # One key per cipher (not per user), sized to the cipher: 16 bytes for
-    # AES-128, 32 for the other 2022 methods, 20 for the legacy password.
+    # AES-128, 32 for the other 2022 methods, 20 for the classic passwords.
     import base64 as b64
     user = {'uuid': '11111111-2222-3333-4444-555555555555'}
     keys = {c['id']: tp.ss_key(user, c) for c in tp.SS_CIPHERS}
     assert len(set(keys.values())) == len(tp.SS_CIPHERS)
     assert {c['id']: len(b64.b64decode(keys[c['id']])) for c in tp.SS_CIPHERS} == {
-        'ss': 16, 'ss-aes256': 32, 'ss-chacha': 32, 'ss-legacy': 20}
+        'ss-classic': 20, 'ss': 16, 'ss-aes256': 32, 'ss-chacha': 32, 'ss-legacy': 20}
     # The same key is what the listener authenticates and what every link carries.
-    assert tp.ss_key({'uuid': 'someone-else'}, tp.SS_CIPHERS[0]) == keys['ss']
+    assert tp.ss_key({'uuid': 'someone-else'}, tp.SS_CIPHERS[0]) == keys['ss-classic']
     from app import xray
-    assert xray._protocol_settings(dict(tp.SS_CIPHERS[2], protocol='ss'))['password'] == keys['ss-chacha']
+    chacha = next(c for c in tp.SS_CIPHERS if c['id'] == 'ss-chacha')
+    assert xray._protocol_settings(dict(chacha, protocol='ss'))['password'] == keys['ss-chacha']
 
     uuid_value = client.post('/api/users', headers=h(), json={'username': 'ssuser'}).json()['uuid']
 
@@ -681,7 +696,10 @@ def test_shadowsocks_ships_every_cipher_family():
     lines = [line for line in client.get(f'/sub/{uuid_value}?target=ss').text.splitlines()
              if line.startswith('ss://')]
     assert len(lines) == 2 * len([p for p in data['profiles'] if p['protocol'] == 'ss'])
-    assert all('plugin=v2ray-plugin' in line and 'mode%3Dwebsocket' in line for line in lines)
+    # The SIP002 plugin options use the spelling every client parses: the plugin
+    # name first, then mode/path/host and the bare tls flag last.
+    assert all('plugin=v2ray-plugin' in line and 'mode%3Dwebsocket' in line
+               and 'host%3D' in line and '%3Btls' in line for line in lines)
     userinfo = lines[0].split('://', 1)[1].split('@', 1)[0]
     method, secret = b64.b64decode(userinfo + '=' * (-len(userinfo) % 4)).decode().split(':', 1)
     assert method in methods and secret == tp.ss_key(user, {'method': method})
