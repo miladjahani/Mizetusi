@@ -51,7 +51,17 @@ export class ApiClient {
     const text = await response.text();
     let payload = null;
     if (text) {
-      try { payload = JSON.parse(text); } catch (error) { payload = text; }
+      try {
+        payload = JSON.parse(text);
+      } catch (error) {
+        // A 200 that is not JSON means the request never reached the API: a
+        // proxy, a captive portal or a stale host answered with its own page.
+        // Handing that string to a view made it dereference HTML (the panel
+        // crashed with "Cannot read properties of undefined (reading 'map')"),
+        // so it becomes one clear error instead.
+        if (response.ok) throw new ApiError('پاسخ سرور JSON نبود — اتصال به صفحهٔ دیگری می‌رسد', { status: 0 });
+        payload = text;
+      }
     }
 
     if (response.status === 401) {

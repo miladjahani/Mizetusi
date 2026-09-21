@@ -661,6 +661,11 @@ export class UsersView {
         this.api.get(`/api/users/${encodeURIComponent(user.username)}/links`),
         this.api.get(`/api/scopes?username=${encodeURIComponent(user.username)}`),
       ]);
+      // Nothing downstream may assume the shape: a proxy page or an empty body
+      // would otherwise crash the drawer on its first ``.map``.
+      if (!data || typeof data !== 'object') throw new Error('پاسخ سرور خوانا نبود — صفحه را بازخوانی کنید');
+      data.subscriptions = Array.isArray(data.subscriptions) ? data.subscriptions : [];
+      data.nodes = Array.isArray(data.nodes) ? data.nodes : [];
       $('#linkSummary', modal.el).innerHTML = `
         <div class="kv-line"><span>UUID / رمز</span><b>${esc(data.uuid)}</b></div>
         <div class="kv-line"><span>پروتکل‌های فعال</span><b>${esc(data.protocol_label || 'همه پروتکل‌ها')}</b></div>

@@ -1,6 +1,8 @@
 /* Headless smoke test: import the whole ES-module graph with a tiny DOM stub.
    Node links the modules for real, so a missing/misnamed export fails here
    instead of in the browser. Run:  node tests/js_smoke.mjs            */
+import { readFileSync } from 'node:fs';
+
 const noop = () => {};
 const fakeEl = () => ({
   style: {}, dataset: {}, classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
@@ -9,14 +11,29 @@ const fakeEl = () => ({
   querySelector: () => null, querySelectorAll: () => [], closest: () => null, focus: noop,
 });
 
+/* The render paths look up ids the real template defines. Without them every
+   `$('#x')` returns null, a view returns early and a crash inside it is never
+   seen — which is how an unguarded `data.nodes.map` shipped. Ids that exist in
+   templates/index.html resolve to a stub element, so a render really runs. */
+const templateIds = new Set([...readFileSync(new URL('../templates/index.html', import.meta.url), 'utf8')
+  .matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
+const elements = new Map();
+const elementFor = (id) => {
+  if (!elements.has(id)) elements.set(id, fakeEl());
+  return elements.get(id);
+};
+const byIdSelector = (selector) => (typeof selector === 'string' && /^#[^ .>#[]+$/.test(selector)
+  && templateIds.has(selector.slice(1)) ? elementFor(selector.slice(1)) : null);
+
 globalThis.document = {
   readyState: 'complete',
   title: '',
   documentElement: { style: { setProperty: noop } },
   body: fakeEl(),
-  querySelector: () => null,
+  activeElement: null,
+  querySelector: byIdSelector,
   querySelectorAll: () => [],
-  getElementById: () => null,
+  getElementById: (id) => (templateIds.has(id) ? elementFor(id) : null),
   createElement: fakeEl,
   addEventListener: noop,
   removeEventListener: noop,
@@ -106,6 +123,14 @@ const checks = [
   [typeof loaded.ui.accordion === 'function', 'accordion helper'],
   [!!window.nexus, 'app bootstrapped'],
   [window.nexus?.store?.get('section') === 'dashboard', 'router default section'],
+  // The grouped navigation must really paint. It reads NAV_GROUPS off the router;
+  // reading it off the store threw «Cannot read properties of undefined
+  // (reading 'map')» during boot and left the sidebar — and the phone bottom
+  // bar — empty on every load.
+  [(elements.get('navGroups')?.innerHTML.match(/class="nav-group[ "]/g) || []).length === 5,
+    'the grouped navigation must render five groups'],
+  [(elements.get('navGroups')?.innerHTML.match(/data-section=/g) || []).length === 8,
+    'the grouped navigation must offer every section'],
   [typeof window.nexus?.handleSessionLost === 'function', 'session recovery hook'],
 ];
 for (const [ok, label] of checks) {
@@ -331,6 +356,66 @@ try {
   if (!state || state.steps.length !== 2) failures.push('guide state must survive a render');
 } catch (error) {
   failures.push(`guide threw: ${error.message}`);
+}
+
+// A response is not always the object a view expects: a proxy or a captive
+// portal answers with its own page (a string), an empty body parses to null, a
+// version skew ships the wrong shape. Any of those used to reach
+// `data.nodes.map` and take the node section down with «Cannot read properties
+// of undefined (reading 'map')». Every payload-consuming path must instead show
+// an empty state — and the client must say why a body it cannot read is a
+// problem, instead of handing HTML to a view.
+try {
+  const realApi = window.nexus.api;
+  const host = elementFor('exploreLinks');
+  window.nexus.store.set('users', [{ username: 'probe', protocol_label: 'همه پروتکل‌ها' }]);
+  window.nexus.store.set('exploreUser', 'probe');
+  for (const payload of ['<!doctype html><html>captive portal</html>', null, {}, 42]) {
+    window.nexus.api = { get: async () => payload, post: async () => payload };
+    host.innerHTML = '';
+    await window.nexus.nodes.renderExplorer();
+    if (!host.innerHTML.includes('class="empty"')) {
+      failures.push('the node explorer must show an empty state when the links payload has no nodes');
+    }
+    if (host.innerHTML.includes('reading')) failures.push('the node explorer must not render an error message as content');
+  }
+  // …and the guard must not swallow a good payload either.
+  window.nexus.api = {
+    get: async () => ({ protocol_label: 'VLESS', nodes: [{ name: 'de-cf-01', kind: 'cloudflare', latency_ms: 42,
+      links: { primary: 'vless://example' }, subscription: 'https://panel.example.com/sub/1?node=de-cf-01' }] }),
+  };
+  host.innerHTML = '';
+  await window.nexus.nodes.renderExplorer();
+  if (!host.innerHTML.includes('de-cf-01') || !host.innerHTML.includes('sub-card')) {
+    failures.push('a readable links payload must still paint one card per node');
+  }
+  window.nexus.api = realApi;
+} catch (error) {
+  failures.push(`hostile payloads threw: ${error.message}`);
+}
+
+// A 200 that is not JSON never reached the API (proxy, captive portal, wrong
+// host). It used to be returned as a string, which is what made views explode.
+try {
+  const realFetch = globalThis.fetch;
+  const client = new loaded.api.ApiClient({ headers: () => ({}), markExpired: noop });
+  globalThis.fetch = async () => new Response('<!doctype html><html>portal</html>', {
+    status: 200, headers: { 'Content-Type': 'text/html' },
+  });
+  let message = '';
+  await client.get('/api/users/probe/links')
+    .then(() => failures.push('a non-JSON 200 must not resolve as a payload'))
+    .catch((error) => { message = error.message; });
+  if (!/JSON/.test(message)) failures.push('a non-JSON 200 must explain that the server did not answer with JSON');
+  // A real JSON error body still reaches the view as a message.
+  globalThis.fetch = async () => new Response(JSON.stringify({ detail: 'کاربر پیدا نشد' }),
+    { status: 404, headers: { 'Content-Type': 'application/json' } });
+  await client.get('/api/users/nope').then(
+    () => failures.push('a 404 must reject'),
+    (error) => { if (!/پیدا نشد/.test(error.message)) failures.push('a JSON error body must keep its server message'); });
+  globalThis.fetch = realFetch;
+} catch (error) {
+  failures.push(`api client threw: ${error.message}`);
 }
 
 await new Promise((resolve) => setTimeout(resolve, 50));

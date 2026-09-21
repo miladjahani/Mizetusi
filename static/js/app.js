@@ -124,7 +124,11 @@ export class NexusApp {
         <span class="nav-badge" id="badge-${section.id}">—</span>
       </button>`;
     };
-    host.innerHTML = this.store.groups.map((group) => {
+    // NAV_GROUPS belongs to the router (it is the nav model and owns
+    // ``onNavigate``); the store only carries state. Reading it off the store
+    // threw «Cannot read properties of undefined (reading 'map')» at boot and
+    // the whole navigation — sidebar and phone bottom bar — never rendered.
+    host.innerHTML = this.router.groups.map((group) => {
       const open = group.id === this.store.get('navGroup') || group.items.length === 1;
       return `<div class="nav-group${open ? ' open' : ''}" data-group="${group.id}">
         <button class="nav-group-head" data-group-toggle="${group.id}" title="${esc(group.label)}">
@@ -147,7 +151,7 @@ export class NexusApp {
     });
     $$('[data-group-toggle]', host).forEach((button) => {
       button.onclick = () => this.safe(() => {
-        const group = this.store.groupMeta(button.dataset.groupToggle);
+        const group = this.router.groupMeta(button.dataset.groupToggle);
         // A one-tab group has nothing to unfold: its head is the tab.
         if (group.items.length === 1) { this.go(group.items[0]); return; }
         this.store.set('navGroup', this.store.get('navGroup') === group.id ? '' : group.id);
@@ -569,5 +573,7 @@ export class NexusApp {
 const app = new NexusApp();
 window.nexus = app; // debugging handle for the browser console
 
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => app.start());
-else app.start();
+// The boot itself goes through ``safe()``: a throw in the shell used to surface
+// as a bare unhandled rejection (and as a toast nobody could place).
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => app.safe(() => app.start()));
+else app.safe(() => app.start());

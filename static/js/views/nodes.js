@@ -205,8 +205,23 @@ export class NodesView {
       return;
     }
     host.innerHTML = '<div class="skel" style="height:90px"></div>';
-    const data = await this.api.get(`/api/users/${encodeURIComponent(username)}/links`);
-    host.innerHTML = data.nodes.map((node) => `
+    let data;
+    try {
+      data = await this.api.get(`/api/users/${encodeURIComponent(username)}/links`);
+    } catch (error) {
+      host.innerHTML = `<div class="empty">${ico('alert', 28)}<div>${esc(error.message)}</div></div>`;
+      return;
+    }
+    // The payload is the server's: if a proxy answered instead of the API (or the
+    // node catalog is empty) there is no ``nodes`` array to paint, and an
+    // unguarded ``data.nodes.map`` used to crash this whole section.
+    const items = Array.isArray(data?.nodes) ? data.nodes : [];
+    if (!items.length) {
+      host.innerHTML = `<div class="empty">${ico('link', 30)}<div>نودی برای این کاربر منتشر نشده</div>
+        <div class="muted" style="margin-top:6px">نودهای لبه را از بخش «شبکه و لبه» بسازید یا محدودهٔ نودی کاربر را بازتر کنید.</div></div>`;
+      return;
+    }
+    host.innerHTML = items.map((node) => `
       <div class="sub-card" style="margin-top:9px">
         <div style="display:flex;align-items:center;gap:9px">
           <span class="node-icon ${node.kind === 'cloudflare' ? 'cf' : ''}" style="width:26px;height:26px;flex:0 0 26px;font-size:10px">${node.kind === 'cloudflare' ? '☁' : 'R'}</span>

@@ -7,6 +7,17 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **The boot crash is gone, and a bad response can no longer take a tab down.** The grouped
+  navigation read `NAV_GROUPS` off the *store*, where it does not exist (`groups`/
+  `groupMeta` live on the router), so `renderNav()` threw «Cannot read properties of undefined
+  (reading 'map')» on every load, the toast carried that message and the sidebar — the phone
+  bottom bar — never painted; the shell startup now also goes through `safe()`. The same
+  class of bug is closed at the wire: the API client turns a 200 that is not JSON (`a proxy or
+  captive portal answered instead of the API`) into one readable error instead of handing HTML
+  to a view, and every payload-consuming render (node explorer, links drawer, live guide)
+  validates its shape and shows an empty state. `tests/js_smoke.mjs` now resolves the ids the
+  template defines, so render paths really execute — with an empty, a realistic *and* a hostile
+  payload — instead of returning early on a null element.
 - **The panel now looks like the mark it ships.** The brand is the lime shield-in-a-ring on a
   near-black green tile, and the whole theme follows it: `static/app.css` moved every token to
   that family (`--accent:#c9f24c`, `--accent-2:#5fce62`, near-black backgrounds, lime glow on

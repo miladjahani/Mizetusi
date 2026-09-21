@@ -69,14 +69,17 @@ export class GuideView {
       host.innerHTML = '<div class="skel" style="height:120px"></div><div class="skel" style="height:120px;margin-top:10px"></div>';
       return;
     }
-    const done = guide.steps.filter((step) => step.done).length;
-    const next = guide.steps.find((step) => !step.done);
+    // The step list is the server's; an unexpected payload must not take the
+    // drawer (and the tab behind it) down with it.
+    const steps = Array.isArray(guide.steps) ? guide.steps : [];
+    const done = steps.filter((step) => step.done).length;
+    const next = steps.find((step) => !step.done);
     const score = Fmt.clamp(Number(guide.score) || 0, 0, 100);
     host.innerHTML = `
       <div class="guide-score">
         <div class="g-ring">${Charts.ring(score, '#c9f24c')}<span class="g-pct">${Fmt.num(score)}%</span></div>
         <div>
-          <b>${Fmt.num(done)} از ${Fmt.num(guide.steps.length)} قدم انجام شده</b>
+          <b>${Fmt.num(done)} از ${Fmt.num(steps.length)} قدم انجام شده</b>
           <span>${next ? `قدم بعدی: <b style="color:#d9f76e">${esc(next.title)}</b>` : 'همه‌چیز آماده است — فقط کاربر بسازید و لینک بدهید.'}</span>
         </div>
       </div>
@@ -84,7 +87,7 @@ export class GuideView {
         <b>${ico('activity', 13)} ${esc(guide.tip?.title || 'راهنمای این تب')}</b>
         <ul>${(guide.tip?.items || []).map((item) => `<li>${esc(item)}</li>`).join('')}</ul>
       </div>
-      ${guide.steps.map((step, index) => `
+      ${steps.map((step, index) => `
         <div class="guide-step${step.done ? ' done' : ''}">
           <span class="g-tick">${step.done ? ico('check', 12) : Fmt.num(index + 1)}</span>
           <div class="g-main">
