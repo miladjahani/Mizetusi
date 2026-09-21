@@ -6,20 +6,20 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 import jwt
-from app.config import settings
+from app.config import SUPPORT_CHANNEL, settings
 from app.db import init_db, row, rows, execute
 from app.core.models import UserCreate, TrafficEvent, PROTOCOL_LIST
 from app.users.service import (list_users, get_user, get_by_token, create_user, delete_user, toggle_user,
     reset_user, track, allowed, reset_due, set_metadata_value)
 from app.subscriptions.generator import (render, active_nodes, node_links, normalize_target, profiles_for,
-    entry_pairs, TARGETS as SUB_TARGETS)
+    entry_pairs, TRANSPORT_TARGETS as SUB_TRANSPORT_TARGETS, TARGETS as SUB_TARGETS)
 from app.subscriptions.clients import (CLIENTS, PRESETS, FAMILIES, FORMAT_LABELS, DEFAULT_PRESET, catalog as client_catalog,
     client_links, client_groups, download_overrides, preset as get_preset, subscription_url as client_subscription_url)
 from app.subscriptions import transports as transports
 from app.subscriptions import scope as node_scope
 from app.subscriptions import flags as sub_flags
 from app import warp as warp_service
-from app.proxy.manager import add as add_proxy, list_all as list_proxies, check as check_proxy
+from app.proxy.manager import add as add_proxy, list_all as list_proxies, check as check_proxy, parse as parse_proxy
 from app.dns.service import doh
 from app.services.backup import export_all
 from app.cloudflare.monitor import seed_ips, probe_all, best, loop as cf_loop
@@ -112,7 +112,9 @@ def _brand():
             # The status window is skinned from these, so a rebrand reaches the
             # end user without touching the template.
             'banner':(_setting('portal_banner') or '').strip(),
-            'support_url':(_setting('support_url') or '').strip(),
+            # An admin's own support link always wins; with nothing configured the
+            # built-in channel is used, so «پشتیبانی» is never a dead button.
+            'support_url':(_setting('support_url') or '').strip() or SUPPORT_CHANNEL,
             'flags':_flags_on(),
             'default_format':(_setting('default_format') or 'auto').strip().lower(),
             'logo':PWA_ICONS['logo'],'icons':PWA_ICONS,'short_name':'NEXUS'}
@@ -359,6 +361,23 @@ def _target_label(target):
     profile=transports.find(target)
     return profile['tag'] if profile else SUB_LABELS.get(target,target)
 
+def _target_offerable(target,protocols):
+    """Whether a target has anything to publish for this user at all.
+
+    Two gates: a protocol the user was not given, and a transport this
+    deployment has not published (Reality with no dedicated TCP port, WARP not
+    registered). Both raise a *clear* 400 when a link is opened — but a link the
+    panel never should have offered in the first place: the drawer listed every
+    target and handed out rows that were wrong the moment they were tapped.
+    Format and client targets always resolve, so they are always offered.
+    """
+    if target in transports.PROTOCOLS:
+        return target in protocols
+    if target in SUB_TRANSPORT_TARGETS:
+        try: return bool(profiles_for(target,protocols))
+        except Exception: return False
+    return True
+
 def _transport_targets(protocols=None):
     """One subscription URL per published transport profile.
 
@@ -396,6 +415,7 @@ def _protocol_catalog():
 def _share_payload(request:Request,u,node=''):
     """Everything an end user needs: status window, per-client subs, formats."""
     base=public_base(request); token=urllib.parse.quote(u['uuid'],safe='')
+    transport_protocols=transports.user_protocols(u)
     return {
         'base_url':base,
         'portal_url':_portal_url(base,token),
@@ -404,7 +424,8 @@ def _share_payload(request:Request,u,node=''):
         'transports':_transport_targets(),
         'node_scope':transports.user_scope(u),'node_scope_label':node_scope.label(transports.user_scope(u)),
         'scopes':_scope_options(base,token,u),
-        'targets':[{'target':t,'label':_target_label(t),'url':client_subscription_url(base,token,t,node)} for t in SUB_TARGETS],
+        'targets':[{'target':t,'label':_target_label(t),'url':client_subscription_url(base,token,t,node)}
+                   for t in SUB_TARGETS if _target_offerable(t,transport_protocols)],
     }
 
 def _scope_options(base,token,u):
@@ -531,7 +552,11 @@ def update(request:Request,username:str,body:dict):
     auth(request); u=get_user(username)
     if not u: raise HTTPException(404,'user not found')
     if body.get('toggle_only'): return _user_payload(toggle_user(username))
-    if body.get('reset_action'): return _user_payload(reset_user(username,body['reset_action']))
+    if body.get('reset_action'):
+        # An unknown action is the caller's mistake, so it answers 400 with the
+        # reason instead of escaping as a ValueError and a 500.
+        try: return _user_payload(reset_user(username,str(body['reset_action'])))
+        except ValueError as exc: raise HTTPException(400,str(exc))
     allowed_keys={'protocol','limit_gb','expiry_days','limit_req','ip_limit','is_active','ips','port','sni','host','fingerprint','tls','user_proxy','frag_len','frag_int','advanced_frag','cipher_suites','tls_mask','block_ads','block_porn','auto_rotate_ip','rotate_time','ip_operator','ip_count'}
     payload=dict(body)
     # The config cap is not a column: it lives in the user's metadata JSON, so it
@@ -566,7 +591,12 @@ def update(request:Request,username:str,body:dict):
     return _user_payload(get_user(username))
 @app.delete('/api/users/{username}')
 def delete(request:Request,username:str):
-    auth(request); removed=bool(delete_user(username)); _audit('user.delete',username); return {'success':removed}
+    auth(request)
+    # ``execute`` returns ``lastrowid`` on SQLite, which is None for a DELETE, so
+    # a real deletion used to answer ``success: false``. Existence is the honest
+    # answer for the caller (and it keeps working the same way on Postgres).
+    existed=bool(get_user(username)); delete_user(username)
+    _audit('user.delete',username); return {'success':existed}
 @app.post('/api/traffic/{username}')
 def traffic(request:Request,username:str,e:TrafficEvent):
     auth(request); result=track(username,e.bytes,e.requests,e.ip)
@@ -876,14 +906,32 @@ def status(request:Request,username:str):
     return templates.TemplateResponse(request,'portal.html',{'p':_portal_data(request,u),'brand':_brand()})
 @app.get('/api/proxies')
 def proxies(request:Request): auth(request); return list_proxies()
+async def _optional_json(request:Request):
+    """The request body as a dict: a missing or malformed one is simply empty.
+
+    Subscripting ``await request.json()`` directly turned a body-less call into a
+    ``KeyError`` and a 500, which reads as a broken feature rather than as «the
+    value you sent is wrong».
+    """
+    try: body=await request.json()
+    except Exception: body=None
+    return body if isinstance(body,dict) else {}
+
 @app.post('/api/proxies')
 async def proxy_create(request:Request):
-    auth(request); b=await request.json()
-    try: add_proxy(b['proxy'],b.get('country'))
+    auth(request); b=await _optional_json(request)
+    proxy=str(b.get('proxy') or '').strip()
+    if not proxy: raise HTTPException(400,'آدرس پروکسی لازم است (مثل socks5://user:pass@host:1080)')
+    try: add_proxy(proxy,b.get('country'))
     except Exception as e: raise HTTPException(400,str(e))
     return {'success':True}
 @app.post('/api/test-proxy')
-async def proxy_test(request:Request): auth(request); b=await request.json(); return check_proxy(b['proxy'])
+async def proxy_test(request:Request):
+    auth(request); b=await _optional_json(request)
+    proxy=str(b.get('proxy') or '').strip()
+    if not proxy: raise HTTPException(400,'آدرس پروکسی لازم است (مثل socks5://user:pass@host:1080)')
+    if not parse_proxy(proxy): raise HTTPException(400,'آدرس پروکسی قابل خواندن نیست — شکل درست: socks5://user:pass@host:1080')
+    return check_proxy(proxy)
 @app.get('/api/dns')
 async def dns(request:Request,name:str): auth(request); return await doh(name)
 @app.get('/api/backup')
@@ -1422,7 +1470,11 @@ def user_links(request:Request,username:str,node:str=''):
         'portal_url':_portal_url(base,token),
         'subscription':sub(_user_target(u)),
         'smart_url':sub('auto'),
-        'subscriptions':[{'target':t,'label':_target_label(t),'url':sub(t)} for t in SUB_TARGETS],
+        # Only the targets this user can actually open (see _target_offerable):
+        # «vmess» for a vless+trojan user, or Reality/WARP on a deployment that
+        # does not publish them, used to be listed and answered 400 on tap.
+        'subscriptions':[{'target':t,'label':_target_label(t),'url':sub(t)} for t in SUB_TARGETS
+                         if _target_offerable(t,protocol_set)],
         'protocol_set':sorted(enabled_protocols,key=transports.PROTOCOLS.index),
         'locations':locations,
         'location_subscriptions':[{'location':loc,'label':f'{loc.upper()} · فقط همین لوکیشن',

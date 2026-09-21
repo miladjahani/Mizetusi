@@ -348,12 +348,20 @@ try {
       { id: 'nodes', title: 'کاتالوگ نود', hint: 'Sync بزنید', detail: '۳ نود فعال', done: true, section: 'nodes' },
     ],
     links: { smart: 'https://panel.example.com/sub/1?target=auto', portal: 'https://panel.example.com/portal/1', username: 'demo' },
+    support: 'https://t.me/miliconfig',
   });
   window.nexus.guide.render();
   window.nexus.guide.renderChip();
   window.nexus.guide.toggle(false);
   const state = window.nexus.store.get('guide');
   if (!state || state.steps.length !== 2) failures.push('guide state must survive a render');
+  // The support channel: on a phone this drawer is the only place the link is
+  // reachable, so it must survive every guide render.
+  const drawer = document.querySelector('#guideBody').innerHTML;
+  if (!drawer.includes('href="https://t.me/miliconfig"')) failures.push('the guide must offer the support channel');
+  window.nexus.store.set('guide', { score: 0, tip: {}, steps: [], support: 'javascript:alert(1)' });
+  window.nexus.guide.render();
+  if (document.querySelector('#guideBody').innerHTML.includes('javascript:')) failures.push('the guide must not link a non-http support value');
 } catch (error) {
   failures.push(`guide threw: ${error.message}`);
 }

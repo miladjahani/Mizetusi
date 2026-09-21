@@ -21,6 +21,7 @@
   <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 12S6 5.8 12 5.8 21.4 12 21.4 12 18 18.2 12 18.2 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.9"/></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5.6c0 4.3 2.9 7.9 7 9.4 4.1-1.5 7-5.1 7-9.4V6z"/><path d="m9.2 12 2 2 3.6-4"/></symbol>
   <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3 5.5 13.4h5L10 21l8.2-10.6h-5z"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.4 14.6a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14.6 9.4a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
 </defs></svg>
 
 <div class="aurora"><span></span><span></span><span></span></div>
@@ -47,9 +48,12 @@
     <div class="login-foot">
       <span class="pill"><svg width="13" height="13"><use href="#i-shield"/></svg> نشست امن</span>
       <span class="pill"><svg width="13" height="13"><use href="#i-zap"/></svg> پنل زنده</span>
+      <a class="pill" href="{{ brand.support_url }}" target="_blank" rel="noopener"
+         title="کانال پشتیبانی: {{ brand.support_url }}"><svg width="13" height="13"><use href="#i-link"/></svg> پشتیبانی</a>
       <button class="tbtn" id="install" style="display:none">نصب برنامه</button>
     </div>
     <div class="login-hint">رمز اولیه در نصب جدید: <b>admin</b> — پس از ورود آن را تغییر دهید.</div>
+    <div class="login-hint">تمدید، راهنمای کلاینت‌ها و اطلاع از تغییرات در <a href="{{ brand.support_url }}" target="_blank" rel="noopener">کانال پشتیبانی</a>.</div>
   </div>
 </main>
 

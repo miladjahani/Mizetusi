@@ -1,6 +1,11 @@
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# The support channel every install falls back to when the admin has not set a
+# support link in «شخصی‌سازی». One place, so the panel shell, the login screen,
+# the live guide and the public status window all point at the same channel.
+SUPPORT_CHANNEL = 'https://t.me/miliconfig'
+
 class Settings(BaseSettings):
     app_name: str = 'NEXUS Xray Control Plane'
     environment: str = 'production'

@@ -593,6 +593,9 @@ def _guide_state(request):
         links = {'smart': main._sub_url(base, token, main._user_target(newest)),
                  'portal': main._portal_url(base, token), 'username': newest['username']}
     return {'steps': steps, 'links': links, 'tips': SECTION_TIPS,
+            # The channel an admin (or an end user asking for a renewal) should
+            # reach: what the admin configured, else the built-in channel.
+            'support': brand.get('support_url') or '',
             'score': round(100 * sum(1 for step in steps if step['done']) / len(steps)),
             'next': next((step['id'] for step in steps if not step['done']), ''),
             'catalog_total': len(nodes), 'locations': locations}

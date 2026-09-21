@@ -69,6 +69,30 @@ def test_stylesheet_keeps_the_layout_inside_a_phone_viewport():
     assert 'max-width:900px' in css
 
 
+def test_support_channel_is_the_default_support_link():
+    # Out of the box every install points at the support channel, and an admin's
+    # own link in «شخصی‌سازی» still wins over it.
+    from app.config import SUPPORT_CHANNEL
+    from app.main import _brand
+    assert _brand()['support_url'] == SUPPORT_CHANNEL
+    _set('support_url', 'https://t.me/my_own_desk')
+    try:
+        assert _brand()['support_url'] == 'https://t.me/my_own_desk'
+    finally:
+        _set('support_url', '')
+
+
+def test_support_channel_is_reachable_from_the_panel_login_and_guide():
+    # An admin who cannot get in (or an end user asking for a renewal) needs the
+    # channel on the login screen too, and on a phone the live guide is the only
+    # place the link stays reachable — the sidebar footer is hidden there.
+    from app.config import SUPPORT_CHANNEL
+    for page in (client.get('/login'), client.get('/', headers=h())):
+        assert page.status_code == 200
+        assert f'href="{SUPPORT_CHANNEL}"' in page.text
+    assert client.get('/api/guide', headers=h()).json()['support'] == SUPPORT_CHANNEL
+
+
 def test_phone_bottom_bar_does_not_clip_its_group_sheet():
     # On a phone the sidebar *is* the fixed bottom bar, and the desktop rule
     # clips it to its rounded corners. That ``overflow:hidden`` also swallowed
@@ -842,6 +866,12 @@ def test_public_status_window_lists_links_clients_and_nodes():
     assert {c['id'] for c in data['clients']} >= {'bettbox', 'exclusive', 'nekoboxplus'}
     assert data['nodes_total'] == len(data['nodes']) == 2
     assert data['portal_url'].endswith('/portal/' + user['uuid'])
+
+    # The support channel is the default target, so «پشتیبانی» is never a dead
+    # button in a fresh install's status window.
+    from app.config import SUPPORT_CHANNEL
+    assert data['support_url'] == SUPPORT_CHANNEL
+    assert f'href="{SUPPORT_CHANNEL}"' in page.text
 
     # Username lookup works too, and the legacy admin URL renders the same window.
     assert anonymous.get(f"/portal/{user['username']}").status_code == 200

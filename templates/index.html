@@ -69,7 +69,10 @@
         <div class="z"><span id="clockUtc">UTC --:--</span><span id="clockUptime">UP 0s</span></div>
       </div>
       <div class="online-pill"><i class="dot" id="sysDot"></i><span id="sysText">در حال اتصال…</span></div>
+      <a class="online-pill support-pill" href="{{ brand.support_url }}" target="_blank" rel="noopener"
+         title="کانال پشتیبانی: {{ brand.support_url }}"><svg width="13" height="13"><use href="#i-link"/></svg><span>کانال پشتیبانی</span></a>
       <button class="logout" id="logout">خروج از حساب</button>
+      <div class="brand-version" id="brandVersion">—</div>
     </div>
   </aside>
 
@@ -341,8 +344,8 @@
           <div class="panel-head"><div><h2>ظاهر و متن پنجرهٔ وضعیت</h2><p class="sub">هر چیزی که کاربر نهایی می‌بیند: بنر، لینک پشتیبانی، پرچم کشورها و سابلینک پیشنهادی</p></div><span class="pill" id="czTag">—</span></div>
           <label>متن بنر بالای پنجرهٔ وضعیت <span class="hint">خالی = بدون بنر</span></label>
           <input id="czBanner" placeholder="مثال: تمدید اشتراک از طریق پشتیبانی تلگرام" maxlength="200">
-          <label>لینک پشتیبانی</label>
-          <input id="czSupport" dir="ltr" placeholder="https://t.me/your_support">
+          <label>لینک پشتیبانی <span class="hint">خالی = کانال پیش‌فرض ({{ brand.support_url }})</span></label>
+          <input id="czSupport" dir="ltr" placeholder="{{ brand.support_url }}">
           <div class="field-grid">
             <div><label>نام برنامه <span class="hint">روی آیکون نصب‌شده و عنوان پنل</span></label><input id="czAppName" dir="ltr" placeholder="NEXUS"></div>
             <div><label>فرمت پیشنهادی <span class="hint">خانوادهٔ همان کلاینت در پنجرهٔ وضعیت برجسته می‌شود</span></label>

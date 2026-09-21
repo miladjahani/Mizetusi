@@ -305,7 +305,15 @@ def test_the_status_window_groups_the_client_sublinks_by_engine_and_reports_the_
                for item in data['transports'])
 
     assert data['config_count'] == 6 and data['config_limit'] == 6
-    assert data['banner'] == 'تمدید از پشتیبانی' and data['support_url'] == ''
+    # The admin's support link always wins; with nothing configured the window
+    # falls back to the built-in support channel instead of dropping the button.
+    from app.config import SUPPORT_CHANNEL
+    assert data['banner'] == 'تمدید از پشتیبانی' and data['support_url'] == SUPPORT_CHANNEL
+    client.post('/api/customization', headers=h(), json={'support_url': 'https://t.me/my_desk'})
+    try:
+        assert client.get(f"/portal/{user['uuid']}/json").json()['support_url'] == 'https://t.me/my_desk'
+    finally:
+        client.post('/api/customization', headers=h(), json={'support_url': ''})
     assert data['flags'] is True
     # The admin's preferred shape is what the window marks as recommended.
     assert data['default_format'] == 'clash'
