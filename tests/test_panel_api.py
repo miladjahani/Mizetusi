@@ -69,6 +69,26 @@ def test_stylesheet_keeps_the_layout_inside_a_phone_viewport():
     assert 'max-width:900px' in css
 
 
+def test_phone_bottom_bar_does_not_clip_its_group_sheet():
+    # On a phone the sidebar *is* the fixed bottom bar, and the desktop rule
+    # clips it to its rounded corners. That ``overflow:hidden`` also swallowed
+    # ``.nav-group-items`` — the sheet the group heads open *above* the bar — so
+    # tapping «کاربران و نودها», «شبکه و لبه» or «پنل و ظاهر» highlighted the head
+    # but never showed its two tabs. Only single-tab groups worked, because they
+    # navigate straight to their section instead of unfolding.
+    css = client.get('/static/app.css').text
+    clipped = css.index('.sidebar{')
+    assert 'overflow:hidden' in css[clipped:css.index('}', clipped)], 'the desktop clip this test guards against is gone'
+    # The phone override must come after it to win the cascade, and pin the sheet
+    # to the whole bar (not to one ~78px cell, which ran off the screen edge).
+    phone = css.index('.sidebar{overflow:visible}')
+    assert phone > clipped
+    assert '.sidebar .nav-groups .nav-group{position:static}' in css
+    assert '.sidebar .nav-groups .nav-group-items{left:0;right:0;min-width:0}' in css
+    # The phone sheet is the absolute panel that sits above the bar.
+    assert 'position:absolute;bottom:calc(100% + 12px)' in css
+
+
 def test_every_module_import_resolves():
     # An ES module that imports a missing file fails at load time in the browser,
     # so the module graph is verified here as well.

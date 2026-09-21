@@ -674,6 +674,22 @@ a.copy-btn{text-decoration:none}
 .nav-group-items .nav.active::before{right:-6px;height:18px}
 .nav-group-items .nav-goto{display:none}
 
+/* Phones: the bar must not clip the sheet that opens above it. On a phone the
+   sidebar *is* the fixed bottom bar and the desktop rule clips it
+   (``overflow:hidden`` for its rounded corners) — which also swallowed
+   ``.nav-group-items``, positioned above the bar, outside that box. So a tap on
+   «کاربران و نودها», «شبکه و لبه» or «پنل و ظاهر» highlighted the group head but
+   never revealed its two tabs; only single-tab groups worked, because they
+   navigate straight to their section instead of unfolding. The sheet also spans
+   the whole bar now, instead of a fixed 206px box anchored to one ~78px cell
+   (which ran off the screen edge for the outer groups). Declared with the extra
+   specificity the shared rules further down the sheet need to be beaten. */
+@media (max-width:900px){
+  .sidebar{overflow:visible}
+  .sidebar .nav-groups .nav-group{position:static}
+  .sidebar .nav-groups .nav-group-items{left:0;right:0;min-width:0}
+}
+
 /* ==========================================================================
    Collapsible cards — one summary line each, body folded away. This is what
    turns the long tab pages into a short stack of titled rows.
