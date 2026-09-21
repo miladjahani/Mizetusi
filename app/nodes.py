@@ -287,10 +287,16 @@ class NodeProbe:
         ms, err = await cls._tls_once(host, port, timeout, server_hostname, True)
         if ms is not None:
             return ms, None, True
-        plain_ms, plain_err = await cls._tls_once(host, port, timeout, server_hostname, False)
-        if plain_ms is not None:
-            return plain_ms, None, False
-        return None, err or plain_err, False
+        # Only a certificate problem can be answered by retrying without
+        # verification; a timeout or a refused connection would just spend a
+        # second attempt per node (and a save that pings 30 addresses must stay
+        # fast enough for one request).
+        if 'cert' in str(err).lower():
+            plain_ms, plain_err = await cls._tls_once(host, port, timeout, server_hostname, False)
+            if plain_ms is not None:
+                return plain_ms, None, False
+            err = err or plain_err
+        return None, err, False
 
     @staticmethod
     async def tcp(host, port, timeout=4.0, tls=False, server_hostname=None):

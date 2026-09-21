@@ -3,7 +3,23 @@
    No chart library: the panel must render inside a Railway container with zero
    external requests, and an SVG string is smaller than any dependency.
    ========================================================================== */
-import { $, $$, esc, ico, Fmt } from './core.js';
+import { $, $$, esc, ico, chev, Fmt } from './core.js';
+
+/* ---------------------------------------------------------------- accordion */
+/**
+ * One collapsible card: a summary line with an icon, a title, a hint and an
+ * optional right-hand figure, and a body that stays folded until it is needed.
+ * Every long tab is built from these, so a page is a short stack of titled rows
+ * instead of a wall of panels nobody scrolls to the bottom of.
+ */
+export const accordion = ({ id = '', icon = '', title, subtitle = '', meta = '', body = '', open = false, klass = '' }) => {
+  const classes = ['acc', klass].filter(Boolean).join(' ');
+  return `<details class="${classes}"${open ? ' open' : ''}${id ? ` id="${esc(id)}"` : ''}>`
+    + `<summary>${icon ? `<span class="acc-ico">${ico(icon, 15)}</span>` : ''}`
+    + `<span class="acc-t"><b>${esc(title)}</b>${subtitle ? `<span>${esc(subtitle)}</span>` : ''}</span>`
+    + `${meta ? `<span class="acc-meta">${esc(meta)}</span>` : ''}${chev(15)}</summary>`
+    + `<div class="acc-body">${body}</div></details>`;
+};
 
 /* ---------------------------------------------------------------------- modal */
 export class Modal {
@@ -69,6 +85,35 @@ export class ModalManager {
   }
 }
 
+/* ---------------------------------------------------------------- collapse */
+/**
+ * Fold every panel marked `data-acc="عنوان|زیرعنوان|آیکون"` into a collapsed card.
+ * The panel itself is untouched — its ids, buttons and rendered content all stay
+ * where they are — so a tab stops being a wall of boxes and becomes a short,
+ * scannable stack of titled rows that open on demand.
+ */
+export function collapsePanels(root = document, { forceOpen = false } = {}) {
+  $$('[data-acc]', root).forEach((panel) => {
+    const [title, subtitle = '', icon = 'list'] = String(panel.dataset.acc).split('|');
+    const pill = $('.panel-head .pill', panel);
+    const summary = panel.ownerDocument.createElement('summary');
+    summary.innerHTML = `<span class="acc-ico">${ico(icon, 15)}</span>`
+      + `<span class="acc-t"><b>${esc(title)}</b>${subtitle ? `<span>${esc(subtitle)}</span>` : ''}</span>`
+      + `${pill && pill.textContent.trim() ? `<span class="acc-meta">${esc(pill.textContent.trim())}</span>` : ''}`
+      + chev(15);
+    const body = panel.ownerDocument.createElement('div');
+    body.className = 'acc-body';
+    const details = panel.ownerDocument.createElement('details');
+    details.className = `acc${panel.dataset.accKlass ? ` ${panel.dataset.accKlass}` : ''}`;
+    if (forceOpen || panel.dataset.accOpen === '1') details.setAttribute('open', '');
+    panel.parentNode.insertBefore(details, panel);
+    panel.classList.add('acc-plain');
+    body.appendChild(panel);
+    details.appendChild(summary);
+    details.appendChild(body);
+  });
+}
+
 /* --------------------------------------------------------------------- charts */
 let gradientSeq = 0;
 
@@ -84,7 +129,7 @@ export class Charts {
     return values.map((v, i) => `${i ? 'L' : 'M'}${(i * step).toFixed(1)} ${(height - ((v - min) / span) * height).toFixed(1)}`).join(' ');
   }
 
-  static sparkline(values, color = '#5ad1ff') {
+  static sparkline(values, color = '#c9f24c') {
     if (!values?.length) return '';
     const w = 120, h = 26;
     return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:100%">
@@ -128,8 +173,8 @@ export class Charts {
     const line = this.smoothPath(pts);
     const area = `${line} L${pts[pts.length - 1].x.toFixed(1)} ${padT + plotH} L${pts[0].x.toFixed(1)} ${padT + plotH} Z`;
     const gid = `grad${++gradientSeq}`;
-    const accent = options.color || '#5ad1ff';
-    const accent2 = options.color2 || '#8b7bff';
+    const accent = options.color || '#c9f24c';
+    const accent2 = options.color2 || '#5fce62';
 
     const grid = [0, 0.5, 1].map((f) => {
       const y = padT + plotH - f * plotH;
@@ -151,7 +196,7 @@ export class Charts {
       ${grid}${ticks}
       <path d="${area}" fill="url(#${gid})" opacity="0"><animate attributeName="opacity" to="1" dur="0.7s" fill="freeze"/></path>
       <path class="line" id="chartLine" d="${line}" stroke="${accent}" style="filter:drop-shadow(0 5px 14px ${accent}55)"/>
-      ${pts.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.1" fill="#0a1120" stroke="${accent}" stroke-width="1.3" opacity="0"><animate attributeName="opacity" to="1" dur="0.6s" begin="0.45s" fill="freeze"/></circle>`).join('')}
+      ${pts.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.1" fill="#0b1307" stroke="${accent}" stroke-width="1.3" opacity="0"><animate attributeName="opacity" to="1" dur="0.6s" begin="0.45s" fill="freeze"/></circle>`).join('')}
       <rect id="chartHit" x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" fill="transparent" style="cursor:crosshair"/>
       <line id="chartCross" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" stroke="${accent}" stroke-opacity="0.4" stroke-dasharray="3 4" opacity="0"/>
     </svg>`;
@@ -208,8 +253,8 @@ export class Charts {
     host.innerHTML = `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
       <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="${stroke}"/>
       ${arcs}
-      <text x="${size / 2}" y="${size / 2 - 2}" text-anchor="middle" fill="#e9f1ff" font-family="Vazirmatn" font-size="22" font-weight="800">${esc(options.centerValue ?? String(total))}</text>
-      <text x="${size / 2}" y="${size / 2 + 18}" text-anchor="middle" fill="#8598b8" font-family="Vazirmatn" font-size="10.5">${esc(options.centerLabel || '')}</text>
+      <text x="${size / 2}" y="${size / 2 - 2}" text-anchor="middle" fill="#eaf4dc" font-family="Vazirmatn" font-size="22" font-weight="800">${esc(options.centerValue ?? String(total))}</text>
+      <text x="${size / 2}" y="${size / 2 + 18}" text-anchor="middle" fill="#93a885" font-family="Vazirmatn" font-size="10.5">${esc(options.centerLabel || '')}</text>
     </svg>`;
     return segments.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)} · ${Fmt.num(s.value)}</span>`).join('');
   }

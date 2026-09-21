@@ -14,6 +14,10 @@ const FILTERS = [
   { id: 'disabled', label: 'غیرفعال' },
 ];
 
+// A catalog can hold hundreds of clean IPs; only a screenful is painted at once
+// and the rest waits behind one «نمایش بیشتر» button.
+const PAGE = 24;
+
 export class NodesView {
   constructor(app) {
     this.app = app;
@@ -35,6 +39,7 @@ export class NodesView {
     $$('#nodeFilters .fchip').forEach((button) => {
       button.onclick = () => {
         this.store.set('nodeFilter', button.dataset.filter);
+        this.store.set('nodeLimit', PAGE);
         this.renderFilters();
         this.render();
       };
@@ -87,7 +92,8 @@ export class NodesView {
         <div class="muted" style="margin-top:6px">از «نود جدید» استفاده کنید یا Sync کنید.</div></div>`;
       return;
     }
-    host.innerHTML = list.map((node, index) => `
+    const shown = list.slice(0, this.store.get('nodeLimit') || PAGE);
+    host.innerHTML = shown.map((node, index) => `
       <div class="node-row" style="--i:${index};border-color:${node.enabled ? 'transparent' : 'rgba(255,107,129,.18)'}">
         <span class="node-icon ${node.kind === 'cloudflare' ? 'cf' : ''}">${node.kind === 'cloudflare' ? '☁' : 'R'}</span>
         <div class="node-main">
@@ -102,7 +108,14 @@ export class NodesView {
           <button class="tbtn" data-act="edit" data-name="${esc(node.name)}" title="ویرایش">${ico('edit', 13)}</button>
           <button class="tbtn bad" data-act="del" data-name="${esc(node.name)}" title="حذف">${ico('trash', 13)}</button>
         </div>
-      </div>`).join('');
+      </div>`).join('') + (list.length > shown.length
+      ? `<button class="secondary more-row" data-more="node">${ico('chevron', 13)} نمایش ${Fmt.num(Math.min(PAGE, list.length - shown.length))} نود بعدی · ${Fmt.num(list.length - shown.length)} باقی‌مانده</button>` : '');
+
+    const more = $('#nodeList [data-more]');
+    if (more) more.onclick = () => {
+      this.store.set('nodeLimit', (this.store.get('nodeLimit') || PAGE) + PAGE);
+      this.render();
+    };
 
     $$('#nodeList [data-act]').forEach((button) => {
       const node = this.store.get('nodes').find((item) => item.name === button.dataset.name);
@@ -483,7 +496,7 @@ export class NodesView {
     const samples = $('#btnNodeSamples');
     if (samples) samples.onclick = () => this.app.safe(() => this.samplesModal());
     const search = $('#nodeSearch');
-    if (search) search.oninput = (event) => { this.store.set('nodeSearch', event.target.value); this.render(); };
+    if (search) search.oninput = (event) => { this.store.set('nodeSearch', event.target.value); this.store.set('nodeLimit', PAGE); this.render(); };
     const sort = $('#nodeSort');
     if (sort) sort.onchange = (event) => { this.store.set('nodeSort', event.target.value); this.render(); };
     const pingAll = $('#btnPingNodes');

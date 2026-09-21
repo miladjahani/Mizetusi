@@ -579,6 +579,29 @@ def hysteria_config():
 
 
 # ------------------------------------------------------------------- user limits
+def user_scope(user):
+    """Which slice of the catalog this user's subscription may contain.
+
+    Stored in ``metadata`` next to the config cap, so no schema migration is
+    needed and an existing user keeps the full catalog (``all``) until an admin
+    narrows it. The canonical spelling comes from :mod:`app.subscriptions.scope`,
+    which is also what the ``?scope=`` query parameter is resolved with.
+    """
+    from app.subscriptions import scope as scopes
+    raw = None
+    meta = (user or {}).get('metadata')
+    if isinstance(meta, dict):
+        raw = meta.get('node_scope')
+    elif isinstance(meta, str) and meta.strip().startswith('{'):
+        try:
+            raw = json.loads(meta).get('node_scope')
+        except Exception:
+            raw = None
+    if raw in (None, ''):
+        raw = (user or {}).get('node_scope')
+    return scopes.normalize(raw)
+
+
 def user_max_configs(user):
     """How many configs one user may receive (0 = every published combination).
 

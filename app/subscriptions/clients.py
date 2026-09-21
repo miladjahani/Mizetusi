@@ -180,10 +180,16 @@ for _client in CLIENTS:
 # ``limit_gb``/``expiry_days``/``ip_limit`` are only used when the panel has no
 # default configured for them (admin defaults always win).
 
+# Every preset also declares the **node scope** it publishes (see
+# ``app.subscriptions.scope``): a mode is a preset *plus* the nodes it hands out,
+# so "Iran fast on the edge only" and "the server itself only" are two different,
+# equally one-click modes instead of one preset with hidden assumptions.
 PRESETS = [
     {
         'id': 'iran-fast',
         'name': 'ایران — پرسرعت (پیشنهادی)',
+        'kind': 'iran',
+        'scope': 'all',
         'best_for': 'همراه اول · ایرانسل · مخابرات',
         'note': 'VLESS + WS + TLS با فرگمنت ضد DPI روی نودهای Cloudflare و Railway؛ سبک و پایدار برای موبایل.',
         'highlights': ['فرگمنت 100-200 با فاصله 10-20', 'fingerprint chrome', 'بلاک تبلیغات', '۲ دستگاه همزمان', '۶۰ گیگ / ۳۰ روز'],
@@ -200,6 +206,8 @@ PRESETS = [
     {
         'id': 'iran-unlimited',
         'name': 'ایران — مصرف سنگین (نامحدود)',
+        'kind': 'iran',
+        'scope': 'all',
         'best_for': 'استریم · بازی · دانلود',
         'note': 'بدون سقف حجم، فرگمنت فعال و سه دستگاه همزمان؛ برای مصرف بالا.',
         'highlights': ['حجم نامحدود', 'فرگمنت 100-200', '۳ دستگاه همزمان', '۹۰ روز اعتبار'],
@@ -216,6 +224,8 @@ PRESETS = [
     {
         'id': 'global-clean',
         'name': 'بین‌المللی — بدون فرگمنت',
+        'kind': 'global',
+        'scope': 'all',
         'best_for': 'اینترنت بدون محدودیت · سرعت حداکثری',
         'note': 'بدون تکه‌تکه‌سازی بسته‌ها؛ تمیزترین حالت برای اتصال‌های پایدار و پرسرعت.',
         'highlights': ['بدون فرگمنت', 'بدون محدودیت حجم', '۵ دستگاه همزمان', 'بدون انقضا'],
@@ -227,6 +237,45 @@ PRESETS = [
             'ip_operator': 'all', 'ip_count': 5, 'rotate_time': 5, 'auto_rotate_ip': False,
             'start_on_first_connect': False,
             'ip_limit': 5, 'limit_gb': None, 'expiry_days': None,
+        },
+    },
+]
+
+PRESETS += [
+    {
+        'id': 'multi-location',
+        'name': 'چند لوکیشن — فقط نودهای لبه',
+        'kind': 'edge',
+        'scope': 'multi',
+        'best_for': 'می‌خواهد فقط لوکیشن‌های CDN را ببیند',
+        'note': 'همان تنظیمات ایران، اما فقط روی لوکیشن‌های لبه (کلودفلر و دامنه‌های تمیز). نود خود سرور منتشر نمی‌شود.',
+        'highlights': ['فقط نودهای مولتی‌لوکیشن', 'پرچم کشور روی هر نود', 'فرگمنت فعال', '۴۵ گیگ / ۳۰ روز'],
+        'fields': {
+            'protocol': 'vless',
+            'frag_len': '100-200', 'frag_int': '10-20',
+            'fingerprint': 'chrome', 'tls': 'on',
+            'block_ads': True, 'block_porn': False,
+            'ip_operator': 'all', 'ip_count': 5, 'rotate_time': 5, 'auto_rotate_ip': False,
+            'start_on_first_connect': True,
+            'ip_limit': 2, 'limit_gb': 45.0, 'expiry_days': 30,
+        },
+    },
+    {
+        'id': 'origin-only',
+        'name': 'فقط سرور اصلی (بدون CDN)',
+        'kind': 'origin',
+        'scope': 'origin',
+        'best_for': 'وقتی مسیر CDN مشکل دارد یا تست خود سرور',
+        'note': 'فقط نود خود همین سرور منتشر می‌شود؛ بدون لوکیشن و بدون IP تمیز، برای عیب‌یابی سریع.',
+        'highlights': ['فقط نود سرور اصلی', 'بدون لوکیشن', 'بدون فرگمنت', 'تست/عیب‌یابی'],
+        'fields': {
+            'protocol': 'all',
+            'frag_len': '', 'frag_int': '',
+            'fingerprint': 'chrome', 'tls': 'on',
+            'block_ads': False, 'block_porn': False,
+            'ip_operator': 'all', 'ip_count': 5, 'rotate_time': 5, 'auto_rotate_ip': False,
+            'start_on_first_connect': False,
+            'ip_limit': 10, 'limit_gb': None, 'expiry_days': 7,
         },
     },
 ]

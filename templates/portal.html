@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#05080f">
+<meta name="theme-color" content="#060a05">
 <meta name="robots" content="noindex,nofollow">
 <meta name="color-scheme" content="dark">
 <meta name="mobile-web-app-capable" content="yes">
@@ -32,10 +32,10 @@
   .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
   .chips .copy-btn{padding:6px 9px;font-size:10.5px;display:inline-flex;gap:6px;align-items:center}
   .notice{border-radius:16px;padding:13px 15px;font-size:12.5px;line-height:1.8;border:1px solid rgba(255,107,129,.28);background:rgba(255,107,129,.08);color:#ffc3cc}
-  .notice.info{border-color:rgba(90,209,255,.26);background:rgba(90,209,255,.07);color:#bfe2ff}
+  .notice.info{border-color:rgba(201,242,76,.26);background:rgba(201,242,76,.07);color:#dcf5a4}
   .node-row .kind{font-size:9.5px;padding:4px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
   .node-row .kind.cf{color:#ffc785;border-color:rgba(255,168,60,.28);background:rgba(255,168,60,.08)}
-  .node-row .kind.rw{color:#9fdcff;border-color:rgba(90,209,255,.26);background:rgba(90,209,255,.08)}
+  .node-row .kind.rw{color:#d2ef8b;border-color:rgba(201,242,76,.26);background:rgba(201,242,76,.08)}
   .node-acts{display:flex;gap:6px;flex:0 0 auto}
   .usage-card{display:grid;gap:14px}
   .usage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px}
@@ -44,7 +44,7 @@
   .u-mini .val{font-family:var(--mono);font-size:19px;font-weight:700;margin-top:7px;direction:ltr;text-align:right}
   .u-mini .val small{font-family:Vazirmatn;font-size:11px;color:var(--muted);margin-inline-start:4px}
   .big-bar{height:11px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden;border:1px solid var(--line)}
-  .big-bar i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,#5ad1ff,#8b7bff);transition:width .8s var(--ease)}
+  .big-bar i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,#c9f24c,#5fce62);transition:width .8s var(--ease)}
   .big-bar.warn i{background:linear-gradient(90deg,#ffc85c,#ff9f5c)}
   .big-bar.bad i{background:linear-gradient(90deg,#ff8b9c,#ff6b81)}
   .portal-foot{text-align:center;color:var(--muted-2);font-size:10.5px;line-height:2}
@@ -55,10 +55,11 @@
   details.fam>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;padding:14px}
   details.fam>summary::-webkit-details-marker{display:none}
   details.fam .fam-title{font-size:13.5px;font-weight:600}
-  details.fam[open] .fam-title{color:#bfe2ff}
+  details.fam[open] .fam-title{color:#dcf5a4}
+  details.fam.slim>summary{padding:11px 13px}
   details.fam .fam-meta{font-size:10.5px;color:var(--muted);font-family:var(--mono)}
-  details.fam .reco{font-size:9.5px;padding:3px 7px;border-radius:99px;border:1px solid rgba(90,209,255,.35);
-    background:rgba(90,209,255,.1);color:#bfe2ff}
+  details.fam .reco{font-size:9.5px;padding:3px 7px;border-radius:99px;border:1px solid rgba(201,242,76,.38);
+    background:rgba(201,242,76,.1);color:#dcf5a4}
   details.fam .chev{width:15px;height:15px;margin-inline-start:auto;color:var(--muted);transition:transform .25s var(--ease)}
   details.fam[open] .chev{transform:rotate(180deg)}
   .fam-body{padding:0 14px 15px;display:flex;flex-direction:column;gap:10px}
@@ -70,7 +71,7 @@
   .client-row .plat{font-size:10px;color:var(--muted)}
   details.alt>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted)}
   details.alt>summary::-webkit-details-marker{display:none}
-  details.alt[open]>summary{color:#bfe2ff}
+  details.alt[open]>summary{color:#dcf5a4}
   details.alt .chips{margin-top:8px}
   .loc-chips .copy-btn{padding:7px 11px;font-size:11px}
   .flag{font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif}
@@ -120,11 +121,11 @@
   {% endif %}
 
   <section class="glass sub-card usage-card">
-    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-zap"/></svg> وضعیت مصرف</h2>
+    <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-zap"/></svg> وضعیت مصرف</h2>
     <div>
       <div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-bottom:8px">
-        <span>مصرف‌شده <b id="usedText" style="font-family:var(--mono);color:#c6d8f2;direction:ltr">{{ '%.2f'|format(p.used_gb) }}</b> گیگابایت</span>
-        <span>{% if p.limit_gb %}سقف <b style="font-family:var(--mono);color:#c6d8f2;direction:ltr">{{ '%.2f'|format(p.limit_gb) }}</b> گیگابایت{% else %}حجم نامحدود{% endif %}</span>
+        <span>مصرف‌شده <b id="usedText" style="font-family:var(--mono);color:#d6e6c2;direction:ltr">{{ '%.2f'|format(p.used_gb) }}</b> گیگابایت</span>
+        <span>{% if p.limit_gb %}سقف <b style="font-family:var(--mono);color:#d6e6c2;direction:ltr">{{ '%.2f'|format(p.limit_gb) }}</b> گیگابایت{% else %}حجم نامحدود{% endif %}</span>
       </div>
       <div class="big-bar" id="quotaBar"><i style="width:{{ p.quota_pct }}%"></i></div>
     </div>
@@ -141,7 +142,7 @@
   </section>
 
   <section>
-    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-link"/></svg> لینک اشتراک هوشمند <span class="count">سریع‌ترین نود بر اساس پینگ</span></h2>
+    <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-link"/></svg> لینک اشتراک هوشمند <span class="count">سریع‌ترین نود بر اساس پینگ</span></h2>
     <div class="link-box">
       <div class="lb-main">
         <b>اتصال هوشمند — همه کلاینت‌ها</b>
@@ -158,9 +159,34 @@
     </div>
   </section>
 
+  {% if p.scope_empty %}
+  <div class="notice">
+    محدودهٔ فعلی این اشتراک («{{ p.scope_label }}») هیچ نودی ندارد. یکی از گزینه‌های زیر را استفاده کنید یا از پشتیبانی بخواهید محدوده را عوض کند.
+  </div>
+  {% endif %}
+
+  <section>
+    <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-globe"/></svg> محدودهٔ نودها <span class="count">{{ p.scope_label }}</span></h2>
+    <details class="glass fam">
+      <summary>
+        <span class="fam-title">فقط بخشی از نودها را می‌خواهید؟</span>
+        <span class="fam-meta">{{ p.scopes|length }} گزینه · {{ p.catalog_total }} نود در کل</span>
+        <svg class="chev"><use href="#i-chevron"/></svg>
+      </summary>
+      <div class="fam-body">
+        <p class="fam-hint">محدودهٔ فعلی اشتراک شما «{{ p.scope_label }}» است ({{ p.scope_hint }}). هر گزینه زیر یک لینک آماده است: اگر فقط نودهای چند لوکیشن، فقط سرور اصلی یا فقط یک کشور را می‌خواهید، همان لینک را در کلاینت بگذارید.</p>
+        <div class="chips loc-chips">
+          {% for item in p.scopes %}
+          <button class="copy-btn" data-copy="{{ item.url }}">{{ item.label }} · {{ item.count }} نود{% if item.current %} ✓ همین حالا{% endif %}</button>
+          {% endfor %}
+        </div>
+      </div>
+    </details>
+  </section>
+
   {% if p.locations %}
   <section>
-    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-globe"/></svg> لوکیشن‌ها <span class="count">هر کشور یک سابلینک جدا</span></h2>
+    <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-globe"/></svg> لوکیشن‌ها <span class="count">هر کشور یک سابلینک جدا</span></h2>
     <details class="glass fam">
       <summary>
         <span class="fam-title">سابلینک لوکیشن‌محور</span>
@@ -180,7 +206,7 @@
   {% endif %}
 
   <section>
-    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-shield"/></svg> سابلینک اختصاصی هر کلاینت
+    <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-shield"/></svg> سابلینک اختصاصی هر کلاینت
       <span class="count">{{ p.clients|length }} کلاینت در {{ p.client_groups|length }} خانواده</span></h2>
     {% for g in p.client_groups %}
     <details class="glass fam"{% if loop.first %} open{% endif %}>
@@ -223,7 +249,7 @@
   </section>
 
   <section>
-    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-link"/></svg> سابلینک به تفکیک پروتکل و ترنسپورت <span class="count">{{ p.transports|length }} ترکیب</span></h2>
+    <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-link"/></svg> سابلینک به تفکیک پروتکل و ترنسپورت <span class="count">{{ p.transports|length }} ترکیب</span></h2>
     <details class="glass fam">
       <summary>
         <span class="fam-title">لیست ترکیب‌های نود × پروتکل</span>
@@ -246,7 +272,7 @@
   </section>
 
   <section>
-    <h2><svg width="15" height="15" style="color:#8fd9ff"><use href="#i-zap"/></svg> نودها <span class="count"><span id="nodesOnline2">{{ p.nodes_online }}</span> از {{ p.nodes_total }} آنلاین · مرتب‌شده بر اساس پینگ</span></h2>
+    <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-zap"/></svg> نودها <span class="count"><span id="nodesOnline2">{{ p.nodes_online }}</span> از {{ p.nodes_total }} آنلاین · مرتب‌شده بر اساس پینگ</span></h2>
     <div class="glass sub-card" id="nodeList">
       {% for n in p.nodes %}
       <div class="node-row">

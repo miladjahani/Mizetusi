@@ -99,8 +99,9 @@ export class AdvancedView {
           <b>${esc(pack.label)} ${pack.installed ? `· ${Fmt.num(pack.installed)}/${Fmt.num(pack.locations)} نصب‌شده` : ''}</b>
           <p>${esc(pack.note)}</p>
           <div class="chips" style="margin-top:6px">
-            ${(pack.entries || []).map((entry) => `<span class="chip">${esc(entry.location.toUpperCase())} · ${esc(entry.host)}${entry.port !== 443 ? `:${Fmt.num(entry.port)}` : ''}</span>`).join('')}
+            ${(pack.entries || []).map((entry) => `<span class="chip">${esc(entry.location.toUpperCase())}${entry.name ? ` ${esc(entry.name)}` : ''} · ${entry.host ? esc(entry.host) : `${Fmt.num((entry.ranges || []).length)} رنج کلودفلر`}${entry.port !== 443 ? `:${Fmt.num(entry.port)}` : ''}</span>`).join('')}
           </div>
+          ${pack.host_required ? `<p class="muted" style="margin-top:4px">دامنهٔ Worker (یا دامنهٔ پنل پشت کلودفلر) را در فیلد بالای همین بخش بگذارید؛ لوکیشن‌های کلودفلر با همان Host/SNI منتشر می‌شوند.</p>` : ''}
         </div>
         <div class="actions" style="margin:0">
           <button class="secondary compact" data-pack-install="${esc(pack.id)}">${pack.installed ? 'به‌روزرسانی' : 'نصب'}</button>

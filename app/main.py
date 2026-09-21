@@ -16,6 +16,7 @@ from app.subscriptions.generator import (render, active_nodes, node_links, norma
 from app.subscriptions.clients import (CLIENTS, PRESETS, FAMILIES, FORMAT_LABELS, DEFAULT_PRESET, catalog as client_catalog,
     client_links, client_groups, download_overrides, preset as get_preset, subscription_url as client_subscription_url)
 from app.subscriptions import transports as transports
+from app.subscriptions import scope as node_scope
 from app.subscriptions import flags as sub_flags
 from app import warp as warp_service
 from app.proxy.manager import add as add_proxy, list_all as list_proxies, check as check_proxy
@@ -51,6 +52,9 @@ BASE_DIR=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERAL_SETTING_KEYS=('public_base_url','sub_prefix','default_protocol','default_limit_gb','default_expiry_days','default_ip_limit','session_days','ping_interval','accent','accent_secondary','app_name',
                      # Customization (the «شخصی‌سازی» tab) and the new defaults.
                      'portal_banner','support_url','flags_enabled','default_format','default_max_configs',
+                     # Node scope of a quick-created user (all / multi-location only /
+                     # this server only / a country) — see app/subscriptions/scope.py.
+                     'default_scope',
                      # Hysteria2 endpoint (the password is deliberately absent: it is
                      # never echoed back to the panel, only its presence is reported).
                      'hy2_enabled','hy2_host','hy2_port','hy2_sni','hy2_obfs','hy2_insecure','hy2_label')
@@ -374,6 +378,10 @@ def _user_payload(u):
     if not u: return u
     item=dict(u)
     item['max_configs']=transports.user_max_configs(u) or None
+    # Which nodes this user's subscription may contain (the panel's node-scope
+    # picker), plus its human label — the one place that naming is derived.
+    item['node_scope']=transports.user_scope(u)
+    item['node_scope_label']=node_scope.label(item['node_scope'])
     enabled=[p for p in transports.PROTOCOLS if p in transports.user_protocols(u)]
     item['protocols']=enabled
     item['protocol_label']=('همه پروتکل‌ها' if len(enabled)==len(transports.PROTOCOLS)
@@ -394,18 +402,36 @@ def _share_payload(request:Request,u,node=''):
         'smart_url':client_subscription_url(base,token,'auto',node),
         'clients':client_links(base,token,node,None),
         'transports':_transport_targets(),
+        'node_scope':transports.user_scope(u),'node_scope_label':node_scope.label(transports.user_scope(u)),
+        'scopes':_scope_options(base,token,u),
         'targets':[{'target':t,'label':_target_label(t),'url':client_subscription_url(base,token,t,node)} for t in SUB_TARGETS],
     }
+
+def _scope_options(base,token,u):
+    """The node-scope picker: every scope with its live node count and URL.
+
+    Handed to the panel's user form, the quick-create result and the public
+    status window, so "only the multi-location nodes", "only the US edge" and
+    "only my own server" are all one tap — and the counts come from the catalog
+    that exists right now, not from a static list.
+    """
+    return [{**item,'url':_sub_url(base,token,_user_target(u),'','',item['id'])}
+            for item in node_scope.options(active_nodes(), transports.user_scope(u))]
 
 @app.get('/api/presets')
 def get_presets(request:Request):
     """Ready-made "best settings" bundles offered by the quick-create button."""
     auth(request)
-    return {'default':DEFAULT_PRESET,'presets':PRESETS,'protocols':_protocol_catalog(),'defaults':{
+    # A "mode" is a preset plus the node scope it publishes: the quick-create
+    # screen shows one card per mode, so nobody has to guess which nodes they get.
+    modes=[{**item,'scope_label':node_scope.label(item.get('scope') or 'all')} for item in PRESETS]
+    return {'default':DEFAULT_PRESET,'presets':PRESETS,'modes':modes,'protocols':_protocol_catalog(),
+            'scopes':node_scope.options(active_nodes()),'scope':_setting('default_scope') or 'all',
+            'defaults':{
         'protocol':_setting('default_protocol') or 'all',
         'limit_gb':_setting('default_limit_gb') or '',
         'expiry_days':_setting('default_expiry_days') or '','ip_limit':_setting('default_ip_limit') or '',
-        'max_configs':_setting('default_max_configs') or ''}}
+        'max_configs':_setting('default_max_configs') or '','node_scope':_setting('default_scope') or 'all'}}
 
 @app.get('/api/clients')
 def get_clients(request:Request):
@@ -481,8 +507,12 @@ async def quick_create(request:Request):
         if configured:
             try: fields[key]=float(configured) if key=='limit_gb' else int(float(configured))
             except ValueError: pass
+    # The scope is a real field on UserCreate, so it rides in with the rest and
+    # is normalised (any spelling) by the model itself.
+    fields['node_scope']=fields.get('scope') or chosen.get('scope') or 'all'
     for key in list(fields.keys()):
         if key in body and body[key] is not None: fields[key]=body[key]
+    if body.get('scope') is not None: fields['node_scope']=body['scope']
     username=str(body.get('username') or '').strip() or _quick_username()
     if get_user(username): raise HTTPException(400,'username already exists')
     try: m=UserCreate(username=username,**fields)
@@ -512,6 +542,13 @@ def update(request:Request,username:str,body:dict):
         if cap is not None and not 1<=cap<=500: raise HTTPException(400,'max_configs must be between 1 and 500')
         set_metadata_value(username,'max_configs',cap)
         _audit('user.update',f"{username} · max_configs={cap or 'unlimited'}")
+    # The node scope is metadata as well (all / multi-location / own server / a
+    # country), written through its own helper just like the config cap.
+    if 'node_scope' in payload:
+        raw=str(payload.pop('node_scope') or '').strip()
+        value=node_scope.normalize(raw) if raw else None
+        set_metadata_value(username,'node_scope',value)
+        _audit('user.update',f"{username} · node_scope={value or 'all'}")
     if 'protocol' in payload:
         # The protocol set is a multi-select: validate it here and store the
         # canonical comma-separated form so an empty selection cannot lock the
@@ -535,21 +572,29 @@ def traffic(request:Request,username:str,e:TrafficEvent):
     auth(request); result=track(username,e.bytes,e.requests,e.ip)
     if not result: raise HTTPException(404,'user not found')
     return result
-def _sub_nodes(node:str='',location:str=''):
-    items=active_nodes(location=location)
+def _sub_nodes(node:str='',location:str='',scope:str=''):
+    items=active_nodes(location=location,scope=scope)
     if node:
         wanted={x.strip().lower() for x in str(node).split(',') if x.strip()}
         items=[n for n in items if str(n['name']).lower() in wanted]
     return items
 
 @app.get('/sub/{token}')
-def subscription(request:Request,token:str,target:str='auto',node:str='',location:str=''):
+def subscription(request:Request,token:str,target:str='auto',node:str='',location:str='',scope:str=''):
     u=get_by_token(urllib.parse.unquote(token))
     if not u: raise HTTPException(404,'subscription not found')
     ok,reason=allowed(u)
     if not ok: raise HTTPException(403,reason)
-    nodes=_sub_nodes(node,location)
-    if not nodes: raise HTTPException(404,'no matching nodes')
+    # ``?scope=`` narrows the catalog to a country / the edge only / this server
+    # only; with no parameter the user's own scope applies, so the smart link an
+    # admin handed out already publishes exactly the nodes that user may see.
+    wanted_scope=node_scope.normalize(scope or transports.user_scope(u))
+    nodes=_sub_nodes(node,location,wanted_scope)
+    if not nodes:
+        empty_scope=node_scope.filter_nodes(active_nodes(),wanted_scope)
+        reason_text=('هیچ نودی در محدودهٔ «'+node_scope.label(wanted_scope)+'» منتشر نشده است'
+                     if not empty_scope else 'هیچ نودی با این فیلتر پیدا نشد')
+        raise HTTPException(404,reason_text)
     # Generate from the live Node Catalog on every request. This means a client
     # refresh automatically receives the current origin node plus every healthy
     # clean IP / clean domain of every configured location.
@@ -564,6 +609,7 @@ def subscription(request:Request,token:str,target:str='auto',node:str='',locatio
              'X-NEXUS-Max-Configs':str(cap),'X-NEXUS-Flags':'1' if _flags_on() else '0',
              'X-NEXUS-Transports':str(len(transports.available_profiles()))}
     if location: headers['X-NEXUS-Location']=str(location)
+    headers['X-NEXUS-Scope']=wanted_scope
     return PlainTextResponse(text,headers=headers)
 @app.get('/sub/{token}/{node_name}')
 def subscription_node(request:Request,token:str,node_name:str,target:str='auto'):
@@ -571,8 +617,8 @@ def subscription_node(request:Request,token:str,node_name:str,target:str='auto')
     # grouping and failover trivial.
     return subscription(request,token,target,node_name)
 @app.get('/feed/{token}')
-def feed(request:Request,token:str,target:str='auto',node:str='',location:str=''):
-    return subscription(request,token,target,node,location)
+def feed(request:Request,token:str,target:str='auto',node:str='',location:str='',scope:str=''):
+    return subscription(request,token,target,node,location,scope)
 
 
 async def _relay(ws: WebSocket, reader, writer, user, initial=b''):
@@ -690,11 +736,15 @@ def _register_edge_routes():
 _register_edge_routes()
 
 
-def _sub_url(base,token,target='auto',node='',location=''):
-    """One subscription URL, with the optional location filter appended."""
+def _sub_url(base,token,target='auto',node='',location='',scope=''):
+    """One subscription URL, with the optional location/scope filters appended."""
     url=client_subscription_url(base,token,target,node)
     if location:
         url += '&location=' + urllib.parse.quote(str(location))
+    if scope:
+        # ``:`` and ``,`` stay literal so a country scope reads ``&scope=cc:us``
+        # instead of percent-encoded soup, while everything else is escaped.
+        url += '&scope=' + urllib.parse.quote(str(scope), safe=':,')
     return url
 
 
@@ -737,9 +787,14 @@ def _portal_data(request:Request,u):
     protocols=transports.user_protocols(u)
     profiles=transports.available_profiles(protocols)
     cap=transports.user_max_configs(u)
-    catalog_nodes=_sub_nodes('') or active_nodes()
+    # The whole catalog is read for the pickers, but the window lists (and counts)
+    # exactly the nodes this user's subscription really contains: a scoped user
+    # sees their own slice, with the rest one tap away.
+    user_scope=transports.user_scope(u)
+    catalog_nodes=active_nodes()
+    scoped_nodes=node_scope.filter_nodes(catalog_nodes,user_scope)
     nodes=[]
-    for n in catalog_nodes:
+    for n in scoped_nodes:
         latency=n.get('latency_ms')
         nodes.append({
             'name':n['name'],'label':transports.node_label(n),'flag':transports.node_flag(n),
@@ -763,7 +818,7 @@ def _portal_data(request:Request,u):
                           'label':(sub_flags.name(location) or location.upper()),
                           'nodes':sum(1 for n in nodes if n['location']==location),
                           'url':_sub_url(base,token,_user_target(u),'',location)})
-    configs=len(entry_pairs(u,catalog_nodes,profiles)) if catalog_nodes else 0
+    configs=len(entry_pairs(u,scoped_nodes,profiles)) if scoped_nodes else 0
     return {
         'brand':'NEXUS','token':u['uuid'],'username':u['username'],'protocol':(u.get('protocol') or 'all'),
         'protocol_label':_user_payload(u)['protocol_label'],
@@ -783,7 +838,14 @@ def _portal_data(request:Request,u):
         'client_groups':client_groups(base,token),
         'transports':_portal_transports(base,token,protocols),
         'nodes':nodes,'nodes_total':len(nodes),'nodes_online':sum(1 for n in nodes if n['online']),
+        'catalog_total':len(catalog_nodes),'scope_empty':bool(node_scope.parse(user_scope)['mode']!=node_scope.SCOPE_ALL and not nodes),
         'locations':locations,
+        # Node scope: which slice this subscription publishes, and every other
+        # slice as a ready-made link (multi-location only / the server only /
+        # one country). This is the public half of the panel's scope picker.
+        'scope':user_scope,'scope_label':node_scope.label(user_scope),'scope_hint':node_scope.hint(user_scope),
+        'scopes':[{**item,'url':_sub_url(base,token,_user_target(u),'','',item['id'])}
+                  for item in node_scope.options(catalog_nodes,user_scope)],
         # Deployment-wide extras an end user should still see.
         'hysteria':transports.catalog()['hysteria2'],
         # Which of the four core sublinks the status window highlights, and whether
@@ -1071,7 +1133,7 @@ async def edge_scan(request:Request):
         raise HTTPException(502,f'لیست هیچ provider دریافت نشد: {detail[:300]}')
     probed=await probe_all(limit=min(limit*2,192),provider_id=provider_id or None)
     synced=_edge_sync(request)
-    ping=await _ping_edge_nodes(provider_id=provider_id,only_pending=True,timeout=3.0,limit=48)
+    ping=await _ping_edge_nodes(provider_id=provider_id,only_pending=True,timeout=2.5,limit=40)
     _audit('edge.scan',f"{provider_id or 'all'} · +{found} ips · {ping['healthy']}/{ping['probed']} ping")
     return {'success':True,'results':results,'found':found,'probed':len(probed),'synced':synced,'ping':ping,
             'providers':edge_sources.provider_summary(),'nodes':[_node_payload(n) for n in list_nodes()]}
@@ -1097,7 +1159,7 @@ async def edge_add_ips(request:Request):
         raise HTTPException(400,'هیچ آی‌پی معتبری پیدا نشد' if result['skipped'] else 'چیزی برای افزودن نبود')
     probed=await probe_all(limit=settings.cf_probe_limit,provider_id=provider_id)
     synced=_edge_sync(request)
-    ping=await _ping_edge_nodes(provider_id=provider_id,timeout=3.0,limit=48)
+    ping=await _ping_edge_nodes(provider_id=provider_id,timeout=2.5,limit=40)
     _audit('edge.ips',f"+{len(result['added'])} · {provider_id} · {ping['healthy']}/{ping['probed']} ping")
     return {'success':True,'added':result['added'],'skipped':result['skipped'],'probed':len(probed),
             'synced':synced,'ping':ping,'ips':edge_sources.ips(provider_id,200)}
@@ -1127,7 +1189,7 @@ async def edge_save_source(request:Request):
     # The location is measured in the same request, so the panel (and the toast)
     # can say how many of its addresses really answer instead of leaving it at
     # «اندازه‌گیری نشده» until the next ping loop pass.
-    ping=await _ping_edge_nodes(source_id=source['id'],timeout=3.0,limit=60)
+    ping=await _ping_edge_nodes(source_id=source['id'],timeout=2.5,limit=48)
     items=edge_sources.status()['sources']
     _audit('edge.source.save',f"{source['id']} · {source['kind']} · {ping['healthy']}/{ping['probed']} ping")
     return {'success':True,'source':next((s for s in items if s['id']==source['id']),source),

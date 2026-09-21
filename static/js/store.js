@@ -6,16 +6,31 @@
    single place to see what a render depends on.
    ========================================================================== */
 
+// The eight sections, each belonging to one navigation group. Groups are what
+// keep the sidebar (and the phone's bottom bar) short: five rows instead of a
+// single long list where every tab competes for attention.
 export const SECTIONS = [
-  { id: 'dashboard', label: 'داشبورد', icon: 'dash', crumb: 'NEXUS CONTROL CENTER', title: 'داشبورد' },
-  { id: 'nodes', label: 'نودها', icon: 'nodes', crumb: 'NODE CATALOG', title: 'نودها' },
-  { id: 'users', label: 'کاربران', icon: 'users', crumb: 'USER MANAGEMENT', title: 'کاربران' },
-  { id: 'cloudflare', label: 'Cloudflare', icon: 'cloud', crumb: 'EDGE NETWORK', title: 'Cloudflare' },
-  { id: 'customize', label: 'شخصی‌سازی', icon: 'edit', crumb: 'CUSTOMIZATION', title: 'شخصی‌سازی' },
-  { id: 'tools', label: 'ابزار شبکه', icon: 'globe', crumb: 'NETWORK TOOLS', title: 'ابزار شبکه' },
-  { id: 'advanced', label: 'پیشرفته', icon: 'server', crumb: 'ADVANCED', title: 'پیشرفته' },
-  { id: 'settings', label: 'تنظیمات', icon: 'cog', crumb: 'SYSTEM SETTINGS', title: 'تنظیمات' },
+  { id: 'dashboard', label: 'داشبورد', icon: 'dash', crumb: 'NEXUS CONTROL CENTER', title: 'داشبورد', group: 'overview' },
+  { id: 'users', label: 'کاربران', icon: 'users', crumb: 'USER MANAGEMENT', title: 'کاربران', group: 'access' },
+  { id: 'nodes', label: 'نودها', icon: 'nodes', crumb: 'NODE CATALOG', title: 'نودها', group: 'access' },
+  { id: 'cloudflare', label: 'Cloudflare', icon: 'cloud', crumb: 'EDGE NETWORK', title: 'Cloudflare', group: 'network' },
+  { id: 'tools', label: 'ابزار شبکه', icon: 'globe', crumb: 'NETWORK TOOLS', title: 'ابزار شبکه', group: 'network' },
+  { id: 'customize', label: 'شخصی‌سازی', icon: 'edit', crumb: 'CUSTOMIZATION', title: 'شخصی‌سازی', group: 'look' },
+  { id: 'advanced', label: 'پیشرفته', icon: 'server', crumb: 'ADVANCED', title: 'پیشرفته', group: 'look' },
+  { id: 'settings', label: 'تنظیمات', icon: 'cog', crumb: 'SYSTEM SETTINGS', title: 'تنظیمات', group: 'system' },
 ];
+
+// ``items`` is the render order inside a group; ``quick`` is the one tab an
+// admin lands on from that group most of the time (used by the phone bar).
+export const NAV_GROUPS = [
+  { id: 'overview', label: 'نمای کلی', icon: 'dash', items: ['dashboard'] },
+  { id: 'access', label: 'کاربران و نودها', icon: 'users', items: ['users', 'nodes'] },
+  { id: 'network', label: 'شبکه و لبه', icon: 'cloud', items: ['cloudflare', 'tools'] },
+  { id: 'look', label: 'پنل و ظاهر', icon: 'edit', items: ['customize', 'advanced'] },
+  { id: 'system', label: 'سیستم', icon: 'cog', items: ['settings'] },
+];
+
+export const groupOf = (sectionId) => NAV_GROUPS.find((group) => group.items.includes(sectionId)) || NAV_GROUPS[0];
 
 export class PanelStore {
   constructor() {
@@ -46,7 +61,22 @@ export class PanelStore {
       userFilter: 'all',
       userSearch: '',
       userSort: 'new',
+      // Paging: a list is rendered a screenful at a time, so a tab with 300
+      // clean IPs or 80 users stays one short page instead of a long scroll.
+      userLimit: 24,
+      nodeLimit: 24,
       exploreUser: '',
+      // Navigation: which group is unfolded (the one holding the open tab).
+      navGroup: 'overview',
+      // Live guide: the setup steps the server just reported, and the drawer.
+      guide: null,
+      guideOpen: false,
+      // Quick-create: the selected mode, the node scope it will publish, and
+      // whether the panel's own default scope should override the mode's.
+      scopes: [],
+      quickMode: '',
+      quickScope: '',
+      quickUseDefaultScope: false,
       autoRefresh: true,
       countdown: 25,
       loading: false,
@@ -91,6 +121,12 @@ export class Router {
 
   get sections() { return SECTIONS; }
 
+  get groups() { return NAV_GROUPS; }
+
+  sectionsOf(groupId) { return SECTIONS.filter((section) => section.group === groupId); }
+
+  groupMeta(groupId) { return NAV_GROUPS.find((group) => group.id === groupId) || NAV_GROUPS[0]; }
+
   meta(id) { return SECTIONS.find((section) => section.id === id) || SECTIONS[0]; }
 
   boot() {
@@ -111,6 +147,9 @@ export class Router {
     this.store.set('countdown', 25);
     document.querySelectorAll('.section').forEach((el) => el.classList.toggle('active', el.id === `section-${target}`));
     document.querySelectorAll('.nav').forEach((el) => el.classList.toggle('active', el.dataset.section === target));
+    // Navigating into a tab always unfolds the group that holds it, so the
+    // active row is never hidden behind a collapsed section.
+    this.store.set('navGroup', this.meta(target).group || 'overview');
     const meta = this.meta(target);
     const title = document.getElementById('pageTitle');
     const crumb = document.getElementById('crumb');

@@ -33,6 +33,7 @@ export class CustomizeView {
   render() {
     const data = this.store.get('customization');
     if (!data) return;
+    const options = data.scopes || [];
     const set = (selector, value) => {
       const el = $(selector);
       if (el && document.activeElement !== el) el.value = value ?? '';
@@ -51,6 +52,22 @@ export class CustomizeView {
 
     const flags = $('#czFlags');
     if (flags) flags.classList.toggle('on', data.flags !== false);
+
+    // Node scope: which slice of the catalog a quick-created user publishes by
+    // default. The server sends the catalog with live node counts, so the choice
+    // shows what it will actually contain.
+    const scopes = $('#czScopes');
+    if (scopes) {
+      const options = data.scopes || [];
+      const current = data.default_scope || 'all';
+      scopes.innerHTML = options.map((option) => `
+        <button type="button" class="pick${option.id === current ? ' on' : ''}" data-scope="${esc(option.id)}" title="${esc(option.hint || '')}">
+          <span class="tick"></span>${esc(option.label)}<small>${Fmt.num(option.count)} نود</small>
+        </button>`).join('') || '<span class="muted">کاتالوگ نودی وجود ندارد</span>';
+      $$('#czScopes .pick', scopes).forEach((chip) => {
+        chip.onclick = () => $$('#czScopes .pick', scopes).forEach((other) => other.classList.toggle('on', other === chip));
+      });
+    }
 
     const tag = $('#czTag');
     if (tag) {
@@ -76,6 +93,7 @@ export class CustomizeView {
           <div class="kv-line"><span>لینک پشتیبانی</span><b dir="ltr">${esc(data.support_url || '—')}</b></div>
           <div class="kv-line"><span>پرچم کشور روی نودها</span><b>${data.flags === false ? 'خاموش' : 'روشن'}</b></div>
           <div class="kv-line"><span>تعداد کانفیگ پیش‌فرض</span><b>${cap ? Fmt.num(cap) : 'بدون سقف'}</b></div>
+          <div class="kv-line"><span>محدودهٔ نودهای کاربر</span><b>${esc(options.find((item) => item.id === data.default_scope)?.label || 'همه نودها')}</b></div>
         </div>
         ${core}`;
     }
@@ -92,6 +110,7 @@ export class CustomizeView {
       default_format: $('#czFormat')?.value || 'auto',
       flags_enabled: flags ? '1' : '0',
       default_max_configs: $('#czMaxConfigs')?.value.trim() || '',
+      default_scope: ($$('#czScopes .pick.on').find(() => true) || {}).dataset?.scope || 'all',
     };
     const result = await this.api.post('/api/customization', payload);
     this.store.set('customization', result.customization);

@@ -12,6 +12,9 @@ export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel
 export const ico = (name, size = 16) =>
   `<svg width="${size}" height="${size}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
+/** The chevron every collapsible row uses (nav groups, accordions, sublinks). */
+export const chev = (size = 14) => `<svg class="chev" width="${size}" height="${size}" aria-hidden="true"><use href="#i-chevron"/></svg>`;
+
 export const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 

@@ -438,8 +438,8 @@ export class SettingsView {
     set('#setSessionDays', settings.session_days || settings.security?.session_days || '');
     set('#setPingInterval', settings.ping_interval || '');
     set('#setAppName', brand.app_name || 'NEXUS');
-    set('#setAccent', brand.accent || '#5ad1ff');
-    set('#setAccent2', brand.accent_secondary || '#8b7bff');
+    set('#setAccent', brand.accent || '#c9f24c');
+    set('#setAccent2', brand.accent_secondary || '#5fce62');
     set('#workerUrl', settings.worker?.url || '');
 
     const security = settings.security || {};
@@ -595,8 +595,8 @@ export class SettingsView {
         const score = this.passwordStrength(event.target.value);
         const meter = $('#pwMeter');
         meter.style.width = `${score}%`;
-        meter.style.background = score > 75 ? 'linear-gradient(90deg,#34e0c0,#3ee6a0)'
-          : score > 45 ? 'linear-gradient(90deg,#5ad1ff,#8b7bff)' : 'linear-gradient(90deg,#ffc85c,#ff6b81)';
+        meter.style.background = score > 75 ? 'linear-gradient(90deg,#8ce07a,#4fd07a)'
+          : score > 45 ? 'linear-gradient(90deg,#c9f24c,#8ad33c)' : 'linear-gradient(90deg,#ffc85c,#ff7a6b)';
       };
     }
     const password = $('#btnPassword');

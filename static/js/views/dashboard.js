@@ -46,7 +46,7 @@ export class DashboardView {
     const trend = (metrics.series_hourly || []).slice(-14).map((point) => point.gb);
     const cards = [
       { k: 'users', label: 'کل کاربران', value: t.users, ico: 'users', cls: '', foot: `${Fmt.num(t.active_users)} فعال · ${Fmt.num(t.disabled_users)} غیرفعال` },
-      { k: 'usage', label: 'مصرف کل', value: t.used_gb, digits: 2, unit: Fmt.size(t.used_gb).u, ico: 'activity', cls: 'a-violet', foot: `مجموع عمر: ${Fmt.sizeText(t.lifetime_gb)}`, series: trend, color: '#b6a9ff' },
+      { k: 'usage', label: 'مصرف کل', value: t.used_gb, digits: 2, unit: Fmt.size(t.used_gb).u, ico: 'activity', cls: 'a-violet', foot: `مجموع عمر: ${Fmt.sizeText(t.lifetime_gb)}`, series: trend, color: '#b7e77a' },
       { k: 'nodes', label: 'نودهای فعال', value: t.nodes_enabled, ico: 'nodes', cls: 'a-ok', foot: `${Fmt.num(t.cloudflare_nodes)} CF · ${Fmt.num(t.railway_nodes)} Railway` },
       { k: 'ips', label: 'IP سالم Cloudflare', value: t.cf_ips_ok, ico: 'globe', cls: 'a-warn', foot: `از ${Fmt.num(t.cf_ips_total)} IP اسکن‌شده` },
       { k: 'req', label: 'درخواست‌ها', value: t.requests, ico: 'zap', cls: '', foot: `${Fmt.num(t.active_ips_1h)} IP فعال در ساعت اخیر` },
@@ -93,8 +93,8 @@ export class DashboardView {
     const sub = $('#trafficSub');
     if (sub) sub.textContent = range === 24 ? 'حجم عبوری در ۲۴ ساعت گذشته' : 'حجم عبوری در ۷ روز گذشته';
     Charts.area($('#trafficChart'), points, {
-      color: '#5ad1ff',
-      color2: '#8b7bff',
+      color: '#c9f24c',
+      color2: '#5fce62',
       height: 215,
       axisFmt: (value) => Fmt.num(value, value < 10 ? 2 : 0),
       valueFmt: (value) => Fmt.sizeText(value),
@@ -105,9 +105,9 @@ export class DashboardView {
     const legend = $('#trafficLegend');
     if (legend) {
       legend.innerHTML = [
-        `<span><i style="background:#5ad1ff"></i>مجموع دوره: <b class="mono">${esc(Fmt.sizeText(total))}</b></span>`,
-        `<span><i style="background:#8b7bff"></i>اوج بازه: <b class="mono">${esc(Fmt.sizeText(peak))}</b></span>`,
-        `<span><i style="background:#34e0c0"></i>درخواست‌ها: <b class="mono">${Fmt.num(requests)}</b></span>`,
+        `<span><i style="background:#c9f24c"></i>مجموع دوره: <b class="mono">${esc(Fmt.sizeText(total))}</b></span>`,
+        `<span><i style="background:#5fce62"></i>اوج بازه: <b class="mono">${esc(Fmt.sizeText(peak))}</b></span>`,
+        `<span><i style="background:#8ce07a"></i>درخواست‌ها: <b class="mono">${Fmt.num(requests)}</b></span>`,
         `<span><i style="background:#ffc85c"></i>میانگین هر ساعت: <b class="mono">${esc(Fmt.sizeText(points.length ? total / points.length : 0))}</b></span>`,
       ].join('');
     }
@@ -118,10 +118,10 @@ export class DashboardView {
     if (!metrics) return;
     const t = metrics.totals;
     const segments = [
-      { label: 'نود Railway', value: t.railway_nodes, color: '#5ad1ff' },
+      { label: 'نود Railway', value: t.railway_nodes, color: '#c9f24c' },
       { label: 'نود Cloudflare', value: t.cloudflare_nodes, color: '#ffc85c' },
-      { label: 'نود غیرفعال', value: Math.max(0, t.nodes - t.nodes_enabled), color: '#8b7bff' },
-      { label: 'IP سالم CF', value: t.cf_ips_ok, color: '#34e0c0' },
+      { label: 'نود غیرفعال', value: Math.max(0, t.nodes - t.nodes_enabled), color: '#5fce62' },
+      { label: 'IP سالم CF', value: t.cf_ips_ok, color: '#8ce07a' },
     ].filter((segment) => segment.value > 0);
     const legend = Charts.donut($('#mixDonut'), segments, {
       centerValue: Fmt.num(t.nodes),

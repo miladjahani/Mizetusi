@@ -7,6 +7,30 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **The panel now looks like the mark it ships.** The brand is the lime shield-in-a-ring on a
+  near-black green tile, and the whole theme follows it: `static/app.css` moved every token to
+  that family (`--accent:#c9f24c`, `--accent-2:#5fce62`, near-black backgrounds, lime glow on
+  hover/focus/active) and `scripts/make_icons.py` draws every PWA icon, the favicon and
+  `static/icons/nexus.svg` from the same geometry (signed distance fields, no image library —
+  re-run `python3 scripts/make_icons.py` after a brand change). No blue or violet survives in
+  the shipped stylesheet, which `tests/test_node_scope.py` asserts.
+- **No more long scrolling: five nav groups and collapsible everything.** The sidebar is
+  `NAV_GROUPS` (نمای کلی / کاربران و نودها / شبکه و لبه / پنل و ظاهر / سیستم) and each group
+  unfolds only the tabs it owns — on a phone the group heads *are* the bottom bar and the tabs
+  open as a sheet above it. Inside a tab, `collapsePanels()` folds every heavy panel into a
+  `<details class="acc">` card with one summary row (icon, title, hint, count), so
+  Cloudflare/Advanced/Settings/Tools are a short stack of titled rows instead of a wall of
+  boxes, and the new compact density keeps a phone screen from becoming a scroll.
+- **Live guide (راهنمای زنده).** `GET /api/guide` answers «حالا چه کار کنم؟» from *real state* —
+  is a Worker URL saved, how many edge locations exist, how many nodes answered a ping, does a
+  user exist, is any of them scoped, what is the brand — and returns eight steps with
+  `done`, the first unfinished one as `next`, a score, and per-tab tips. The topbar chip opens a
+  drawer that ticks the steps off, points at the next one and carries the tip for the tab you
+  are on. Nothing is stored: the checklist is re-derived on every request, so it cannot drift
+  from the deployment.
+- **Node scope: a user can get only the multi-location nodes, only your server, or one
+  country.** One stored string per user (`metadata.node_scope`) decides which slice of the
+  catalog their subscription publishes — see **Node scope** below.
 - **Shadowsocks finally pings in every client, not only Happ.** The 2022 ciphers are what
   sing-box and mihomo parse best, but v2rayNG, NekoBox, Shadowrocket and every device that
   only learned SIP022 showed the Shadowsocks node greyed out. The classic AEAD method
@@ -48,6 +72,15 @@ a dedicated subscription per client.
   `subs.bikara.net`-style subscription into locations — host, port and country read from the
   entries themselves. Every location publishes the whole protocol matrix with its own
   Host/SNI, and one location can be handed out on its own (`/sub/<uuid>?location=de`).
+- **Multi-location *inside* Cloudflare.** A Cloudflare edge answers on one anycast network, so
+  a clean-IP location used to be whatever single label an admin typed — every entry dialled
+  the same addresses and a client showed one country for all of them. The
+  **«کلودفلر — لوکیشن‌های چندگانه»** pack (the first card in **پیشرفته**) creates eight
+  locations that each own *one part of Cloudflare's published ranges* (`ranges` on the source),
+  so the addresses differ per country and so does what a client's geo database reports. All of
+  them front the origin with the same Host/SNI — your Worker or panel domain, which the pack
+  resolves for you or takes from the field above the card — and the honest probe says which of
+  them actually answers from this deployment's network.
 - **Three new panel tabs.** **شخصی‌سازی** (the end-user experience: banner, support link,
   flags, recommended format, branding, default config count), **ابزار شبکه** (a multi-CDN
   scanner console, TCP/TLS reachability from the server, DoH lookup that bypasses a poisoned
@@ -180,13 +213,30 @@ providers, the clean domains and the locations they form.
 | Module | Class(es) |
 | --- | --- |
 | `core.js` | DOM/format helpers, `SafeStorage`, `Fmt`, `ToastCenter`, `EventBus` |
-| `ui.js` | `ModalManager`/`Modal`, hand-rolled SVG `Charts`, `StatusKit` |
+| `ui.js` | `ModalManager`/`Modal`, hand-rolled SVG `Charts`, `StatusKit`, `accordion()`/`collapsePanels()` |
 | `session.js` | `SessionManager` — cookie/token/session recovery |
 | `api.js` | `ApiClient`/`ApiError` — timeouts, JSON, single-flight 401 |
-| `store.js` | `PanelStore` state container, `Router` |
+| `store.js` | `PanelStore` state container, `Router`, `SECTIONS`/`NAV_GROUPS` |
 | `pwa.js` | `PwaManager` — service worker + install prompt |
-| `views/*.js` | `DashboardView`, `NodesView`, `UsersView`, `CloudflareView`, `CustomizeView`, `ToolsView`, `AdvancedView`, `SettingsView` |
+| `views/*.js` | `DashboardView`, `NodesView`, `UsersView`, `CloudflareView`, `CustomizeView`, `ToolsView`, `AdvancedView`, `SettingsView`, `GuideView` |
 | `app.js` | `NexusApp` — wiring, loaders, clock, polling, auth recovery |
+
+#### Keeping a tab one screen long
+
+Every tab is a stack of collapsed cards (`accordion()` folds the panels that were
+already in the HTML, so ids, buttons and rendered content stay where they are), the
+sidebar is five collapsible groups over the eight sections, and the lists that can
+grow without bound render a page at a time:
+
+* users and nodes paint `userLimit`/`nodeLimit` (24) rows and end in a single
+  «نمایش بیشتر» row that names how much is left — a catalog of 300 clean IPs is one
+  page, not a scroll;
+* searching or changing a filter resets the page to the first screenful;
+* the Cloudflare IP table keeps its existing «۲۰/۵۰/۱۲۰ ردیف» selector (the count is
+  asked of the server, so it stays cheap);
+* the per-client sublinks and the alternate formats are inside collapsed `<details>`
+  dropdowns grouped by engine family (Clash/Mihomo · Xray · sing-box · core · tools),
+  so a client that imports YAML is never shown next to a Base64 link.
 
 ## Session model
 
@@ -357,6 +407,39 @@ created user gets a status window at `/portal/<uuid>` listing the smart link, th
 subscriptions, the client download buttons and every node with its measured ping. Download
 links are editable in Settings → «لینک دانلود کلاینتها» because stores and release pages move.
 
+## Node scope
+
+A multi-location install publishes a lot of nodes (this server's relay + every clean IP of
+ every edge location). Which slice one user may see is an explicit choice, stored on the user
+ in `metadata.node_scope` and understood everywhere by `app/subscriptions/scope.py`:
+
+| Scope | What the subscription contains |
+| --- | --- |
+| `all` | every published node (the default — nothing changes for existing users) |
+| `multi` | only the multi-location (edge) nodes, without this server's relay |
+| `origin` | only this server's own relay |
+| `cc:us` (or `cc:us,cc:de`) | only those countries |
+
+Any spelling resolves to the canonical id: `us`, `USA`, `🇺🇸`, `آمریکا` and `de-frankfurt-01`
+all become `cc:us`; `edge`/`locations`/`مولتی` become `multi`; an unknown word widens to `all`
+rather than publishing an empty subscription. Where it is applied:
+
+- **the subscription routes** — `?scope=` overrides for one link, and with no parameter the
+  user's stored scope applies, so a link handed out earlier can never leak an excluded node.
+  The response carries `X-NEXUS-Scope`, and a scope with no nodes answers `404` with a
+  readable reason instead of a half-empty list;
+- **`render()`** — when no node list is passed, the user's scope decides, so line, Base64,
+  sing-box, Clash and Xray formats always contain the same set;
+- **the panel** — the create/edit form has a scope picker (with the live node count of every
+  choice), the quick-create cards pair a preset with the nodes it publishes (the
+  `multi-location` and `origin-only` modes), «شخصی‌سازی» holds the default scope, and the link
+  drawer shows which nodes are outside the scope plus a ready link for every other one;
+- **the status window** — the user sees their scope and can switch it per link, one tap each.
+
+`GET /api/scopes` (optionally `?username=`) returns the catalog with live counts, and
+`GET /api/guide` the live setup guide. `tests/test_node_scope.py` covers the spellings, the
+filter, every format, the endpoints and the guide.
+
 ## Deploy anywhere — Railway, Render, VPS
 
 Deploy the repository with the included Dockerfile; the container starts FastAPI and
@@ -442,6 +525,13 @@ location:
   it (bounded, cached for five minutes), so a location added by hand publishes real,
   pingable addresses on a deployment that never ran a scan — `scan_on_boot` is off by default,
   and without this a location published *nothing at all* and therefore could not ping.
+  A source may also carry **`ranges`** (up to 12 CIDRs): the location is then restricted to
+  that part of its provider's network — a Cloudflare region — and its addresses never overlap
+  another location's. Measured addresses inside the ranges come first; when a region has none
+  yet, the location seeds itself from its own ranges and those addresses join the pool, so the
+  next TCP pass measures them and the sync prefers the ones that answer. The pool probe visits
+  never-measured addresses first (`app/cloudflare/monitor.py`), which is what stops a fresh
+  range or manual IP from queueing behind the already-measured batch forever.
 * **Domain source** — paste a clean domain (a custom domain behind Cloudflare, a CDN hostname,
   another server of yours); it becomes a node of its own, and the whole protocol matrix is
   published through it.

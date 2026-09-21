@@ -43,6 +43,41 @@ MULTI_LOCATIONS = (
     {'location': 'ae', 'host': 'cdn7.velnaro.ir', 'port': 443},
 )
 
+# ------------------------------------------------- Cloudflare location groups
+# Cloudflare answers on one anycast network, so a "country" cannot be forced by
+# choosing an address: any of its addresses serves any Cloudflare hostname from
+# wherever the client happens to be, and that is exactly what makes a clean-IP
+# location work with nothing but the Worker/panel domain as Host/SNI.
+#
+# What *does* differ per address is which part of Cloudflare's published network
+# owns it — its registry allocation and therefore the country a client's geo
+# database reports — and which routes to it are open from a given network. So a
+# Cloudflare location here is one **group of ranges** from CF's official list:
+# the location publishes addresses of that group only, which is what turns one
+# single "Netherlands" entry into a real multi-location Cloudflare catalog.
+# The ranges below were grouped by geo-locating sampled addresses of each of CF's
+# published ranges (``GET /api/edge/ips`` shows the same addresses the probe
+# measures); the honest TLS probe still decides which one really answers.
+CF_REGIONS = (
+    {'location': 'us', 'name': 'آمریکا',
+     'ranges': ('103.21.244.0/22', '103.31.4.0/22')},
+    {'location': 'ca', 'name': 'کانادا',
+     'ranges': ('104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '198.41.128.0/17',
+                '108.162.192.0/18', '173.245.48.0/20')},
+    {'location': 'nl', 'name': 'هلند (آمستردام)',
+     'ranges': ('141.101.64.0/18',)},
+    {'location': 'it', 'name': 'اروپا (میلان/مادرید)',
+     'ranges': ('188.114.96.0/20',)},
+    {'location': 'sg', 'name': 'سنگاپور و توکیو',
+     'ranges': ('103.22.200.0/22',)},
+    {'location': 'za', 'name': 'آفریقای جنوبی',
+     'ranges': ('197.234.240.0/22',)},
+    {'location': 'cr', 'name': 'آمریکای مرکزی',
+     'ranges': ('190.93.240.0/20', '131.0.72.0/22')},
+    {'location': 'au', 'name': 'اقیانوسیه',
+     'ranges': ('162.158.0.0/15',)},
+)
+
 # The Iranian relay endpoints of the same subscription: one host, one port per
 # destination country. These are the "ایرانسل" tunnels — the ones that work when
 # the direct route is throttled.
@@ -56,6 +91,31 @@ IRAN_TUNNELS = (
 )
 
 PACKS = (
+    {
+        'id': 'cloudflare-regions',
+        'label': 'کلودفلر — لوکیشن‌های چندگانه (۸ منطقه)',
+        'note': ('برای هر گروه از رنج‌های کلودفلر یک لوکیشن جدا ساخته می‌شود؛ هر لوکیشن '
+                 'فقط آدرس‌های همان بخش را منتشر می‌کند، پس برچسب کشور و مسیر ورود به '
+                 'کلودفلر بین نودها فرق می‌کند و کل ماتریس پروتکل‌ها روی هرکدام می‌آید. '
+                 'همهٔ آن‌ها با Host/SNI دامنهٔ Worker (یا دامنهٔ خودِ پنل پشت کلودفلر) '
+                 'منتشر می‌شوند، پس دامنه را در فیلد بالا وارد کنید. پینگ هر لوکیشن از '
+                 'همین سرور اندازه‌گیری می‌شود؛ چون کلودفلر آدرس‌هایش را در شبکه‌های '
+                 'مختلف متفاوت اعلام می‌کند، ممکن است منطقه‌ای که از سرور پنل جواب '
+                 'ندهد از شبکهٔ کاربران جواب بدهد و برعکس — آدرس پاسخ‌نداده از سابلینک '
+                 'کنار گذاشته می‌شود و می‌توانید در همان لوکیشن رنج یا آی‌پی خودتان را '
+                 'جایگزین کنید. (خروج ترافیک همان سرور رله است؛ چیزی که عوض می‌شود '
+                 'مسیر ورود به کلودفلر است.)'),
+        'provider': 'cloudflare',
+        'kind': 'ip',
+        'host_required': True,
+        # A few addresses per region on purpose: they are Cloudflare's own edge
+        # space, not a curated list, so the probe has to decide which of them
+        # really answers from this deployment's network.
+        'max': 4,
+        'locations': tuple(
+            {'location': item['location'], 'name': item['name'], 'ranges': item['ranges']}
+            for item in CF_REGIONS),
+    },
     {
         'id': 'multi-cdn',
         'label': 'چند لوکیشن — دامنه‌های تمیز CDN',
@@ -102,29 +162,66 @@ def catalog():
         out.append({
             'id': item['id'], 'label': item['label'], 'note': item['note'],
             'provider': item['provider'], 'max': item['max'],
+            'kind': item.get('kind') or 'domain',
+            'host_required': bool(item.get('host_required')),
             'locations': len(item['locations']), 'installed': len(present),
-            'entries': [{'location': loc['location'], 'host': loc['host'], 'port': loc['port']}
+            'entries': [{'location': loc['location'], 'host': loc.get('host') or '',
+                         'name': loc.get('name') or '', 'port': loc.get('port') or 443,
+                         'ranges': list(loc.get('ranges') or [])}
                         for loc in item['locations']],
         })
     return out
 
 
-def install(pack_id, override_hosts=None):
-    """Create one edge source per location of a pack. Returns ``(created, sources)``."""
+def _host_of(value):
+    """The hostname inside a URL or a bare host (the Worker/panel domain)."""
+    raw = str(value or '').strip()
+    if not raw:
+        return ''
+    if '://' not in raw:
+        raw = 'https://' + raw
+    return (urllib.parse.urlparse(raw).hostname or '').lower()
+
+
+def install(pack_id, override_hosts=None, default_host=''):
+    """Create one edge source per location of a pack. Returns ``(created, sources)``.
+
+    A clean-domain pack ships its own hosts; a clean-IP pack (the Cloudflare
+    regions) needs one Host/SNI for every location — the Worker or panel domain
+    the origin already answers on — so the caller may pass the one it has saved.
+    Without any host the install is refused instead of publishing locations that
+    could never answer.
+    """
     item = pack(pack_id)
     if not item:
         raise ValueError('بستهٔ لوکیشن ناشناخته است')
+    kind = item.get('kind') or 'domain'
+    fallback = _host_of(default_host)
+    # Resolve every host first: a missing Host/SNI must refuse the whole install
+    # instead of leaving half a pack behind.
+    hosts = []
+    for index, location in enumerate(item['locations']):
+        host = _host_of(location.get('host') or '')
+        if override_hosts:
+            host = _host_of(override_hosts[index % len(override_hosts)])
+        elif not host:
+            host = fallback
+        hosts.append(host)
+    if any('.' not in host for host in hosts):
+        raise ValueError('برای لوکیشن‌های کلودفلر دامنهٔ Worker (یا دامنهٔ پنل پشت کلودفلر) '
+                         'لازم است — در فیلد بالای همین بخش وارد کنید')
     created = []
     for index, location in enumerate(item['locations']):
-        host = str(location['host'])
-        if override_hosts:
-            host = str(override_hosts[index % len(override_hosts)])
+        host = hosts[index]
+        label = location.get('name') or location['location'].upper()
         payload = {
-            'kind': 'domain', 'host': host, 'port': int(location.get('port') or 443),
+            'kind': kind, 'host': host, 'port': int(location.get('port') or 443),
             'location': location['location'], 'provider': item['provider'],
             'max': int(item.get('max') or 3), 'pack': item['id'],
-            'label': f"{flags.flag_for(location['location'])} · {location['location'].upper()}"
+            'label': f"{flags.flag_for(location['location'])} · {label}".strip(),
         }
+        if kind == 'ip' and location.get('ranges'):
+            payload['ranges'] = list(location['ranges'])
         try:
             source, _ = edge.save_source(payload, '')
         except ValueError:

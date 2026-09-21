@@ -472,6 +472,22 @@ def normalize_source(payload, existing=None):
         except ValueError:
             continue
         cleaned.append(str(net))
+    # ``ranges`` is the Cloudflare-region idea: a location may claim *one part* of
+    # its provider's network instead of the provider's whole pool, so several
+    # locations of the same provider really publish different addresses (and a
+    # client's geo database shows a different country for each) instead of every
+    # location dialling the same handful of anycast addresses.
+    ranges = []
+    raw_ranges = data.get('ranges') or []
+    if isinstance(raw_ranges, str):
+        raw_ranges = re.split(r'[\s,;]+', raw_ranges)
+    for value in list(raw_ranges)[:12]:
+        try:
+            net = ipaddress.ip_network(str(value).strip(), strict=False)
+        except ValueError:
+            continue
+        if net.version == 4:
+            ranges.append(str(net))
     source_id = _slug(data.get('id') or location or label or provider_id, provider_id)
     base = source_id
     index = 2
@@ -490,6 +506,7 @@ def normalize_source(payload, existing=None):
         'port': port,
         'tls': int(bool(data.get('tls', 1))),
         'ips': cleaned,
+        'ranges': ranges,
         'max': max(1, min(maximum, MAX_SOURCE_NODES)),
         'enabled': int(bool(data.get('enabled', 1))),
         # Which pack (or import) created this location, so a pack can be listed,
@@ -530,11 +547,14 @@ def delete_source(source_id):
 
 
 def _ordered_ips(source, seed=True):
-    """Addresses for one source: measured-healthy pool first, literals after.
+    """Addresses for one source: what the admin typed, then the measured pool.
 
     With ``seed`` the provider's pool is filled on demand when it is still
     empty, so a location created by hand on a deployment that never ran a scan
     still publishes real, pingable addresses instead of nothing at all.
+    ``ranges`` narrows everything to one part of the provider's network (a
+    Cloudflare region): the location then publishes its own addresses instead of
+    the same anycast set every other location already has.
     """
     provider_id = source.get('provider')
     limit = int(source.get('max') or 5)
@@ -542,15 +562,39 @@ def _ordered_ips(source, seed=True):
         ensure_pool(provider_id)
     literal = [str(ipaddress.ip_network(item, strict=False).network_address)
                for item in (source.get('ips') or [])]
+    ranges = [ipaddress.ip_network(item, strict=False) for item in (source.get('ranges') or [])]
     pool = [item['ip'] for item in rows(
         'SELECT ip FROM cf_ips WHERE source=? AND enabled=1 '
         'ORDER BY CASE WHEN ok=1 THEN 0 ELSE 1 END, COALESCE(latency_ms,999999) ASC, ip ASC LIMIT ?',
         (provider_id, max(limit * 4, 16)))]
+    if ranges:
+        pool = [ip for ip in pool if _in_ranges(ip, ranges)]
     ordered = []
-    for value in pool + literal:
+    for value in literal + pool:
         if value not in ordered:
             ordered.append(value)
+    if ranges and len(ordered) < limit:
+        # Not enough measured addresses inside this region yet: take some from the
+        # region's own ranges so the location has candidates, and register them in
+        # the pool — the TCP pass then measures them and the next sync prefers the
+        # ones that really answer instead of re-publishing the same guesses.
+        extras = sample([str(net) for net in ranges], limit=max(limit * 2, 8))
+        if seed and provider_id:
+            for value in extras:
+                _save_ip(value, provider_id)
+        for value in extras:
+            if value not in ordered:
+                ordered.append(value)
     return ordered[:limit]
+
+
+def _in_ranges(ip, networks):
+    """Is one address inside any of the given networks (IPv4/IPv6 safe)?"""
+    try:
+        address = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        return False
+    return any(address in net for net in networks if net.version == address.version)
 
 
 def _node_rows():

@@ -22,10 +22,16 @@ const PRECACHE = [
   '/static/js/api.js',
   '/static/js/store.js',
   '/static/js/pwa.js',
+  // Every module of the graph, not just the first few: a missing entry means an
+  // offline launch fails to link the panel at all.
   '/static/js/views/dashboard.js',
   '/static/js/views/nodes.js',
   '/static/js/views/users.js',
   '/static/js/views/system.js',
+  '/static/js/views/customize.js',
+  '/static/js/views/tools.js',
+  '/static/js/views/advanced.js',
+  '/static/js/views/guide.js',
   '/static/js/app.js',
   '/manifest.webmanifest',
   '/static/icons/icon-192.png',

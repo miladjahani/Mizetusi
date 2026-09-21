@@ -10,8 +10,8 @@
      a phone — a 401 is now reported once, polling stops and an in-panel
      re-login overlay keeps the page alive.
    ========================================================================== */
-import { $, $$, ico, esc, Fmt, EventBus, ToastCenter } from './core.js';
-import { ModalManager } from './ui.js';
+import { $, $$, ico, esc, chev, Fmt, EventBus, ToastCenter } from './core.js';
+import { ModalManager, collapsePanels } from './ui.js';
 import { SessionManager } from './session.js';
 import { ApiClient } from './api.js';
 import { PanelStore, Router, SECTIONS } from './store.js';
@@ -23,6 +23,7 @@ import { CloudflareView, SettingsView } from './views/system.js';
 import { CustomizeView } from './views/customize.js';
 import { ToolsView } from './views/tools.js';
 import { AdvancedView } from './views/advanced.js';
+import { GuideView } from './views/guide.js';
 
 const POLL_SECONDS = 25;
 
@@ -44,6 +45,7 @@ export class NexusApp {
     this.tools = new ToolsView(this);
     this.advanced = new AdvancedView(this);
     this.settings = new SettingsView(this);
+    this.guide = new GuideView(this);
     this.clockTimer = null;
     this.polling = true;
     this.loginOverlay = null;
@@ -90,6 +92,9 @@ export class NexusApp {
     this.installErrorHandlers();
     this.session.boot();
     this.renderNav();
+    // Every long tab is built from panels; folding the marked ones into
+    // accordions keeps a phone screen from becoming an endless scroll.
+    collapsePanels(document);
     this.nodes.renderFilters();
     this.users.renderFilters();
     this.bindEvents();
@@ -106,17 +111,57 @@ export class NexusApp {
     await this.refreshAll(true);
   }
 
+  /* The navigation is five collapsible groups instead of eight flat rows: the
+     sidebar stays short, and on a phone the group heads are the bottom bar. */
   renderNav() {
-    const nav = $('#nav');
-    if (!nav) return;
-    nav.innerHTML = SECTIONS.map((section) => `
-      <button class="nav${section.id === this.store.get('section') ? ' active' : ''}" data-section="${section.id}">
+    const host = $('#navGroups');
+    if (!host) return;
+    const item = (id) => {
+      const section = this.router.meta(id);
+      return `<button class="nav${section.id === this.store.get('section') ? ' active' : ''}" data-section="${section.id}">
         ${ico(section.icon)}
         <span class="nav-label">${esc(section.label)}</span>
         <span class="nav-badge" id="badge-${section.id}">—</span>
-      </button>`).join('');
-    $$('.nav', nav).forEach((button) => { button.onclick = () => this.safe(() => this.go(button.dataset.section)); });
+      </button>`;
+    };
+    host.innerHTML = this.store.groups.map((group) => {
+      const open = group.id === this.store.get('navGroup') || group.items.length === 1;
+      return `<div class="nav-group${open ? ' open' : ''}" data-group="${group.id}">
+        <button class="nav-group-head" data-group-toggle="${group.id}" title="${esc(group.label)}">
+          ${ico(group.icon)}
+          <span class="n">${esc(group.label)}</span>
+          <span class="q">${Fmt.num(group.items.length)}</span>
+          ${chev(13)}
+        </button>
+        <div class="nav-group-items">${group.items.map(item).join('')}</div>
+      </div>`;
+    }).join('');
+    $$('.nav', host).forEach((button) => {
+      button.onclick = () => this.safe(() => {
+        const narrow = window.matchMedia?.('(max-width:900px)').matches;
+        this.go(button.dataset.section);
+        // On a phone the group opens as a sheet over the page, so it closes
+        // itself once a tab was picked; on desktop the group stays unfolded.
+        if (narrow) { this.store.set('navGroup', ''); this.applyNavState(); }
+      });
+    });
+    $$('[data-group-toggle]', host).forEach((button) => {
+      button.onclick = () => this.safe(() => {
+        const group = this.store.groupMeta(button.dataset.groupToggle);
+        // A one-tab group has nothing to unfold: its head is the tab.
+        if (group.items.length === 1) { this.go(group.items[0]); return; }
+        this.store.set('navGroup', this.store.get('navGroup') === group.id ? '' : group.id);
+        this.applyNavState();
+      });
+    });
     this.updateBadges();
+  }
+
+  applyNavState() {
+    const open = this.store.get('navGroup');
+    const section = this.store.get('section');
+    $$('#navGroups .nav-group').forEach((el) => el.classList.toggle('open', el.dataset.group === open));
+    $$('#navGroups .nav').forEach((el) => el.classList.toggle('active', el.dataset.section === section));
   }
 
   updateBadges() {
@@ -256,6 +301,10 @@ export class NexusApp {
   go(section) { this.router.go(section); }
 
   async showSection(section) {
+    this.applyNavState();
+    // The guide follows the tab: its tips and its «next step» are re-read on
+    // every navigation, so the number in the topbar chip is never stale.
+    this.safe(() => this.guide.load(section));
     if (section === 'dashboard') {
       await Promise.all([this.loadCore(), this.loadWorkerSettings(), this.loadLogs()]);
       this.dashboard.render();
@@ -331,6 +380,7 @@ export class NexusApp {
       }
       if (section === 'advanced') await this.advanced.load();
       if (section === 'settings') await this.loadSettings();
+      this.safe(() => this.guide.load(section));
       this.setLive(true);
     } catch (error) {
       this.setLive(false);
@@ -512,6 +562,7 @@ export class NexusApp {
     this.tools.bindEvents();
     this.advanced.bindEvents();
     this.settings.bindEvents();
+    this.guide.bindEvents();
   }
 }
 

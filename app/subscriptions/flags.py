@@ -27,6 +27,7 @@ COUNTRIES = {
     'ch': ('Switzerland', 'سوئیس'),
     'cl': ('Chile', 'شیلی'),
     'cn': ('China', 'چین'),
+    'cr': ('Costa Rica', 'کاستاریکا'),
     'cy': ('Cyprus', 'قبرس'),
     'cz': ('Czechia', 'چک'),
     'de': ('Germany', 'آلمان'),
@@ -139,6 +140,7 @@ ALIASES = {
     'thailand': 'th', 'تایلند': 'th',
     'vietnam': 'vn', 'ویتنام': 'vn',
     'mexico': 'mx', 'مکزیک': 'mx',
+    'costa rica': 'cr', 'کاستاریکا': 'cr', 'san jose': 'cr',
 }
 
 # Providers whose edge really sits in one country. Cloudflare (and every other

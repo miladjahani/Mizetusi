@@ -57,7 +57,7 @@ process.on('unhandledRejection', (error) => failures.push(`unhandled: ${error.me
 // ES-module syntax in .js files), so this needs no build step and no copy.
 const BASE = new URL('../static/js/', import.meta.url);
 const mods = ['core', 'ui', 'session', 'api', 'store', 'pwa', 'views/dashboard', 'views/nodes', 'views/users',
-  'views/system', 'views/customize', 'views/tools', 'views/advanced'];
+  'views/system', 'views/customize', 'views/tools', 'views/advanced', 'views/guide'];
 const loaded = {};
 for (const name of mods) {
   loaded[name] = await import(new URL(`${name}.js`, BASE));
@@ -75,7 +75,16 @@ const checks = [
   [typeof loaded.api.ApiClient === 'function', 'ApiClient'],
   [loaded.store.SECTIONS.length === 8, 'SECTIONS'],
   [loaded.store.SECTIONS.map((item) => item.id).join(',') ===
-    'dashboard,nodes,users,cloudflare,customize,tools,advanced,settings', 'SECTIONS order'],
+    'dashboard,users,nodes,cloudflare,tools,customize,advanced,settings', 'SECTIONS order'],
+  // The sidebar is five collapsible groups, and every section belongs to one of
+  // them — a section left out of a group would be unreachable in the UI.
+  [loaded.store.NAV_GROUPS.length === 5, 'nav groups'],
+  [loaded.store.SECTIONS.every((item) => loaded.store.NAV_GROUPS.some((group) => group.items.includes(item.id))),
+    'every section belongs to a nav group'],
+  [loaded.store.NAV_GROUPS.flatMap((group) => group.items).length === loaded.store.SECTIONS.length,
+    'nav groups must list every section exactly once'],
+  [loaded.store.groupOf('cloudflare').id === 'network' && loaded.store.groupOf('nope').id === 'overview',
+    'groupOf resolves a section to its group'],
   [typeof loaded.pwa.PwaManager === 'function', 'PwaManager'],
   [typeof loaded['views/dashboard'].DashboardView === 'function', 'DashboardView'],
   [typeof loaded['views/nodes'].NodesView === 'function', 'NodesView'],
@@ -91,6 +100,10 @@ const checks = [
   [typeof loaded['views/tools'].ToolsView.prototype.scan === 'function', 'CDN scanner action'],
   [typeof loaded['views/advanced'].AdvancedView === 'function', 'AdvancedView'],
   [typeof loaded['views/advanced'].AdvancedView.prototype.saveHysteria === 'function', 'hysteria2 form'],
+  [typeof loaded['views/guide'].GuideView === 'function', 'GuideView'],
+  [typeof loaded['views/guide'].GuideView.prototype.load === 'function', 'guide loader'],
+  [typeof loaded['views/guide'].GuideView.prototype.toggle === 'function', 'guide drawer'],
+  [typeof loaded.ui.accordion === 'function', 'accordion helper'],
   [!!window.nexus, 'app bootstrapped'],
   [window.nexus?.store?.get('section') === 'dashboard', 'router default section'],
   [typeof window.nexus?.handleSessionLost === 'function', 'session recovery hook'],
@@ -185,6 +198,22 @@ try {
   if (window.nexus.users.clientLinkRows([]) === '' || !window.nexus.users.clientLinkRows([]).includes('empty')) {
     failures.push('client groups must render an empty state');
   }
+
+  // «بدون اسکرول‌های طولانی»: a list longer than one screen ends in exactly one
+  // «نمایش بیشتر» row that says how much is left — and a short list has none.
+  const users = window.nexus.users;
+  const more = users.moreButton(60, 24, 'user');
+  if (!more.includes('class="secondary more-row"') || !more.includes('data-more="user"')) {
+    failures.push('a long user list must end in one «نمایش بیشتر» row');
+  }
+  if (!more.includes('۳۶ باقی‌مانده')) failures.push('the «نمایش بیشتر» row must say how much is left');
+  if (users.moreButton(24, 24, 'user') !== '') failures.push('a fully shown list must not render a «نمایش بیشتر» row');
+  // Both catalogs page from the store, so their limits are part of the defaults
+  // (a missing key would render `undefined` rows per page).
+  const defaults = new loaded.store.PanelStore();
+  if (!(defaults.get('userLimit') > 0) || !(defaults.get('nodeLimit') > 0)) {
+    failures.push('the store must default both list limits');
+  }
 } catch (error) {
   failures.push(`client groups threw: ${error.message}`);
 }
@@ -226,6 +255,82 @@ try {
   if (!empty.includes('class="lat off"')) failures.push('a location without addresses must render as empty');
 } catch (error) {
   failures.push(`edge card threw: ${error.message}`);
+}
+
+// The collapsible-card helper is what keeps every tab short: it must produce a
+// closed <details> with a title, an optional figure and an escaped body.
+try {
+  const card = loaded.ui.accordion({ icon: 'link', title: 'سابلینک‌ها', subtitle: 'همه فرمت‌ها', meta: '۱۲', body: '<b>درون کارت</b>' });
+  if (!card.startsWith('<details class="acc"')) failures.push('accordion must render a <details> card');
+  if (card.includes(' open')) failures.push('accordion must start collapsed');
+  if (!card.includes('سابلینک‌ها') || !card.includes('acc-body')) failures.push('accordion must carry its title and body');
+  if (card.includes('undefined')) failures.push('accordion rendered undefined');
+  const opened = loaded.ui.accordion({ title: 'x', body: 'y', open: true });
+  if (!opened.includes('<details class="acc" open')) failures.push('accordion must honour open:true');
+} catch (error) {
+  failures.push(`accordion threw: ${error.message}`);
+}
+
+// The node-scope picker: one chip per scope the server offers, with the live node
+// count, and a fallback that still carries all/multi/origin when the catalog has
+// not been fetched yet (the form must never render an empty scope row).
+try {
+  window.nexus.store.set('scopes', [
+    { id: 'all', label: 'همه نودها', hint: 'همه', count: 9, current: false },
+    { id: 'multi', label: 'فقط نودهای مولتی‌لوکیشن', hint: 'لبه', count: 6, current: true },
+    { id: 'cc:de', label: '🇩🇪 آلمان', hint: 'کشور', count: 2, current: false },
+  ]);
+  const chips = window.nexus.users.scopeChips({ node_scope: 'multi' });
+  if ((chips.html.match(/class="pick on"/g) || []).length !== 1) failures.push('scope chips must mark exactly one choice');
+  if (!chips.html.includes('data-scope="cc:de"') || !chips.html.includes('۹ نود')) failures.push('scope chips must list every scope with its node count');
+  if (chips.html.includes('undefined')) failures.push('scope chips rendered undefined');
+
+  // A scope the catalog no longer lists must still be selectable, or saving the
+  // form would silently widen the user to the whole catalog.
+  const stale = window.nexus.users.scopeChips({ node_scope: 'cc:jp', node_scope_label: '🇯🇵 ژاپن' });
+  if (!stale.html.includes('data-scope="cc:jp"') || !stale.html.includes('class="pick on"')) {
+    failures.push('an unlisted scope must stay visible and selected');
+  }
+
+  window.nexus.store.set('scopes', null);
+  const offline = window.nexus.users.scopeChips({});
+  if ((offline.html.match(/class="pick/g) || []).length !== 3) failures.push('scope chips must fall back to all/multi/origin');
+
+  // The quick-create cards are built from the server's modes (a preset plus the
+  // node scope it publishes).
+  window.nexus.store.set('presets', [
+    { id: 'iran-fast', name: 'ایران — پرسرعت', kind: 'iran', scope: 'all', best_for: 'موبایل', highlights: ['فرگمنت'] },
+    { id: 'multi-location', name: 'چند لوکیشن — فقط لبه', kind: 'edge', scope: 'multi', best_for: 'CDN', highlights: ['لبه'] },
+  ]);
+  window.nexus.store.set('quickMode', 'multi-location');
+  window.nexus.users.renderModes();
+  window.nexus.users.renderScopes();
+} catch (error) {
+  failures.push(`scope chips threw: ${error.message}`);
+}
+
+// The live guide reads real state from /api/guide; with no payload it must render
+// a skeleton instead of throwing, and its chip must never show a fake count.
+try {
+  window.nexus.store.set('guide', null);
+  window.nexus.guide.renderChip();
+  window.nexus.guide.render();
+  window.nexus.store.set('guide', {
+    score: 40, section: 'users',
+    tip: { title: 'کاربران در سه کلیک', items: ['حالت را انتخاب کنید'] },
+    steps: [
+      { id: 'worker', title: 'آدرس Worker', hint: 'بی‌آن کار نمی‌کند', detail: 'ثبت نشده', done: false, section: 'cloudflare' },
+      { id: 'nodes', title: 'کاتالوگ نود', hint: 'Sync بزنید', detail: '۳ نود فعال', done: true, section: 'nodes' },
+    ],
+    links: { smart: 'https://panel.example.com/sub/1?target=auto', portal: 'https://panel.example.com/portal/1', username: 'demo' },
+  });
+  window.nexus.guide.render();
+  window.nexus.guide.renderChip();
+  window.nexus.guide.toggle(false);
+  const state = window.nexus.store.get('guide');
+  if (!state || state.steps.length !== 2) failures.push('guide state must survive a render');
+} catch (error) {
+  failures.push(`guide threw: ${error.message}`);
 }
 
 await new Promise((resolve) => setTimeout(resolve, 50));

@@ -61,7 +61,7 @@
       <div class="brand-mark"><img src="/static/icons/nexus.svg" alt="{{ brand.app_name or 'NEXUS' }}" width="34" height="34"></div>
       <div><b id="brandName">{{ brand.app_name or 'NEXUS' }}</b><span>RAILWAY CONTROL</span></div>
     </div>
-    <nav id="nav"></nav>
+    <nav id="nav"><div class="nav-groups" id="navGroups"></div></nav>
     <div class="sidebar-bottom">
       <div class="clock-card">
         <div class="t" id="clockMain">--:--:--</div>
@@ -82,6 +82,7 @@
       <div class="top-actions">
         <span class="pill" id="autoPill" title="بروزرسانی خودکار">⏱ ۰s</span>
         <span class="pill ok" id="livePill"><i class="dot"></i> زنده</span>
+        <button class="pill" id="guidePill" title="راهنمای زنده">راهنما</button>
         <button class="tbtn" id="btnInstallBar" data-pwa-install="compact" title="نصب NEXUS روی این دستگاه">نصب برنامه</button>
         <button class="icon-btn" id="btnRefresh" title="بروزرسانی"><svg><use href="#i-refresh"/></svg></button>
       </div>
@@ -181,11 +182,11 @@
       </div>
 
       <div class="grid-2b">
-        <div class="panel glass">
+        <div class="panel glass" data-acc="پوشش ترکیب‌ها|هر نود در برابر هر پروتکل و ترنسپورت|activity">
           <div class="panel-head"><div><h3>پوشش ترکیب‌ها</h3><p class="sub">هر نود در برابر هر پروتکل و ترنسپورت</p></div></div>
           <div id="coverage"></div>
         </div>
-        <div class="panel glass">
+        <div class="panel glass" data-acc="کاوشگر سابلینک نود|لینک هر نود را جداگانه بسازید|link">
           <div class="panel-head">
             <div><h3>کاوشگر سابلینک نود</h3><p class="sub">لینک هر نود را جداگانه بسازید</p></div>
           </div>
@@ -202,11 +203,25 @@
         <div class="panel-head">
           <div><h2>کاربران</h2><p class="sub">ساخت پیشرفته، مصرف، سهمیه و سابلینک اختصاصی</p></div>
           <div class="actions" style="margin:0">
-            <select id="quickPreset" style="width:auto;min-width:200px" title="پریست ساخت سریع"></select>
-            <button class="primary compact" id="btnQuickUser"><svg width="14" height="14"><use href="#i-zap"/></svg> ساخت سریع کاربر</button>
-            <button class="secondary compact" id="btnAddUser"><svg width="14" height="14"><use href="#i-plus"/></svg> کاربر جدید</button>
+            <button class="secondary compact" id="btnAddUser"><svg width="14" height="14"><use href="#i-plus"/></svg> کاربر جدید (پیشرفته)</button>
           </div>
         </div>
+
+        <!-- Quick create: one card per mode (a preset plus the nodes it hands out),
+             and the node scope the new user may see. Both come from the server. -->
+        <div class="panel-head" style="margin-bottom:9px">
+          <div><h3>ساخت سریع کاربر — حالت را انتخاب کنید</h3><p class="sub">هر کارت یک پریست واقعی + محدودهٔ نودها است؛ لینک همه کلاینت‌ها همان لحظه ساخته می‌شود</p></div>
+          <div class="actions" style="margin:0">
+            <input id="quickUsername" dir="ltr" placeholder="نام کاربری (اختیاری)" style="width:auto;min-width:190px">
+            <label class="pill" style="margin:0;cursor:pointer" title="محدوده‌ای که پیش‌فرض ادمین است">
+              <input type="checkbox" id="quickUseDefaultScope" style="width:auto;margin-inline-end:6px"> پیش‌فرض پنل
+            </label>
+            <button class="primary compact" id="btnQuickUser"><svg width="14" height="14"><use href="#i-zap"/></svg> ساخت همین حالت</button>
+          </div>
+        </div>
+        <div class="mode-grid" id="quickModes"></div>
+        <p class="scope-note">محدودهٔ نودها تعیین می‌کند این کاربر در سابلینکش چه ببیند: همه نودها، فقط لوکیشن‌های لبه (مولتی‌لوکیشن)، فقط سرور اصلی، یا فقط یک کشور. عدد هر گزینه تعداد نود همین حالاست.</p>
+        <div class="picks" id="quickScopes" style="margin-top:9px"></div>
         <div class="toolbar">
           <div class="search"><svg><use href="#i-search"/></svg><input id="userSearch" placeholder="جست‌وجوی نام کاربر…"></div>
           <div class="filters" id="userFilters"></div>
@@ -220,16 +235,22 @@
         <div class="card-grid stagger" id="userList"></div>
       </div>
 
-      <div class="panel glass" style="margin-top:13px">
-        <div class="panel-head"><div><h3>سابلینک‌های سراسری</h3><p class="sub">آدرس اشتراک هر کاربر برای همه فرمت‌های پشتیبانی‌شده</p></div>
-          <span class="pill info" id="subCountPill">—</span></div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>کاربر</th><th>پروتکل</th><th>وضعیت</th><th>سابلینک هوشمند</th><th>لینک‌ها</th></tr></thead>
-            <tbody id="subTable"></tbody>
-          </table>
+      <details class="acc" id="subTableCard" style="margin-top:13px">
+        <summary>
+          <span class="acc-ico"><svg width="15" height="15"><use href="#i-link"/></svg></span>
+          <span class="acc-t"><b>سابلینک‌های سراسری</b><span>آدرس اشتراک هر کاربر و محدودهٔ نودهایش — برای دیدن جدول باز کنید</span></span>
+          <span class="acc-meta" id="subCountPill">—</span>
+          <svg class="chev" width="15" height="15"><use href="#i-chevron"/></svg>
+        </summary>
+        <div class="acc-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>کاربر</th><th>محدودهٔ نود</th><th>وضعیت</th><th>سابلینک هوشمند</th><th>لینک‌ها</th></tr></thead>
+              <tbody id="subTable"></tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      </details>
     </section>
 
     <!-- ================= CLOUDFLARE ================= -->
@@ -257,7 +278,7 @@
           <div id="cfProgress"></div>
         </div>
       </div>
-      <div class="panel glass" style="margin-top:13px">
+      <div class="panel glass" style="margin-top:13px" data-acc="کد ورکر Cloudflare|آمادهٔ Deploy، با آدرس همین سرویس|cloud">
         <div class="panel-head">
           <div><h2>کد ورکر Cloudflare (بهینه)</h2><p class="sub">آدرس همین سرویس از قبل داخل کد نوشته شده — کپی یا دانلود کنید و مستقیم Deploy بزنید</p></div>
           <div class="actions" style="margin:0">
@@ -271,7 +292,7 @@
         <pre class="worker-code" id="workerCode" dir="ltr"><code>برای نمایش کد روی «نمایش کد» بزنید…</code></pre>
       </div>
 
-      <div class="panel glass" style="margin-top:13px">
+      <div class="panel glass" style="margin-top:13px" data-acc="منابع لبه و لوکیشن‌ها|هر منبع یک لوکیشن، با پرچم کشور و پینگ خودش|globe" data-acc-open="1">
         <div class="panel-head">
           <div><h2>منابع لبه و لوکیشن‌ها</h2><p class="sub">آی‌پی تمیز از هر CDN، لیست دستی و دامنه‌های تمیز — هر منبع یک لوکیشن</p></div>
           <div class="actions" style="margin:0">
@@ -301,7 +322,7 @@
         <div id="edgeProviderStats"></div>
       </div>
 
-      <div class="panel glass" style="margin-top:13px">
+      <div class="panel glass" style="margin-top:13px" data-acc="آی‌پی‌های Edge|بر اساس تاخیر اندازه‌گیری‌شده|list">
         <div class="panel-head">
           <div><h3>IPهای Edge</h3><p class="sub">بر اساس تاخیر اندازه‌گیری‌شده</p></div>
           <select id="cfLimit" style="width:auto"><option value="20">۲۰ ردیف</option><option value="50" selected>۵۰ ردیف</option><option value="120">۱۲۰ ردیف</option></select>
@@ -328,8 +349,8 @@
               <select id="czFormat"><option value="auto">عادی (متن ساده)</option><option value="base64">Base64 (V2Ray)</option><option value="singbox">sing-box JSON</option><option value="clash">Clash / Mihomo</option></select></div>
           </div>
           <div class="field-grid">
-            <div><label>رنگ اصلی</label><input id="czAccent" dir="ltr" placeholder="#5ad1ff"></div>
-            <div><label>رنگ دوم</label><input id="czAccent2" dir="ltr" placeholder="#8b7bff"></div>
+            <div><label>رنگ اصلی</label><input id="czAccent" dir="ltr" placeholder="#c9f24c"></div>
+            <div><label>رنگ دوم</label><input id="czAccent2" dir="ltr" placeholder="#5fce62"></div>
           </div>
           <div class="switch-row"><div class="txt"><b>پرچم کشور روی نام نودها</b><span>نام هر نود در سابلینک با پرچم کشورش می‌آید (🇩🇪 آلمان · ...)</span></div>
             <div class="switch on" id="czFlags"></div></div>
@@ -338,13 +359,15 @@
             <button class="secondary" id="czReload">بازخوانی</button>
           </div>
         </div>
-        <div class="panel glass">
+        <div class="panel glass" data-acc="پیش‌فرض ساخت کاربر|تعداد کانفیگ و محدودهٔ نود کاربر سریع‌ساخت|zap">
           <div class="panel-head"><div><h2>پیش‌فرض ساخت کاربر</h2><p class="sub">تعداد کانفیگی که کاربر سریع‌ساخت به‌طور پیش‌فرض می‌گیرد</p></div></div>
           <div class="field-grid">
             <div><label>تعداد کانفیگ پیش‌فرض <span class="hint">خالی = بدون سقف</span></label><input id="czMaxConfigs" type="number" min="1" max="500" dir="ltr" placeholder="12"></div>
             <div><label>وضعیت فعلی</label><input id="czMaxState" dir="ltr" value="—" disabled></div>
           </div>
           <p class="muted">تعداد کانفیگ همان تعداد ورودی‌هایی است که سابلینک کاربر برمی‌گرداند (نود × پروتکل). هنگام ساخت یا ویرایش هر کاربر هم می‌توان آن را جداگانه تعیین کرد.</p>
+          <label>محدودهٔ نود پیش‌فرض <span class="hint">کاربر سریع‌ساخت پیش‌فرض چه نودهایی را ببیند — هنگام ساخت هر کاربر قابل تغییر است</span></label>
+          <div class="picks" id="czScopes"></div>
           <div class="panel-head" style="margin-top:14px"><div><h3>پیش‌نمایش</h3><p class="sub">همان چیزی که کاربر در پنجرهٔ وضعیت می‌بیند</p></div></div>
           <div id="czPreview"></div>
         </div>
@@ -372,7 +395,7 @@
       </div>
 
       <div class="grid-2b">
-        <div class="panel glass">
+        <div class="panel glass" data-acc="بررسی دسترسی (TCP / TLS)|از سمت همین سرور، با SNI دلخواه|shield">
           <div class="panel-head"><div><h2>بررسی دسترسی (TCP / TLS)</h2><p class="sub">از سمت همین سرور به یک هاست:پورت وصل می‌شود و تاخیر دست‌دادن TLS را می‌گوید</p></div><span class="pill" id="tlCheckTag">—</span></div>
           <div class="field-grid">
             <div><label>هاست یا آدرس</label><input id="tlHost" dir="ltr" placeholder="cdn.example.com"></div>
@@ -383,7 +406,7 @@
           <div class="actions"><button class="primary" id="tlCheck">بررسی کن</button></div>
           <div class="kv-list" id="tlCheckOut"></div>
         </div>
-        <div class="panel glass">
+        <div class="panel glass" data-acc="جست‌وجوی DNS و محاسبه‌گر CIDR|مقاوم در برابر DNS آلودهٔ محلی|globe">
           <div class="panel-head"><div><h2>جست‌وجوی DNS (DoH)</h2><p class="sub">مقاوم در برابر DNS آلودهٔ محلی — از Cloudflare و Google استفاده می‌کند</p></div></div>
           <label>دامنه</label>
           <input id="tlDnsName" dir="ltr" placeholder="example.com">
@@ -397,7 +420,7 @@
         </div>
       </div>
 
-      <div class="panel glass" style="margin-top:13px">
+      <div class="panel glass" style="margin-top:13px" data-acc="تحلیل سابلینک|هاست‌ها و پرچم کشورها را جدا می‌کند و به لوکیشن تبدیل می‌کند|search">
         <div class="panel-head">
           <div><h2>تحلیل سابلینک</h2><p class="sub">متن کانفیگ‌ها یا آدرس سابلینک را بدهید: پروتکل‌ها، هاست‌ها و پرچم کشورها را جدا می‌کند و در صورت خواستن، به لوکیشن تبدیل می‌کند</p></div>
           <div class="actions" style="margin:0">
@@ -418,7 +441,7 @@
     <!-- ================= ADVANCED ================= -->
     <section class="section" id="section-advanced">
       <div class="grid-2b">
-        <div class="panel glass">
+        <div class="panel glass" data-acc="نود Hysteria2|QUIC مستقل از Xray؛ تا فعال نشود منتشر نمی‌شود|zap">
           <div class="panel-head"><div><h2>نود Hysteria2</h2><p class="sub">Hysteria2 روی QUIC کار می‌کند و در Xray اینباند ندارد؛ آدرس سرور هاستریزیای خودتان را بدهید تا در سابلینک‌ها منتشر شود</p></div><span class="pill" id="adHy2Tag">—</span></div>
           <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>تا فعال نشود هیچ چیزی در سابلینک‌ها اضافه نمی‌شود</span></div>
             <div class="switch" id="adHy2Enabled"></div></div>
@@ -439,16 +462,16 @@
           </div>
           <div class="kv-list" id="adHy2Info"></div>
         </div>
-        <div class="panel glass">
+        <div class="panel glass" data-acc="لوکیشن‌های آماده (چند لوکیشن)|با یک کلیک برای هر کشور یک دامنهٔ تمیز|globe" data-acc-open="1">
           <div class="panel-head"><div><h2>لوکیشن‌های آماده (چند لوکیشن)</h2><p class="sub">با یک کلیک، برای هر کشور یک دامنهٔ تمیز ساخته می‌شود و کل ماتریس پروتکل‌ها روی آن منتشر می‌گردد</p></div></div>
           <div id="adPacks"></div>
-          <label>دامنه‌های جایگزین <span class="hint">اختیاری — هر خط/کاما یک دامنه، به ترتیب روی لوکیشن‌ها می‌نشیند</span></label>
-          <input id="adPackHosts" dir="ltr" placeholder="cdn1.example.com, cdn2.example.com">
+          <label>دامنه‌های جایگزین / Host-SNI <span class="hint">اختیاری برای بسته‌های دامنه‌محور — برای بستهٔ کلودفلر دامنهٔ Worker یا دامنهٔ پنل (هر خط/کاما یک دامنه، به ترتیب روی لوکیشن‌ها می‌نشیند)</span></label>
+          <input id="adPackHosts" dir="ltr" placeholder="worker.example.workers.dev">
         </div>
       </div>
 
       <div class="grid-2b" style="margin-top:13px">
-        <div class="panel glass">
+        <div class="panel glass" data-acc="ورود لوکیشن از سابلینک|هر هاست با پرچم کشورش یک لوکیشن می‌شود|download">
           <div class="panel-head"><div><h2>ورود لوکیشن از سابلینک</h2><p class="sub">آدرس هر سابلینکی را بدهید؛ هاست‌های داخلش با پرچم کشور به لوکیشن تبدیل می‌شوند</p></div></div>
           <label>آدرس سابلینک</label>
           <input id="adImportUrl" dir="ltr" placeholder="https://subs.example.com/sub/xxxxxxx">
@@ -462,7 +485,7 @@
           </div>
           <div id="adImportOut"></div>
         </div>
-        <div class="panel glass">
+        <div class="panel glass" data-acc="ترنسپورت‌های منتشرشده|چه چیزی این هسته واقعاً سرو می‌کند|server">
           <div class="panel-head"><div><h2>ترنسپورت‌های منتشرشده</h2><p class="sub">چه چیزی این هسته واقعاً سرو می‌کند و چه چیزی کنار گذاشته شده است</p></div>
             <button class="secondary compact" id="adProfilesReload">بروزرسانی</button></div>
           <div class="kv-list" id="adProfiles"></div>
@@ -512,7 +535,7 @@
         </div>
       </div>
 
-      <div class="panel glass" style="margin-top:13px">
+      <div class="panel glass" style="margin-top:13px" data-acc="لینک دانلود کلاینت‌ها|صفحهٔ دانلود هر کلاینت در پنجرهٔ وضعیت|download">
         <div class="panel-head">
           <div><h2>لینک دانلود کلاینت‌ها</h2><p class="sub">همین لینک‌ها در پنجره وضعیت هر کاربر نمایش داده می‌شود؛ اگر صفحه دانلود یک کلاینت تغییر کرد، اینجا اصلاح کنید</p></div>
           <div class="actions" style="margin:0">
@@ -524,7 +547,7 @@
       </div>
 
       <div class="grid-2b" style="margin-top:13px">
-        <div class="panel glass">
+        <div class="panel glass" data-acc="نصب روی دستگاه (PWA)|آیکون اختصاصی و اجرا در حالت برنامه|download">
           <div class="panel-head"><div><h2>نصب روی دستگاه (PWA)</h2><p class="sub">با آیکون اختصاصی NEXUS روی گوشی یا دسکتاپ نصب می‌شود و در حالت برنامه اجرا می‌گردد</p></div><span class="pill ok">Installable</span></div>
           <div class="pwa-card">
             <div class="pwa-logo"><img src="/static/icons/nexus.svg" alt="NEXUS" width="64" height="64"></div>
@@ -546,22 +569,22 @@
             <button class="primary" id="btnInstallPwa" data-pwa-install="full">نصب برنامه</button>
           </div>
         </div>
-        <div class="panel glass">
+        <div class="panel glass" data-acc="برند، نشست و پینگ|نام برنامه، رنگ پوسته و بازهٔ پینگ نودها|edit">
           <div class="panel-head"><div><h2>برند، نشست و پینگ</h2><p class="sub">نام برنامه، رنگ پوسته، مدت ورود و بازه پینگ خودکار نودها</p></div></div>
           <div class="field-grid">
             <div><label>نام برنامه <span class="hint">روی آیکون نصب‌شده</span></label><input id="setAppName" dir="ltr" placeholder="NEXUS"></div>
             <div><label>مدت نشست (روز) <span class="hint">۱ تا ۳۶۵</span></label><input id="setSessionDays" type="number" min="1" max="365" step="1" dir="ltr" placeholder="7"></div>
           </div>
           <div class="field-grid">
-            <div><label>رنگ اصلی <span class="hint">مثلاً ‎#5ad1ff</span></label><input id="setAccent" dir="ltr" placeholder="#5ad1ff"></div>
-            <div><label>رنگ دوم <span class="hint">مثلاً ‎#8b7bff</span></label><input id="setAccent2" dir="ltr" placeholder="#8b7bff"></div>
+            <div><label>رنگ اصلی <span class="hint">مثلاً ‎#c9f24c</span></label><input id="setAccent" dir="ltr" placeholder="#c9f24c"></div>
+            <div><label>رنگ دوم <span class="hint">مثلاً ‎#5fce62</span></label><input id="setAccent2" dir="ltr" placeholder="#5fce62"></div>
             <div><label>بازه پینگ نودها (دقیقه) <span class="hint">۱ تا ۱۴۴۰</span></label><input id="setPingInterval" type="number" min="1" max="1440" step="1" dir="ltr" placeholder="15"></div>
           </div>
           <p class="muted">مدت نشست روی ورود بعدی اعمال می‌شود؛ اگر روی گوشی زیاد از پنل خارج می‌شوید مقدار بیشتری بگذارید. بازه پینگ خودکار تعیین می‌کند هر چند دقیقه همه نودها دوباره اندازه‌گیری شوند.</p>
         </div>
       </div>
 
-      <div class="panel glass" style="margin-top:13px">
+      <div class="panel glass" style="margin-top:13px" data-acc="نود WARP (WireGuard)|خروج ترافیک از شبکهٔ کلودفلر|globe">
         <div class="panel-head">
           <div><h2>نود WARP (WireGuard)</h2><p class="sub">ترافیک نود WARP از داخل شبکه Cloudflare خارج می‌شود؛ برای سرویس‌هایی که IP دیتاسنتر را بلاک می‌کنند مفید است</p></div>
           <span class="pill" id="warpTag">—</span>
@@ -576,11 +599,11 @@
       </div>
 
       <div class="grid-2b" style="margin-top:13px">
-        <div class="panel glass">
+        <div class="panel glass" data-acc="اطلاعات سیستم|نسخه، هسته، پروتکل‌ها و اندپوینت‌ها|server">
           <div class="panel-head"><div><h2>اطلاعات سیستم</h2><p class="sub">نسخه، هسته، پروتکل‌ها و اندپوینت‌ها</p></div></div>
           <div class="kv-list" id="sysInfo"></div>
         </div>
-        <div class="panel glass">
+        <div class="panel glass" data-acc="پشتیبان‌گیری و رویدادها|خروجی کامل کاربران، نودها و تنظیمات|download">
           <div class="panel-head"><div><h2>پشتیبان‌گیری</h2><p class="sub">خروجی کامل کاربران، نودها و تنظیمات</p></div></div>
           <p class="muted">فایل JSON شامل جدول کاربران، پروکسی‌ها و تنظیمات است. برای بازگردانی، مقادیر را در دیتابیس Railway ایمپورت کنید.</p>
           <div class="actions">
@@ -594,7 +617,7 @@
         </div>
       </div>
 
-      <div class="panel glass" style="margin-top:13px">
+      <div class="panel glass" style="margin-top:13px" data-acc="گزارش رویدادها|آخرین اقدام‌های مدیریتی|list">
         <div class="panel-head"><div><h2>گزارش رویدادها</h2><p class="sub">آخرین اقدام‌های مدیریتی</p></div><span class="pill" id="logCount">—</span></div>
         <div class="table-wrap">
           <table><thead><tr><th>#</th><th>اقدام</th><th>جزئیات</th><th>زمان</th></tr></thead><tbody id="logTable"></tbody></table>
@@ -606,6 +629,17 @@
 
 <div class="toasts" id="toasts"></div>
 <div id="modalRoot"></div>
+
+<!-- ================= LIVE GUIDE ================= -->
+<div class="guide-scrim" id="guideScrim"></div>
+<aside class="guide-drawer" id="guideDrawer" role="dialog" aria-label="راهنمای زنده">
+  <div class="guide-head">
+    <div class="g-ic"><svg width="19" height="19"><use href="#i-shield"/></svg></div>
+    <div style="flex:1;min-width:0"><b>راهنمای زنده</b><span>از وضعیت واقعی سرور ساخته می‌شود</span></div>
+    <button class="icon-btn" id="guideClose" aria-label="بستن"><svg width="15" height="15"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="guide-body" id="guideBody"></div>
+</aside>
 <!-- The panel is a single ES-module entry point; it imports the core, API,
      session, router and the four views as classes (no build step, no globals). -->
 <script type="module" src="/static/js/app.js"></script>

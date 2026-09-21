@@ -29,6 +29,7 @@ from app.db import execute
 from app.edge import packs as edge_packs
 from app.edge import sources as edge_sources
 from app.subscriptions import transports
+from app.subscriptions import scope as node_scope
 from app.subscriptions import flags as sub_flags
 
 router = APIRouter()
@@ -77,7 +78,7 @@ async def _measure(request, source_ids):
     main._edge_sync(request)
     totals = {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': len(ids), 'results': []}
     for source_id in ids:
-        result = await main._ping_edge_nodes(source_id=source_id, timeout=3.0, limit=40)
+        result = await main._ping_edge_nodes(source_id=source_id, timeout=2.5, limit=40)
         totals['probed'] += result['probed']
         totals['healthy'] += result['healthy']
         totals['failed'] += result['failed']
@@ -96,6 +97,8 @@ def _customization():
         'flags': _flags_on(),
         'default_format': (_setting('default_format') or 'auto').strip().lower(),
         'default_max_configs': _setting('default_max_configs') or '',
+        'default_scope': node_scope.normalize(_setting('default_scope') or 'all'),
+        'scopes': node_scope.options(_main().active_nodes()),
         'core_formats': [{'id': item['id'], 'label': item['label'], 'hint': item['hint']}
                          for item in _main()._core_subs('', '')],
     }
@@ -150,6 +153,11 @@ async def save_customization(request: Request):
         else:
             _set('default_max_configs', '')
         changed.append('default_max_configs')
+    if 'default_scope' in body:
+        # The node scope a quick-created user gets when the admin does not pick
+        # one on the spot: all / multi-location only / this server only / country.
+        _set('default_scope', node_scope.normalize(body['default_scope']))
+        changed.append('default_scope')
     if 'app_name' in body:
         _set('app_name', str(body['app_name'] or '').strip()[:24])
         changed.append('app_name')
@@ -264,11 +272,22 @@ async def manage_pack(request: Request):
     hosts = body.get('hosts')
     if isinstance(hosts, str):
         hosts = [token for token in re.split(r'[\s,]+', hosts) if token]
-    created, sources = edge_packs.install(pack_id, override_hosts=hosts or None)
+    # A clean-IP pack (the Cloudflare regions) fronts the origin that already
+    # answers on the Worker URL or the panel's own domain, so the admin never has
+    # to retype it.
+    default_host = _setting('cloudflare_worker_url') or ''
+    if not default_host:
+        default_host = _main().public_base(request)
+    try:
+        created, _sources = edge_packs.install(pack_id, override_hosts=hosts or None,
+                                               default_host=default_host)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     ping = await _measure(request, [item['id'] for item in created])
     _audit('edge.pack', f'install {pack_id} ({len(created)})')
-    return {'success': True, 'created': [item['id'] for item in created], 'sources': sources,
-            'ping': ping, 'packs': edge_packs.catalog()}
+    return {'success': True, 'created': [item['id'] for item in created],
+            'sources': edge_sources.status()['sources'], 'ping': ping,
+            'packs': edge_packs.catalog()}
 
 
 @router.get('/api/edge/import')
@@ -449,3 +468,142 @@ async def _json_body(request):
     except Exception:
         body = None
     return body if isinstance(body, dict) else {}
+
+
+# --------------------------------------------------------------------- scopes
+@router.get('/api/scopes')
+def get_scopes(request: Request, username: str = ''):
+    """The node-scope catalog, with the live node count of every choice.
+
+    ``?username=`` answers for one user (so the panel can show which slice that
+    user publishes and hand out a ready link for any other slice).
+    """
+    _auth(request)
+    main = _main()
+    nodes = main.active_nodes()
+    user = main.get_user(str(username).strip()) if username else None
+    current = transports.user_scope(user) if user else node_scope.normalize(_setting('default_scope') or 'all')
+    base = main.public_base(request)
+    options = [{**item, 'url': main._sub_url(base, urllib.parse.quote(user['uuid'], safe=''),
+                                             main._user_target(user), '', '', item['id'])}
+               for item in node_scope.options(nodes, current)] if user \
+        else node_scope.options(nodes, current)
+    return {'username': user['username'] if user else '', 'scope': current,
+            'label': node_scope.label(current), 'hint': node_scope.hint(current),
+            'catalog_total': len(nodes), 'options': options,
+            'locations': sorted({node_scope.location_of(n) for n in nodes if node_scope.location_of(n)})}
+
+
+# ---------------------------------------------------------------- live guide
+# The panel's «راهنمای زنده» answers one question — «حالا چه کار کنم؟» — and every
+# step is answered from **real state** (saved settings, edge sources, Node Probe
+# results, the user table), never from a checklist somebody has to keep in their
+# head. A step that is already true comes back ``done``; the first false one is
+# ``next``, which is what the topbar chip and the drawer highlight.
+
+SECTION_TIPS = {
+    'dashboard': {'title': 'از این‌جا شروع کنید', 'items': [
+        'شمارندهٔ «نودهای سالم» تنها چیزی است که به سابلینک کاربر می‌رود؛ نود ناسالم منتشر نمی‌شود.',
+        'هر عدد این صفحه زنده است؛ برای دیدن جزئیات روی همان کارت بروید.',
+    ]},
+    'nodes': {'title': 'نودها و لوکیشن‌ها', 'items': [
+        '«Sync نودها» کاتالوگ را از منابع لبه می‌سازد، «پینگ همه نودها» سلامت واقعی را می‌سنجد.',
+        'پینگ = همان handshake کلاینتی که کاربر انجام می‌دهد؛ TCP خالی هرگز «سالم» حساب نمی‌شود.',
+        'اگر نودی سالم نیست، Host/SNI آن با آی‌پی‌ها سازگار نیست — دلیلش زیر نام نود نوشته شده است.',
+    ]},
+    'users': {'title': 'کاربران در سه کلیک', 'items': [
+        'یکی از حالت‌های «ساخت سریع» را بزنید: هر کارت یک پریست + محدودهٔ نود است.',
+        'محدودهٔ نودها تعیین می‌کند کاربر چه ببیند: همه نودها، فقط مولتی‌لوکیشن، فقط سرور اصلی یا یک کشور.',
+        'تعداد کانفیگ را از فرم کاربر یا پیش‌فرض شخصی‌سازی بدهید تا سابلینک سبک بماند.',
+    ]},
+    'cloudflare': {'title': 'ورکر و آی‌پی تمیز', 'items': [
+        'کد ورکر آماده است؛ آن را Deploy کنید و آدرسش را این‌جا بگذارید.',
+        'هر لوکیشن دکمهٔ پینگ خودش را دارد و می‌گوید چند آی‌پی پاسخ داد.',
+    ]},
+    'customize': {'title': 'آن‌چه کاربر می‌بیند', 'items': [
+        'بنر، لینک پشتیبانی، پرچم کشورها و فرمت پیشنهادی همین‌جا تنظیم می‌شوند.',
+        'پیش‌فرض تعداد کانفیگ و محدودهٔ نود، همان چیزی است که کاربر سریع‌ساخت می‌گیرد.',
+    ]},
+    'tools': {'title': 'ابزار شبکه', 'items': [
+        'برای هر لوکیشن مشکوک، «بررسی دسترسی» را با SNI درست اجرا کنید.',
+        'تحلیل سابلینک، هاست‌های یک سابلینک دیگر را با پرچم کشور به لوکیشن تبدیل می‌کند.',
+    ]},
+    'advanced': {'title': 'گزینه‌های پیشرفته', 'items': [
+        'بستهٔ «کلودفلر — لوکیشن‌های چندگانه» با یک کلیک ۸ منطقهٔ واقعی می‌سازد.',
+        'نود Hysteria2 تا وقتی هاست و رمز ذخیره و فعال نشود هیچ‌جا منتشر نمی‌شود.',
+    ]},
+    'settings': {'title': 'تنظیمات و امنیت', 'items': [
+        'پیشوند برچسب و آدرس پایه را یک‌بار درست کنید تا همهٔ لینک‌ها تمیز باشند.',
+        'با «ابطال همه نشست‌ها» هر دستگاه دیگری از پنل بیرون می‌آید.',
+    ]},
+}
+
+
+def _guide_state(request):
+    """The guide's steps, straight from the live deployment state."""
+    main = _main()
+    worker = (_setting('cloudflare_worker_url') or '').strip()
+    sources = [item for item in (edge_sources.status().get('sources') or [])]
+    locations = sorted({str(item.get('location') or '') for item in sources if item.get('location')})
+    nodes = list(main.list_nodes())
+    enabled = [n for n in nodes if n.get('enabled')]
+    healthy = [n for n in enabled
+               if n.get('latency_ms') is not None and float(n.get('latency_ms') or 0) >= 0]
+    users = list(main.list_users())
+    active = [u for u in users if u.get('is_active')]
+    scoped = [u for u in users if transports.user_scope(u) != node_scope.SCOPE_ALL]
+    brand = main._brand()
+    base = main.public_base(request)
+    newest = active[0] if active else (users[0] if users else None)
+
+    steps = [
+        {'id': 'worker', 'title': 'آدرس Worker یا دامنهٔ کلودفلر', 'section': 'cloudflare',
+         'hint': 'بدون این آدرس، لوکیشن‌های آی‌پی تمیز Host/SNI ندارند و پینگ نمی‌دهند.',
+         'detail': worker or 'ثبت نشده', 'done': bool(worker)},
+        {'id': 'locations', 'title': 'لوکیشن‌های لبه (مولتی‌لوکیشن)', 'section': 'advanced',
+         'hint': 'از تب پیشرفته یک بستهٔ لوکیشن نصب کنید یا از سابلینک وارد کنید.',
+         'detail': f'{len(sources)} منبع · {len(locations)} لوکیشن', 'done': bool(sources)},
+        {'id': 'nodes', 'title': 'کاتالوگ نود فعال', 'section': 'nodes',
+         'hint': '«Sync نودها» نودهای هر لوکیشن را می‌سازد؛ سپس آن‌ها را پینگ کنید.',
+         'detail': f'{len(enabled)} از {len(nodes)} نود فعال', 'done': bool(enabled)},
+        {'id': 'ping', 'title': 'پینگ واقعی نودها', 'section': 'nodes',
+         'hint': 'تا نودی اندازه‌گیری نشود، «اندازه‌گیری‌نشده» می‌ماند و در سابلینک مطمئن نیست.',
+         'detail': f'{len(healthy)} نود پاسخ داد', 'done': bool(healthy)},
+        {'id': 'users', 'title': 'اولین کاربر', 'section': 'users',
+         'hint': 'با «ساخت سریع» یک کاربر آماده بگیرید؛ لینک‌ها در همان لحظه ساخته می‌شوند.',
+         'detail': f'{len(users)} کاربر ({len(active)} فعال)', 'done': bool(users)},
+        {'id': 'scope', 'title': 'محدودهٔ نودهای هر کاربر', 'section': 'users',
+         'hint': 'اگر کاربری نباید همهٔ لوکیشن‌ها را ببیند، محدوده‌اش را روی «فقط لبه»، «فقط سرور» یا یک کشور بگذارید.',
+         'detail': f'{len(scoped)} کاربر محدود‌شده' if scoped else 'همه روی «همه نودها»',
+         'done': bool(scoped)},
+        {'id': 'share', 'title': 'تحویل لینک به کاربر', 'section': 'users',
+         'hint': 'سابلینک هوشمند را بدهید یا پنجرهٔ وضعیت را برای کاربر باز کنید.',
+         'detail': (f"{newest['username']} · {node_scope.label(transports.user_scope(newest))}" if newest else 'کاربری نیست'),
+         'done': bool(active)},
+        {'id': 'brand', 'title': 'برند و پنجرهٔ وضعیت', 'section': 'customize',
+         'hint': 'نام برنامه، بنر و لینک پشتیبانی را تنظیم کنید تا کاربر بداند کجاست.',
+         'detail': brand.get('app_name') or 'NEXUS',
+         'done': bool((brand.get('app_name') or '') not in ('', 'NEXUS')
+                     or (_setting('portal_banner') or '').strip()
+                     or (_setting('support_url') or '').strip())},
+    ]
+    links = {}
+    if newest:
+        token = urllib.parse.quote(newest['uuid'], safe='')
+        links = {'smart': main._sub_url(base, token, main._user_target(newest)),
+                 'portal': main._portal_url(base, token), 'username': newest['username']}
+    return {'steps': steps, 'links': links, 'tips': SECTION_TIPS,
+            'score': round(100 * sum(1 for step in steps if step['done']) / len(steps)),
+            'next': next((step['id'] for step in steps if not step['done']), ''),
+            'catalog_total': len(nodes), 'locations': locations}
+
+
+@router.get('/api/guide')
+def get_guide(request: Request, section: str = ''):
+    """The live setup guide: what is done, what is next, and the tab's own tips."""
+    _auth(request)
+    state = _guide_state(request)
+    wanted = str(section or '').strip().lower()
+    state['section'] = wanted if wanted in SECTION_TIPS else 'dashboard'
+    state['tip'] = SECTION_TIPS[state['section']]
+    return state

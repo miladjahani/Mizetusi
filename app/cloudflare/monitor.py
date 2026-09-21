@@ -88,8 +88,15 @@ async def probe_all(concurrency=None, limit=None, provider_id=None):
     if provider_id:
         where += ' AND source=?'
         args.append(str(provider_id))
-    candidates = rows(f'SELECT ip FROM cf_ips {where} ORDER BY COALESCE(latency_ms,999999) LIMIT ?',
-                      (*args, int(limit)))
+    # Never-measured addresses first, then the failed ones, then the healthy by
+    # speed. Ordering purely by latency left a freshly added address (a manual
+    # clean IP, a new location's range) unmeasured behind the already measured
+    # batch, so a pass would keep re-probing the same 64 rows.
+    candidates = rows(
+        f'SELECT ip FROM cf_ips {where} '
+        'ORDER BY CASE WHEN latency_ms IS NULL THEN 0 WHEN ok=1 THEN 2 ELSE 1 END, '
+        'COALESCE(latency_ms,999999) ASC LIMIT ?',
+        (*args, int(limit)))
     sem = asyncio.Semaphore(max(1, min(concurrency, 16)))
 
     async def one(item):

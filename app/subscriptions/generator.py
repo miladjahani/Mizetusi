@@ -14,6 +14,7 @@ import base64, json, urllib.parse
 from app.db import rows
 from app.subscriptions.clients import CLIENT_FORMATS, FORMATS
 from app.subscriptions import transports as tp
+from app.subscriptions import scope as scopes
 
 # Every client format NEXUS can emit, plus one target per known client id so a
 # client can subscribe with the exact name it is listed under in the panel.
@@ -358,8 +359,13 @@ def xray(user, node, profile, prefix=''):
 
 
 # ------------------------------------------------------------------------ nodes
-def active_nodes(include_unhealthy=False, location=''):
+def active_nodes(include_unhealthy=False, location='', scope=''):
     """Enabled nodes ordered by their last measured ping.
+
+    Two filters are applied before health: ``location`` (one country, from the
+    ``?location=`` parameter) and ``scope`` (``all`` / ``multi`` / ``origin`` /
+    a country, from the user's own setting or ``?scope=``). Together they are how
+    "only the US edge" or "only my own server" becomes an ordinary subscription.
 
     Measured health is a *sort key*, not a filter — with one exception: a
     clean-IP node whose probe failed is not published at all, because a client
@@ -380,6 +386,10 @@ def active_nodes(include_unhealthy=False, location=''):
     wanted_location = str(location or '').strip().lower()
     if wanted_location:
         rows_ = [n for n in rows_ if tp.node_location(n) == wanted_location]
+    # Node scope: which slice of the catalog this subscription may carry at all.
+    if scope:
+        from app.subscriptions import scope as scopes
+        rows_ = scopes.filter_nodes(rows_, scope)
     if include_unhealthy:
         return rows_
     # The one health filter: never advertise a dead clean IP. The Railway
@@ -461,7 +471,10 @@ def _json_subscription(user, nodes, profiles, kind, prefix='', include_hy2=True)
 
 def render(user, base, target, nodes=None, prefix='', include_hy2=True):
     target = normalize_target(target)
-    nodes = nodes if nodes is not None else active_nodes()
+    # With no explicit node list the user's own scope decides what is published,
+    # so every caller (the subscription routes *and* the panel's previews) hands
+    # out exactly the same set — the scope cannot be applied in one place only.
+    nodes = nodes if nodes is not None else active_nodes(scope=tp.user_scope(user))
     if not nodes:
         raise ValueError('no enabled nodes available')
 
@@ -528,6 +541,11 @@ def node_links(user, node, prefix=''):
         # Which edge source (location/provider) this node belongs to, so a user can
         # be handed "just the German edge" and the panel can group the nodes.
         'location': tp.node_location(node), 'provider': tp.node_provider(node),
+        # Whether the user's own node scope publishes this node at all. The panel
+        # badges the rows it excludes (and never offers them as a working link),
+        # which is what keeps the admin's link drawer honest for a scoped user.
+        'in_scope': scopes.matches(node, tp.user_scope(user)),
+        'scope': tp.user_scope(user),
         'profiles': entries,
         'links': {
             'primary': primary and primary.get('link') or '',

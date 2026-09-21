@@ -24,6 +24,18 @@ const FALLBACK_PROTOCOLS = [
 ];
 const FALLBACK_CIPHERS = 'AES-128 · AES-256 · ChaCha20-Poly1305';
 
+// Users render a screenful at a time; the rest sits behind one «نمایش بیشتر»
+// button, so a workspace with a hundred accounts is still one tidy page.
+const PAGE = 24;
+
+// The node-scope picker usually renders from /api/presets (which carries a live
+// node count per scope); this is the fallback so the user form is never empty.
+const FALLBACK_SCOPES = [
+  { id: 'all', label: 'همه نودها', hint: 'سرور اصلی + همه لوکیشن‌ها' },
+  { id: 'multi', label: 'فقط نودهای مولتی‌لوکیشن', hint: 'فقط لوکیشن‌های لبه، بدون نود خود سرور' },
+  { id: 'origin', label: 'فقط سرور اصلی', hint: 'فقط نود خود همین سرور' },
+];
+
 const sortedClients = (clients) => (clients || []).slice().sort((a, b) => {
   const index = (item) => (CLIENT_ORDER.indexOf(item.id) === -1 ? 99 : CLIENT_ORDER.indexOf(item.id));
   return index(a) - index(b);
@@ -74,8 +86,10 @@ export class UsersView {
     $$('#userFilters .fchip').forEach((button) => {
       button.onclick = () => {
         this.store.set('userFilter', button.dataset.filter);
+        this.store.set('userLimit', PAGE);
         this.renderFilters();
         this.render();
+        this.renderSubTable();
       };
     });
   }
@@ -114,7 +128,8 @@ export class UsersView {
         <div class="muted" style="margin-top:6px">با «کاربر جدید» اولین کاربر را بسازید.</div></div>`;
       return;
     }
-    host.innerHTML = list.map((user, index) => {
+    const shown = list.slice(0, this.store.get('userLimit') || PAGE);
+    host.innerHTML = shown.map((user, index) => {
       const status = StatusKit.of(user);
       const pct = StatusKit.quotaPct(user);
       const remain = user.expires_at ? user.expires_at - Date.now() / 1000 : null;
@@ -149,7 +164,7 @@ export class UsersView {
           <button class="tbtn bad" data-u="del" data-name="${esc(user.username)}">${ico('trash', 13)}</button>
         </div>
       </div>`;
-    }).join('');
+    }).join('') + this.moreButton(list.length, shown.length, 'user');
 
     $$('#userList [data-u]').forEach((button) => {
       const user = this.store.get('users').find((item) => item.username === button.dataset.name);
@@ -163,6 +178,20 @@ export class UsersView {
         if (action === 'del') await this.remove(user);
       });
     });
+    const more = $('#userList [data-more]');
+    if (more) more.onclick = () => {
+      this.store.set('userLimit', (this.store.get('userLimit') || PAGE) + PAGE);
+      this.render();
+    };
+  }
+
+  /* The one control that replaces a long list: a titled row saying how much is
+     left, instead of silently dropping the rest. */
+  moreButton(total, shown, kind) {
+    if (total <= shown) return '';
+    return `<button class="secondary more-row" data-more="${esc(kind)}">`
+      + `${ico('chevron', 13)} نمایش ${Fmt.num(Math.min(PAGE, total - shown))} مورد بعدی · ${Fmt.num(total - shown)} باقی‌مانده`
+      + `</button>`;
   }
 
   renderSubTable() {
@@ -176,12 +205,13 @@ export class UsersView {
       return;
     }
     const base = this.store.get('settings')?.resolved_base_url || location.origin;
-    host.innerHTML = users.map((user) => {
+    const shown = users.slice(0, this.store.get('userLimit') || PAGE);
+    host.innerHTML = shown.map((user) => {
       const status = StatusKit.of(user);
       const url = `${base}/sub/${encodeURIComponent(user.uuid)}?target=auto`;
       return `<tr>
         <td><b>${esc(user.username)}</b><div class="muted mono" style="font-size:10px">${esc(String(user.uuid).slice(0, 13))}…</div></td>
-        <td>${esc(user.protocol_label || 'همه پروتکل‌ها')}</td>
+        <td><span class="pill" style="padding:3px 9px">${esc(user.node_scope_label || 'همه نودها')}</span></td>
         <td><span class="pill ${status.cls}">${esc(status.label)}</span></td>
         <td class="mono" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(url)}</td>
         <td class="nowrap">
@@ -189,8 +219,15 @@ export class UsersView {
           <button class="copy-btn" data-links="${esc(user.username)}" title="همه لینک‌ها">${ico('link', 13)}</button>
         </td>
       </tr>`;
-    }).join('');
+    }).join('') + (users.length > shown.length
+      ? `<tr><td colspan="5">${this.moreButton(users.length, shown.length, 'usertable')}</td></tr>` : '');
     bindCopyButtons(host, this.toasts);
+    const more = $('[data-more="usertable"]', host);
+    if (more) more.onclick = () => {
+      this.store.set('userLimit', (this.store.get('userLimit') || PAGE) + PAGE);
+      this.render();
+      this.renderSubTable();
+    };
     $$('[data-links]', host).forEach((button) => {
       button.onclick = () => this.app.safe(() => this.linksModal(this.store.get('users').find((item) => item.username === button.dataset.links)));
     });
@@ -236,32 +273,87 @@ export class UsersView {
   }
 
   /* ------------------------------------------------------------- quick create */
+  /* The server owns both lists: one card per *mode* (a preset plus the slice of
+     the catalog it publishes) and one chip per *scope* with its live node count,
+     so the panel never offers a combination the deployment cannot deliver. */
   async loadPresets() {
-    const host = $('#quickPreset');
-    if (!host) return;
     try {
       const data = await this.api.get('/api/presets');
-      this.store.set('presets', data.presets || []);
-      host.innerHTML = (data.presets || []).map((preset) => `<option value="${esc(preset.id)}"${preset.id === data.default ? ' selected' : ''}>${esc(preset.name)}</option>`).join('')
-        || '<option value="">پیش‌فرض سرور</option>';
-      const describe = () => {
-        const chosen = this.store.get('presets').find((preset) => preset.id === host.value);
-        host.title = chosen ? `${chosen.note}${chosen.highlights ? ` — ${chosen.highlights.join(' · ')}` : ''}` : '';
-      };
-      host.onchange = describe;
-      describe();
+      const modes = data.modes?.length ? data.modes : (data.presets || []);
+      this.store.set('presets', modes);
+      this.store.set('scopes', data.scopes || []);
+      const current = this.store.get('quickMode');
+      const chosen = modes.find((mode) => mode.id === current) || modes.find((mode) => mode.id === data.default) || modes[0];
+      this.store.set('quickMode', chosen?.id || '');
+      if (!this.store.get('quickScope')) this.store.set('quickScope', chosen?.scope || data.scope || 'all');
+      this.renderModes();
+      this.renderScopes();
     } catch (error) {
-      host.innerHTML = '<option value="">پیش‌فرض سرور</option>';
+      const host = $('#quickModes');
+      if (host) host.innerHTML = '<div class="empty">حالت‌های ساخت سریع در دسترس نیست</div>';
     }
+  }
+
+  renderModes() {
+    const host = $('#quickModes');
+    if (!host) return;
+    const modes = this.store.get('presets');
+    const current = this.store.get('quickMode');
+    if (!modes.length) {
+      host.innerHTML = '<div class="empty">حالتی تعریف نشده است</div>';
+      return;
+    }
+    host.innerHTML = modes.map((mode) => {
+      const glyph = mode.kind === 'edge' ? 'globe' : mode.kind === 'origin' ? 'server' : 'zap';
+      return `<button type="button" class="mode-card${mode.id === current ? ' on' : ''}" data-mode="${esc(mode.id)}" title="${esc(mode.note || '')}">
+        <b>${ico(glyph, 14)} ${esc(mode.name)}</b>
+        <span>${esc(mode.best_for || '')}</span>
+        <span class="tags">${(mode.highlights || []).slice(0, 3).map((item) => `<i>${esc(item)}</i>`).join('')}</span>
+      </button>`;
+    }).join('');
+    $$('#quickModes [data-mode]', host).forEach((button) => {
+      button.onclick = () => {
+        this.store.set('quickMode', button.dataset.mode);
+        const mode = this.store.get('presets').find((item) => item.id === button.dataset.mode);
+        // A mode publishes a specific slice of the catalog, so its scope comes
+        // preselected — unless the admin asked for the panel default to win.
+        if (mode?.scope && !this.store.get('quickUseDefaultScope')) this.store.set('quickScope', mode.scope);
+        this.renderModes();
+        this.renderScopes();
+      };
+    });
+  }
+
+  renderScopes() {
+    const host = $('#quickScopes');
+    if (!host) return;
+    const options = this.store.get('scopes') || [];
+    if (!options.length) {
+      host.innerHTML = '';
+      return;
+    }
+    const fallback = (options.find((option) => option.current) || options[0]).id;
+    const current = this.store.get('quickScope') || fallback;
+    host.innerHTML = options.map((option) => `
+      <button type="button" class="pick${option.id === current ? ' on' : ''}" data-scope="${esc(option.id)}"${option.empty ? ' disabled' : ''} title="${esc(option.hint || '')}">
+        <span class="tick"></span>${esc(option.label)}<small>${Fmt.num(option.count)} نود</small>
+      </button>`).join('');
+    $$('#quickScopes [data-scope]', host).forEach((button) => {
+      button.onclick = () => { this.store.set('quickScope', button.dataset.scope); this.renderScopes(); };
+    });
   }
 
   async quickCreate() {
     const button = $('#btnQuickUser');
-    const presetHost = $('#quickPreset');
     const original = button?.innerHTML || '';
     if (button) { button.disabled = true; button.innerHTML = '<span class="spin-inline"></span> در حال ساخت…'; }
     try {
-      const data = await this.api.post('/api/users/quick', { preset: presetHost ? presetHost.value : '' });
+      const username = $('#quickUsername')?.value.trim() || '';
+      const data = await this.api.post('/api/users/quick', {
+        preset: this.store.get('quickMode'), scope: this.store.get('quickScope'), username,
+      });
+      const input = $('#quickUsername');
+      if (input) input.value = '';
       this.toasts.ok(`کاربر ${data.user.username} ساخته شد · ${data.preset_name}`, 5200);
       await this.app.reloadUsers();
       this.quickResultModal(data);
@@ -282,6 +374,7 @@ export class UsersView {
           <div class="kv-list" style="margin-top:11px">
             <div class="kv-line"><span>نام کاربری</span><b>${esc(data.user.username)}</b></div>
             <div class="kv-line"><span>UUID / رمز</span><b>${esc(data.user.uuid)}</b></div>
+            <div class="kv-line"><span>محدودهٔ نودها</span><b>${esc(data.node_scope_label || 'همه نودها')}</b></div>
             <div class="kv-line"><span>انقضا</span><b>${data.user.expires_at ? esc(Fmt.until(data.user.expires_at - Date.now() / 1000)) : 'بدون انقضا'}</b></div>
           </div>
         </div>
@@ -307,6 +400,26 @@ export class UsersView {
     bindCopyButtons(modal.el, this.toasts);
     const open = $('#quickOpenPortal', modal.el);
     if (open && data.portal_url) open.onclick = () => window.open(data.portal_url, '_blank', 'noopener');
+  }
+
+  /* --------------------------------------------------------------- node scope */
+  /* Which slice of the catalog this user's subscription publishes: everything,
+     only the multi-location nodes, only this server, or one country. The count on
+     every chip is live, so the choice is never a guess. */
+  scopeChips(user = {}) {
+    const catalog = this.store.get('scopes') || [];
+    let list = catalog.length ? catalog.slice() : FALLBACK_SCOPES.slice();
+    const raw = String(user.node_scope || this.store.get('quickScope') || 'all');
+    if (!list.some((item) => item.id === raw)) {
+      // A scope the catalog no longer lists (a country whose nodes are gone, or
+      // one saved by an older release) still has to be visible, or saving the
+      // form would silently widen the user to every node.
+      list.unshift({ id: raw, label: user.node_scope_label || raw.toUpperCase(), hint: 'محدودهٔ فعلی این کاربر' });
+    }
+    const html = list.map((item) => `<button type="button" class="pick${item.id === raw ? ' on' : ''}" data-scope="${esc(item.id)}" title="${esc(item.hint || '')}">
+        <span class="tick"></span>${esc(item.label)}${Number.isFinite(item.count) ? `<small>${Fmt.num(item.count)} نود</small>` : ''}
+      </button>`).join('');
+    return { html, current: raw };
   }
 
   /* ------------------------------------------------------------ protocol chips */
@@ -358,6 +471,7 @@ export class UsersView {
     const pick = (value, fallback) => (value === null || value === undefined || value === '' ? (fallback ?? '') : value);
     const swClass = (value, fallback) => ((value === undefined ? fallback : !!value) ? ' on' : '');
     const protocols = this.protocolChips(u);
+    const scopes = this.scopeChips(u);
 
     const modal = this.modals.open({
       title: isEdit ? `ویرایش ${user.username}` : 'ساخت کاربر جدید',
@@ -383,6 +497,8 @@ export class UsersView {
         <div class="picks" style="gap:6px;margin-top:8px">
           <button type="button" class="fchip" id="ufAllProtocols">انتخاب همه / هیچ‌کدام</button>
         </div>
+        <label>محدودهٔ نودها <span class="hint">این کاربر فقط همین نودها را در سابلینکش می‌بیند</span></label>
+        <div class="picks" id="ufScopes">${scopes.html}</div>
         <p class="muted" style="margin:11px 0 0;line-height:1.9">
           <b>تعداد کانفیگ</b> یعنی همین کاربر حداکثر چند ورودی (نود × پروتکل) در سابلینکش می‌بیند؛ خالی بگذارید تا همه ترکیب‌های منتشرشده بیاید.
           کاربر روی همه اینباندهای Xray این سرور ساخته می‌شود و هر پروتکل انتخابی یک سابلینک واقعی می‌گیرد.
@@ -471,6 +587,11 @@ export class UsersView {
     });
     ['#ufActive', '#ufStartFirst', '#ufBlockAds', '#ufBlockPorn']
       .forEach((selector) => { const el = field(selector); if (el) el.onclick = () => el.classList.toggle('on'); });
+    // One scope at a time: picking one clears the rest, like a radio group.
+    const scopeButtons = () => $$('#ufScopes .pick', modal.el);
+    scopeButtons().forEach((chip) => {
+      chip.onclick = () => scopeButtons().forEach((other) => other.classList.toggle('on', other === chip));
+    });
     const switchOn = (selector) => !!field(selector)?.classList.contains('on');
 
     field('#ufSave').onclick = () => this.app.safe(async () => {
@@ -482,6 +603,7 @@ export class UsersView {
       const payload = {
         limit_gb: number('#ufLimit'), expiry_days: number('#ufExpiry'), limit_req: number('#ufReq'), ip_limit: number('#ufIpLimit'),
         max_configs: number('#ufMaxConfigs'),
+        node_scope: (scopeButtons().find((chip) => chip.classList.contains('on')) || {}).dataset?.scope || 'all',
         start_on_first_connect: switchOn('#ufStartFirst'), is_active: switchOn('#ufActive') ? 1 : 0,
         auto_rotate_ip: field('#ufRotateEnabled').value === '1' ? 1 : 0, rotate_time: Number(field('#ufRotateTime').value) || 5,
         ip_operator: field('#ufIpOperator').value, ip_count: Number(field('#ufIpCount').value) || 5,
@@ -533,7 +655,12 @@ export class UsersView {
     });
     const body = $('#linkBody', modal.el);
     try {
-      const data = await this.api.get(`/api/users/${encodeURIComponent(user.username)}/links`);
+      // The scope catalog comes with the links: the drawer then shows what this
+      // user publishes *and* every other slice as a ready link.
+      const [data, scopeData] = await Promise.all([
+        this.api.get(`/api/users/${encodeURIComponent(user.username)}/links`),
+        this.api.get(`/api/scopes?username=${encodeURIComponent(user.username)}`),
+      ]);
       $('#linkSummary', modal.el).innerHTML = `
         <div class="kv-line"><span>UUID / رمز</span><b>${esc(data.uuid)}</b></div>
         <div class="kv-line"><span>پروتکل‌های فعال</span><b>${esc(data.protocol_label || 'همه پروتکل‌ها')}</b></div>
@@ -543,7 +670,8 @@ export class UsersView {
 
       const globalLinks = data.subscriptions.map((sub) => [sub.label, sub.url]);
       body.innerHTML = `
-        <div class="sub-card">
+        ${this.scopePanel(scopeData, data.node_scope_label)}
+        <div class="sub-card" style="margin-top:11px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
             <b style="font-size:13px">سابلینک‌های سراسری</b>
             <span class="pill info">${Fmt.num(globalLinks.length)} فرمت</span>
@@ -571,6 +699,7 @@ export class UsersView {
               <div style="display:flex;align-items:center;gap:9px">
                 <span class="node-icon ${node.kind === 'cloudflare' ? 'cf' : ''}" style="width:26px;height:26px;flex:0 0 26px;font-size:10px">${node.kind === 'cloudflare' ? '☁' : 'R'}</span>
                 <b style="font-size:12px;flex:1">${esc(node.name)}</b>
+                ${node.in_scope === false ? '<span class="pill bad" title="این نود در محدودهٔ کاربر نیست و در سابلینکش منتشر نمی‌شود">خارج از محدوده</span>' : ''}
                 <span class="lat ${StatusKit.latencyTone(node.latency_ms)}">${StatusKit.latencyText(node.latency_ms)}</span>
               </div>
               <div class="link-box"><div class="lb-main"><b>${esc(data.protocol_label || 'همه پروتکل‌ها')} مستقیم</b><code>${esc(node.links.primary)}</code></div>
@@ -585,9 +714,40 @@ export class UsersView {
             </div>`).join('') || '<div class="empty">نود فعالی برای انتشار وجود ندارد</div>'}
         </div>`;
       bindCopyButtons(body, this.toasts);
+      $$('[data-set-scope]', body).forEach((button) => {
+        button.onclick = () => this.app.safe(async () => {
+          await this.api.put(`/api/users/${encodeURIComponent(user.username)}`, { node_scope: button.dataset.setScope });
+          this.toasts.ok('محدودهٔ نودهای این کاربر تغییر کرد');
+          await this.app.reloadUsers();
+          modal.close();
+          await this.linksModal(user);
+        });
+      });
     } catch (error) {
       body.innerHTML = `<div class="empty">${ico('alert', 28)}<div>${esc(error.message)}</div></div>`;
     }
+  }
+
+  /* Which nodes this user publishes, and every other slice as a one-tap link.
+     A scope is the answer to «only the multi-location nodes» / «only the US» /
+     «only the server itself», so it belongs at the top of the link drawer. */
+  scopePanel(scopeData, label = '') {
+    if (!scopeData || !(scopeData.options || []).length) return '';
+    return `<div class="sub-card">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <b style="font-size:13px">محدودهٔ نودهای این کاربر</b>
+        <span class="pill info">${esc(scopeData.label || label || 'همه نودها')}</span>
+        <span class="pill">${Fmt.num(scopeData.catalog_total)} نود در کاتالوگ</span>
+      </div>
+      <p class="hint" style="margin:0 0 4px">${esc(scopeData.hint || '')}</p>
+      ${scopeData.options.map((option) => `
+        <div class="link-box">
+          <div class="lb-main"><b>${esc(option.label)} <span class="muted" style="font-weight:400">· ${Fmt.num(option.count)} نود</span></b><code>${esc(option.url || option.hint || '')}</code></div>
+          ${option.current ? '<span class="pill ok">فعلی</span>' : `<button class="tbtn" data-set-scope="${esc(option.id)}" title="محدودهٔ این کاربر را روی همین بگذار">${ico('check', 12)} همین</button>`}
+          ${option.url ? `<button class="copy-btn" data-copy="${esc(option.url)}" title="کپی">${ico('copy', 14)}</button>` : ''}
+        </div>`).join('')}
+      <p class="muted" style="margin:11px 0 0;line-height:1.9">«همین» محدودهٔ کاربر را دائمی می‌کند؛ کپی فقط همین لینک را با آن محدوده می‌دهد (بدون تغییر تنظیمات کاربر).</p>
+    </div>`;
   }
 
   /* One copy-ready subscription per protocol/transport pair. */
@@ -649,13 +809,15 @@ export class UsersView {
 
   bindEvents() {
     const search = $('#userSearch');
-    if (search) search.oninput = (event) => { this.store.set('userSearch', event.target.value); this.render(); };
+    if (search) search.oninput = (event) => { this.store.set('userSearch', event.target.value); this.store.set('userLimit', PAGE); this.render(); };
     const sort = $('#userSort');
-    if (sort) sort.onchange = (event) => { this.store.set('userSort', event.target.value); this.render(); };
+    if (sort) sort.onchange = (event) => { this.store.set('userSort', event.target.value); this.store.set('userLimit', PAGE); this.render(); };
     const add = $('#btnAddUser');
     if (add) add.onclick = () => this.app.safe(() => this.openForm(null));
     const quick = $('#btnQuickUser');
     if (quick) quick.onclick = () => this.app.safe(() => this.quickCreate());
+    const useDefault = $('#quickUseDefaultScope');
+    if (useDefault) useDefault.onchange = () => this.store.set('quickUseDefaultScope', useDefault.checked);
     this.app.safe(() => this.loadPresets());
   }
 }

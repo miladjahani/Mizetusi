@@ -10,6 +10,10 @@ def create_user(m:UserCreate):
     meta=dict(m.metadata or {})
     if m.max_configs:
         meta['max_configs']=int(m.max_configs)
+    # The node scope rides in metadata too: which nodes this user's subscription
+    # may contain (all / multi-location only / own server only / a country).
+    if m.node_scope:
+        meta['node_scope']=str(m.node_scope)
     sql='''INSERT INTO users(username,uuid,protocol,limit_gb,expiry_days,limit_req,ip_limit,start_on_first_connect,created_at,expires_at,ips,fingerprint,tls,port,sni,host,frag_len,frag_int,advanced_frag,cipher_suites,tls_mask,block_ads,block_porn,auto_rotate_ip,rotate_time,ip_operator,ip_count,user_proxy,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'''
     execute(sql,(m.username,uid,m.protocol,m.limit_gb,m.expiry_days,m.limit_req,m.ip_limit,int(m.start_on_first_connect),now,exp,m.ips,m.fingerprint,m.tls,m.port,m.sni,m.host,m.frag_len,m.frag_int,m.advanced_frag,m.cipher_suites,m.tls_mask,int(m.block_ads),int(m.block_porn),int(m.auto_rotate_ip),m.rotate_time,m.ip_operator,m.ip_count,m.user_proxy,json.dumps(meta)))
     return get_user(m.username)
