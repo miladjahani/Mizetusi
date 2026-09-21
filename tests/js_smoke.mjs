@@ -83,6 +83,7 @@ const checks = [
   [typeof loaded['views/nodes'].NodesView.prototype.addSamples === 'function', 'node samples add'],
   [typeof loaded['views/users'].UsersView === 'function', 'UsersView'],
   [typeof loaded['views/system'].CloudflareView === 'function', 'CloudflareView'],
+  [typeof loaded['views/system'].CloudflareView.prototype.pingCell === 'function', 'location ping verdict'],
   [typeof loaded['views/system'].SettingsView === 'function', 'SettingsView'],
   [typeof loaded['views/customize'].CustomizeView === 'function', 'CustomizeView'],
   [typeof loaded['views/customize'].CustomizeView.prototype.load === 'function', 'customization loader'],
@@ -208,6 +209,21 @@ try {
   });
   window.nexus.cloudflare.renderEdge();
   try { await window.nexus.cloudflare.loadEdge(); } catch (error) { /* offline smoke test */ }
+
+  // The ping column is the panel's own answer to «لوکیشن پینگ نمی‌دهد»: a
+  // location is healthy only when its own hosts answered, broken when measured
+  // and unreachable, and empty (with a reason) when it has no address at all.
+  const pingCell = loaded['views/system'].CloudflareView.prototype.pingCell;
+  const answered = pingCell({ healthy: 2, failed: 1, pending: 0, addresses: 3, fastest_ms: 34 });
+  if (!answered.includes('class="lat good"')) failures.push('a location that answers must read as healthy');
+  const unreachable = pingCell({ healthy: 0, failed: 2, pending: 0, addresses: 2 });
+  if (!unreachable.includes('class="lat bad"') || !unreachable.includes('ناموفق')) {
+    failures.push('a location nobody can reach must read as failed');
+  }
+  const unmeasured = pingCell({ healthy: 0, failed: 0, pending: 1, addresses: 1 });
+  if (!unmeasured.includes('class="lat off"')) failures.push('an unmeasured location must not read as healthy');
+  const empty = pingCell({ healthy: 0, failed: 0, pending: 0, addresses: 0 });
+  if (!empty.includes('class="lat off"')) failures.push('a location without addresses must render as empty');
 } catch (error) {
   failures.push(`edge card threw: ${error.message}`);
 }

@@ -106,6 +106,27 @@ export class CloudflareView {
     if (current && providers.some((item) => item.id === current)) select.value = current;
   }
 
+  /* Whether a location really answers.
+
+     The counts come from the last probe of that location's *own* nodes — the
+     same TLS handshake with its Host/SNI that a client performs — so a location
+     that nothing can reach is visible in the panel instead of only in a client.
+     ``reason`` is the server's one-line explanation. */
+  pingCell(source) {
+    const healthy = Number(source.healthy || 0);
+    const failed = Number(source.failed || 0);
+    const pending = Number(source.pending || 0);
+    const total = healthy + failed + pending;
+    const title = source.reason || '';
+    if (!total) return `<span class="lat off" title="${esc(title)}">—</span>`;
+    if (healthy) {
+      const ms = source.fastest_ms != null ? ` · ${Fmt.lat().format(source.fastest_ms)} ms` : '';
+      return `<span class="lat good" title="${esc(title)}">${Fmt.num(healthy)}/${Fmt.num(total)}${ms}</span>`;
+    }
+    if (failed) return `<span class="lat bad" title="${esc(title)}">ناموفق · ${Fmt.num(failed)}</span>`;
+    return `<span class="lat off" title="${esc(title)}">پینگ نشده</span>`;
+  }
+
   renderEdge() {
     const data = this.store.get('edge');
     const runtime = $('#runtimeBox');
@@ -130,20 +151,25 @@ export class CloudflareView {
       const sources = data?.sources || [];
       const nodes = data?.nodes || [];
       host.innerHTML = sources.length ? `<div class="table-wrap" style="margin-top:12px"><table>
-        <thead><tr><th>لوکیشن</th><th>برچسب</th><th>نوع</th><th>Host / SNI</th><th>نودها</th><th>وضعیت</th><th></th></tr></thead>
+        <thead><tr><th>لوکیشن</th><th>برچسب</th><th>نوع</th><th>Host / SNI</th><th>آی‌پی</th><th>نود</th><th>پینگ</th><th>وضعیت</th><th></th></tr></thead>
         <tbody>${sources.map((source) => {
-          const count = nodes.filter((node) => node.location === source.location && node.enabled).length;
+          const count = nodes.filter((node) => node.enabled && node.source_id === source.id).length;
           return `<tr>
             <td><b>${esc(source.location || '—')}</b></td>
             <td>${esc(source.label || '')}</td>
             <td>${source.kind === 'domain' ? 'دامنهٔ تمیز' : esc(source.provider)}</td>
             <td class="mono" dir="ltr">${esc(source.host)}:${esc(String(source.port))}</td>
-            <td>${Fmt.num(count)}</td>
+            <td>${Fmt.num(source.addresses != null ? source.addresses : '—')}</td>
+            <td>${Fmt.num(count || source.nodes || 0)}</td>
+            <td>${this.pingCell(source)}</td>
             <td><span class="pill ${source.enabled ? 'ok' : 'warn'}">${source.enabled ? 'فعال' : 'خاموش'}</span></td>
             <td class="nowrap">
+              <button class="tbtn info" data-edge="ping" data-id="${esc(source.id)}" title="پینگ همین لوکیشن">${ico('activity', 12)} پینگ</button>
               <button class="tbtn" data-edge="toggle" data-id="${esc(source.id)}">${source.enabled ? 'خاموش' : 'روشن'}</button>
               <button class="tbtn bad" data-edge="del" data-id="${esc(source.id)}">حذف</button></td></tr>`;
-        }).join('')}</tbody></table></div>`
+        }).join('')}</tbody></table>
+        ${sources.filter((source) => source.reason).map((source) => `<p class="note">⚠ ${esc(source.location || source.id)}: ${esc(source.reason)}</p>`).join('')}
+        <p class="note">پینگ هر لوکیشن همان کاری را می‌کند که کلاینت می‌کند: دست‌دادن TLS با Host/SNI خودِ آن لوکیشن. آی‌پی‌ای که پاسخ ندهد از سابلینک کنار گذاشته می‌شود؛ ستون «آی‌پی» صفر یعنی این لوکیشن هیچ آدرسی ندارد (اسکن منابع یا آی‌پی دستی لازم است).</p></div>`
         : '<div class="empty" style="margin-top:12px">هنوز لوکیشنی ساخته نشده — با فرم بالا یکی اضافه کنید (یا فقط دامنهٔ پنل را پشت Cloudflare ببرید تا خودکار ساخته شود).</div>';
       $$('#edgeSources [data-edge]').forEach((button) => {
         button.onclick = () => this.app.safe(async () => {
@@ -153,8 +179,28 @@ export class CloudflareView {
             if (!confirmed) return;
             await this.api.delete(`/api/edge/sources/${encodeURIComponent(id)}`);
             this.toasts.ok('لوکیشن حذف شد');
+          } else if (button.dataset.edge === 'ping') {
+            const original = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<span class="spin-inline"></span>';
+            try {
+              const result = await this.api.post(`/api/edge/sources/${encodeURIComponent(id)}/ping`, {});
+              if (!result.probed) {
+                this.toasts.err('این لوکیشن نودی ندارد — آی‌پی یا دامنه‌اش را بررسی کنید', 6000);
+              } else if (result.healthy) {
+                this.toasts.ok(`${Fmt.num(result.healthy)} از ${Fmt.num(result.probed)} آدرس این لوکیشن پینگ داد`, 5200);
+              } else {
+                this.toasts.err(`${Fmt.num(result.probed)} آدرس پینگ نشد — Host/SNI با آی‌پی‌ها سازگار نیست یا پورت بسته است`, 7000);
+              }
+            } finally {
+              button.disabled = false;
+              button.innerHTML = original;
+            }
           } else {
-            await this.api.post(`/api/edge/sources/${encodeURIComponent(id)}/toggle`, {});
+            const result = await this.api.post(`/api/edge/sources/${encodeURIComponent(id)}/toggle`, {});
+            if (result.ping && result.ping.probed) {
+              this.toasts.ok(`${Fmt.num(result.ping.healthy)} از ${Fmt.num(result.ping.probed)} آدرس پینگ داد`, 4800);
+            }
           }
           await this.loadEdge();
           await this.app.reloadNodes();
@@ -283,14 +329,24 @@ export class CloudflareView {
           max: Number($('#edgeMax')?.value) || 5,
           ips: $('#edgeIps')?.value.trim() || '',
         };
+        let ping = null;
         try {
-          await this.api.post('/api/edge/sources', payload);
+          ping = (await this.api.post('/api/edge/sources', payload))?.ping || null;
         } catch (error) {
           this.toasts.err(error.message || 'ذخیرهٔ لوکیشن ناموفق بود');
           return;
         }
         ['#edgeLabel', '#edgeHost', '#edgeIps'].forEach((selector) => { const el = $(selector); if (el) el.value = ''; });
-        this.toasts.ok('لوکیشن ساخته و Sync شد');
+        // The location is measured in the same request, so the answer is here
+        // instead of in a client the admin has to go and check.
+        if (ping && ping.probed) {
+          (ping.healthy ? this.toasts.ok : this.toasts.err)(
+            `لوکیشن ذخیره شد · ${Fmt.num(ping.healthy)} از ${Fmt.num(ping.probed)} آدرس پینگ داد`, 6000);
+        } else if (ping) {
+          this.toasts.err('لوکیشن ذخیره شد اما هیچ نودی ندارد — آی‌پی/دامنه را بررسی کنید', 7000);
+        } else {
+          this.toasts.ok('لوکیشن ساخته و Sync شد');
+        }
         await this.loadEdge();
         await this.app.reloadNodes();
         await this.app.loadMetrics();

@@ -252,6 +252,47 @@ class NodeProbe:
         return edge_sources.parse_metadata(node.get('metadata'))
 
     @staticmethod
+    async def _tls_once(host, port, timeout, server_hostname, verify):
+        """One TLS handshake attempt: ``(ms, error)``."""
+        started = time.perf_counter()
+        try:
+            ctx = ssl.create_default_context()
+            if not verify:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port, ssl=ctx, server_hostname=server_hostname or host),
+                timeout=timeout,
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return round((time.perf_counter() - started) * 1000, 1), None
+        except Exception as exc:
+            return None, type(exc).__name__
+
+    @classmethod
+    async def handshake(cls, host, port, timeout=4.0, server_hostname=None):
+        """The handshake a client performs, and whether the certificate verified.
+
+        Verification is tried first and then the same handshake without it: plenty
+        of honest setups complete the handshake while the certificate proves
+        nothing about this deployment (a clean IP dialled with a Host/SNI whose
+        certificate is issued for another name, any Reality-style endpoint). The
+        *handshake* is what decides whether a client can connect, so it is what
+        decides health; whether the certificate verified is reported next to it.
+        """
+        ms, err = await cls._tls_once(host, port, timeout, server_hostname, True)
+        if ms is not None:
+            return ms, None, True
+        plain_ms, plain_err = await cls._tls_once(host, port, timeout, server_hostname, False)
+        if plain_ms is not None:
+            return plain_ms, None, False
+        return None, err or plain_err, False
+
+    @staticmethod
     async def tcp(host, port, timeout=4.0, tls=False, server_hostname=None):
         """One connect (optionally a full TLS handshake) and the elapsed ms.
 
@@ -278,37 +319,67 @@ class NodeProbe:
         except Exception as exc:
             return None, type(exc).__name__
 
+    @staticmethod
+    def _tls_hint(error, tcp_ok, target):
+        """A sentence an admin can act on when the handshake failed."""
+        if 'gai' in str(error).lower() or 'dns' in str(error).lower():
+            return f'نام «{target}» حل نشد (DNS)'
+        if not tcp_ok:
+            return 'پورت بسته است یا مسیر شبکه به این آی‌پی باز نیست'
+        return (f'TLS با Host/SNI «{target}» پاسخ نداد — این آی‌پی این دامنه را سرو نمی‌کند '
+                'یا روی این پورت TLS نیست')
+
     async def ping(self, node, timeout=4.0):
-        """Probe one node and persist the result (latency_ms + metadata)."""
+        """Probe one node the way a client does, then persist the verdict.
+
+        For a TLS node health means a **completed handshake with the node's own
+        Host/SNI** — the very check a client runs when it pings the entry. A bare
+        TCP connect is still measured, but it is reported as ``tcp_ok`` instead of
+        counting as health: a location whose Host/SNI is not served by its
+        addresses must show up as broken here rather than as a healthy entry that
+        every client times out on.
+        """
         name = str(node.get('name') or '')
         kind = str(node.get('kind') or 'railway')
         server = str(node.get('server') or '').strip()
         port = int(node.get('port') or 443)
         host = str(node.get('host') or node.get('sni') or '').strip()
-        ms, err, tls_ok = None, 'no server address', False
+        target = host or server
+        tls = bool(node.get('tls', 1))
+        ms, err, tls_ok, verified = None, 'no server address', False, False
+        tcp_ok, tcp_ms = False, None
         if server:
-            # Cloudflare clean IPs are dialled by IP with the Worker host as SNI:
-            # that is exactly what the client does, so it is what we verify.
-            if kind != 'cloudflare' or host:
-                ms, err = await self.tcp(server, port, timeout=timeout, tls=True, server_hostname=host or server)
+            if tls:
+                ms, err, verified = await self.handshake(server, port, timeout=timeout,
+                                                         server_hostname=host or server)
                 tls_ok = ms is not None
-            if ms is None:
-                fallback_ms, fallback_err = await self.tcp(server, port, timeout=timeout)
-                if fallback_ms is not None:
-                    ms, err = fallback_ms, None
-                elif err == 'no server address':
-                    err = fallback_err
+                if ms is None:
+                    # A location can answer on the port without serving TLS at all
+                    # (a plain relay, a closed 443 that only accepts SYN/ACK on an
+                    # anycast edge). Recording that separately is what turns
+                    # "ناموفق" into an explanation.
+                    tcp_ms, tcp_err = await self.tcp(server, port, timeout=timeout)
+                    tcp_ok = tcp_ms is not None
+                    err = err or tcp_err
+            else:
+                tcp_ms, err = await self.tcp(server, port, timeout=timeout)
+                tcp_ok = tcp_ms is not None
+                ms = tcp_ms
         now = int(time.time())
         ok = ms is not None
+        hint = '' if ok else self._tls_hint(err, tcp_ok, target)
         meta = self.metadata(node)
-        meta.update({'ping_ok': ok, 'ping_tls': tls_ok, 'ping_ms': ms, 'ping_at': now,
-                     'ping_error': err, 'last_probe': now, 'probe_target': f'{server}:{port}'})
+        meta.update({'ping_ok': ok, 'ping_tls': tls_ok, 'ping_verified': verified,
+                     'ping_tcp': tcp_ok, 'ping_tcp_ms': tcp_ms, 'ping_ms': ms, 'ping_at': now,
+                     'ping_error': err, 'ping_hint': hint, 'last_probe': now,
+                     'probe_target': f'{server}:{port}'})
         try:
             self.catalog.mark(name, ms if ok else FAILED_LATENCY, meta)
         except Exception:
             pass
         return {'name': name, 'kind': kind, 'server': server, 'port': port, 'ok': ok,
-                'tls_ok': tls_ok, 'latency_ms': ms, 'error': err, 'at': now}
+                'tls_ok': tls_ok, 'tls_verified': verified, 'tcp_ok': tcp_ok,
+                'latency_ms': ms, 'tcp_latency_ms': tcp_ms, 'error': err, 'hint': hint, 'at': now}
 
     async def ping_all(self, names=None, timeout=4.0, concurrency=None):
         """Probe every enabled node: Cloudflare clean IPs and the Railway origin."""

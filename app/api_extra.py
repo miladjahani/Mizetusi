@@ -63,6 +63,28 @@ def _flags_on():
     return (_setting('flags_enabled') or '1') != '0'
 
 
+async def _measure(request, source_ids):
+    """Sync and ping the locations a pack install / import just created.
+
+    A location that nobody measured is published unverified and reads as «پینگ
+    نمی‌دهد»; measuring here means the counts come back with the same answer the
+    admin would get from the per-location ping button.
+    """
+    ids = [str(item) for item in (source_ids or []) if item]
+    if not ids:
+        return {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': 0}
+    main = _main()
+    main._edge_sync(request)
+    totals = {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': len(ids), 'results': []}
+    for source_id in ids:
+        result = await main._ping_edge_nodes(source_id=source_id, timeout=3.0, limit=40)
+        totals['probed'] += result['probed']
+        totals['healthy'] += result['healthy']
+        totals['failed'] += result['failed']
+        totals['results'].extend(result['results'])
+    return totals
+
+
 # --------------------------------------------------------------- customization
 def _customization():
     brand = _main()._brand()
@@ -217,7 +239,7 @@ async def save_hysteria(request: Request):
 @router.get('/api/edge/packs')
 def get_packs(request: Request):
     _auth(request)
-    return {'packs': edge_packs.catalog(), 'sources': edge_sources.sources(),
+    return {'packs': edge_packs.catalog(), 'sources': edge_sources.status()['sources'],
             'locations': sorted({item.get('location') for item in edge_sources.sources() if item.get('location')})}
 
 
@@ -238,14 +260,15 @@ async def manage_pack(request: Request):
         removed = edge_packs.uninstall(pack_id)
         _audit('edge.pack', f'uninstall {pack_id} ({len(removed)})')
         return {'success': True, 'removed': removed, 'packs': edge_packs.catalog(),
-                'sources': edge_sources.sources()}
+                'sources': edge_sources.status()['sources']}
     hosts = body.get('hosts')
     if isinstance(hosts, str):
         hosts = [token for token in re.split(r'[\s,]+', hosts) if token]
     created, sources = edge_packs.install(pack_id, override_hosts=hosts or None)
+    ping = await _measure(request, [item['id'] for item in created])
     _audit('edge.pack', f'install {pack_id} ({len(created)})')
     return {'success': True, 'created': [item['id'] for item in created], 'sources': sources,
-            'packs': edge_packs.catalog()}
+            'ping': ping, 'packs': edge_packs.catalog()}
 
 
 @router.get('/api/edge/import')
@@ -296,8 +319,9 @@ async def import_subscription(request: Request):
     if apply_:
         _audit('edge.import', f"{result.get('url') or 'text'} → {result['found']} locations")
     result['success'] = True
+    result['ping'] = await _measure(request, [item['id'] for item in result.get('created') or []])
     result['packs'] = edge_packs.catalog()
-    result['sources'] = edge_sources.sources()
+    result['sources'] = edge_sources.status()['sources']
     return result
 
 
@@ -329,9 +353,15 @@ async def tools_check(request: Request):
     from app.nodes import NodeProbe
     results = {}
     started = time.time()
-    ms, err = await NodeProbe.tcp(host, port, timeout=timeout, tls=bool(body.get('tls')),
-                                  server_hostname=str(body.get('sni') or '').strip() or host)
-    results['tls' if body.get('tls') else 'tcp'] = {'ok': ms is not None, 'latency_ms': ms, 'error': err}
+    if body.get('tls'):
+        # The same handshake the client node performs, so this answers the exact
+        # question a location raises: does this IP serve that Host/SNI?
+        ms, err, verified = await NodeProbe.handshake(
+            host, port, timeout=timeout, server_hostname=str(body.get('sni') or '').strip() or host)
+        results['tls'] = {'ok': ms is not None, 'latency_ms': ms, 'error': err, 'verified': verified}
+    else:
+        ms, err = await NodeProbe.tcp(host, port, timeout=timeout)
+        results['tcp'] = {'ok': ms is not None, 'latency_ms': ms, 'error': err}
     if body.get('tls'):
         plain_ms, plain_err = await NodeProbe.tcp(host, port, timeout=timeout)
         results['tcp'] = {'ok': plain_ms is not None, 'latency_ms': plain_ms, 'error': plain_err}

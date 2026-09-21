@@ -861,11 +861,20 @@ async def save_worker_settings(request:Request):
     return {'success':True,'configured':bool(url),'nodes':[_node_payload(n) for n in list_nodes()]}
 
 def _node_payload(node):  # noqa: D401
-    """A node row plus the edge-source view (its location and provider)."""
+    """A node row plus the edge-source view (its location, provider, last probe)."""
     if not node: return node
     item=dict(node)
+    meta=edge_sources.parse_metadata(node.get('metadata'))
     item['location']=transports.node_location(node)
     item['provider']=transports.node_provider(node)
+    item['source_id']=str(meta.get('source_id') or '')
+    # The panel shows *why* a node has no latency (TLS refused, port closed), so
+    # the verdict travels with the row instead of only living in the metadata.
+    item['probe']={'ok':bool(meta.get('ping_ok')),'tls':bool(meta.get('ping_tls')),
+                   'verified':bool(meta.get('ping_verified')),'tcp':bool(meta.get('ping_tcp')),
+                   'ms':meta.get('ping_ms'),'tcp_ms':meta.get('ping_tcp_ms'),
+                   'error':str(meta.get('ping_error') or ''),'hint':str(meta.get('ping_hint') or ''),
+                   'at':meta.get('ping_at')}
     item['role']='origin' if str(node.get('kind'))=='railway' else 'edge'
     return item
 
@@ -994,6 +1003,34 @@ def _edge_sync(request:Request):
     except Exception:
         return 0
 
+def _edge_node_names(source_id='',provider_id='',only_pending=False):
+    """Node names of one location (or one provider), for a scoped probe."""
+    names=[]
+    for node in list_nodes():
+        meta=edge_sources.parse_metadata(node.get('metadata'))
+        if source_id and str(meta.get('source_id') or '')!=str(source_id): continue
+        if provider_id and str(meta.get('provider') or '')!=str(provider_id): continue
+        if not source_id and not provider_id and str(node.get('kind')) not in ('cloudflare','edge'): continue
+        if only_pending and node.get('latency_ms') is not None: continue
+        names.append(node['name'])
+    return names
+
+async def _ping_edge_nodes(source_id='',provider_id='',only_pending=False,timeout=4.0,limit=60):
+    """Measure the nodes of a location right after it changed.
+
+    A location that is never probed shows as «اندازه‌گیری نشده» and is published
+    unverified — which is exactly what made a freshly created location look like
+    it «does not ping». Measuring it in the same request means the answer is
+    there the moment the admin saves or scans, and a location whose Host/SNI its
+    addresses cannot serve is marked broken instead of being handed to users.
+    """
+    names=_edge_node_names(source_id,provider_id,only_pending)[:max(1,int(limit))]
+    if not names:
+        return {'probed':0,'healthy':0,'failed':0,'avg_latency_ms':None,'results':[]}
+    payload=await ping_all_nodes(names=names,timeout=timeout)
+    return {'probed':payload['probed'],'healthy':payload['healthy'],'failed':payload['failed'],
+            'avg_latency_ms':payload['avg_latency_ms'],'results':payload['results']}
+
 @app.get('/api/edge')
 def edge_status(request:Request):
     """Everything the panel's "منابع لبه و لوکیشن‌ها" card renders."""
@@ -1034,8 +1071,9 @@ async def edge_scan(request:Request):
         raise HTTPException(502,f'لیست هیچ provider دریافت نشد: {detail[:300]}')
     probed=await probe_all(limit=min(limit*2,192),provider_id=provider_id or None)
     synced=_edge_sync(request)
-    _audit('edge.scan',f"{provider_id or 'all'} · +{found} ips")
-    return {'success':True,'results':results,'found':found,'probed':len(probed),'synced':synced,
+    ping=await _ping_edge_nodes(provider_id=provider_id,only_pending=True,timeout=3.0,limit=48)
+    _audit('edge.scan',f"{provider_id or 'all'} · +{found} ips · {ping['healthy']}/{ping['probed']} ping")
+    return {'success':True,'results':results,'found':found,'probed':len(probed),'synced':synced,'ping':ping,
             'providers':edge_sources.provider_summary(),'nodes':[_node_payload(n) for n in list_nodes()]}
 
 @app.get('/api/edge/ips')
@@ -1059,9 +1097,10 @@ async def edge_add_ips(request:Request):
         raise HTTPException(400,'هیچ آی‌پی معتبری پیدا نشد' if result['skipped'] else 'چیزی برای افزودن نبود')
     probed=await probe_all(limit=settings.cf_probe_limit,provider_id=provider_id)
     synced=_edge_sync(request)
-    _audit('edge.ips',f"+{len(result['added'])} · {provider_id}")
+    ping=await _ping_edge_nodes(provider_id=provider_id,timeout=3.0,limit=48)
+    _audit('edge.ips',f"+{len(result['added'])} · {provider_id} · {ping['healthy']}/{ping['probed']} ping")
     return {'success':True,'added':result['added'],'skipped':result['skipped'],'probed':len(probed),
-            'synced':synced,'ips':edge_sources.ips(provider_id,200)}
+            'synced':synced,'ping':ping,'ips':edge_sources.ips(provider_id,200)}
 
 @app.delete('/api/edge/ips/{ip}')
 def edge_delete_ip(request:Request,ip:str):
@@ -1080,19 +1119,46 @@ async def edge_save_source(request:Request):
         source,items=edge_sources.save_source(body,str(body.get('id') or '').strip())
     except ValueError as exc:
         raise HTTPException(400,str(exc))
+    del items  # the enriched list below is what the panel renders
     if source.get('ips'):
         edge_sources.add_ips(source['ips'],source.get('provider') or edge_sources.MANUAL_PROVIDER)
     await probe_all(limit=settings.cf_probe_limit)
     synced=_edge_sync(request)
-    _audit('edge.source.save',f"{source['id']} · {source['kind']}")
-    return {'success':True,'source':source,'sources':items,'synced':synced,
+    # The location is measured in the same request, so the panel (and the toast)
+    # can say how many of its addresses really answer instead of leaving it at
+    # «اندازه‌گیری نشده» until the next ping loop pass.
+    ping=await _ping_edge_nodes(source_id=source['id'],timeout=3.0,limit=60)
+    items=edge_sources.status()['sources']
+    _audit('edge.source.save',f"{source['id']} · {source['kind']} · {ping['healthy']}/{ping['probed']} ping")
+    return {'success':True,'source':next((s for s in items if s['id']==source['id']),source),
+            'sources':items,'synced':synced,'ping':ping,
             'nodes':[_node_payload(n) for n in list_nodes()]}
+
+@app.post('/api/edge/sources/{source_id}/ping')
+async def edge_ping_source(request:Request,source_id:str):
+    """Ping one location — «لوکیشن‌ها پینگ نمی‌دهند» answered with real numbers.
+
+    Syncs first (so the nodes exist), then probes exactly this location's nodes
+    the way a client would: TLS handshake against the node's own Host/SNI.
+    """
+    auth(request)
+    current=next((item for item in edge_sources.sources() if item['id']==source_id),None)
+    if not current: raise HTTPException(404,'منبع پیدا نشد')
+    synced=_edge_sync(request)
+    ping=await _ping_edge_nodes(source_id=source_id,timeout=4.0,limit=60)
+    _audit('edge.source.ping',f"{source_id} · {ping['healthy']}/{ping['probed']} reachable")
+    items=edge_sources.status()['sources']
+    return {'success':True,'synced':synced,**ping,
+            'source':next((s for s in items if s['id']==source_id),current),'sources':items,
+            'nodes':[_node_payload(n) for n in list_nodes()],
+            'providers':edge_sources.provider_summary()}
 
 @app.delete('/api/edge/sources/{source_id}')
 def edge_delete_source(request:Request,source_id:str):
-    auth(request); items=edge_sources.delete_source(source_id); synced=_edge_sync(request)
+    auth(request); edge_sources.delete_source(source_id); synced=_edge_sync(request)
     _audit('edge.source.delete',source_id)
-    return {'success':True,'sources':items,'synced':synced,'nodes':[_node_payload(n) for n in list_nodes()]}
+    return {'success':True,'sources':edge_sources.status()['sources'],'synced':synced,
+            'nodes':[_node_payload(n) for n in list_nodes()]}
 
 @app.post('/api/edge/sources/{source_id}/toggle')
 async def edge_toggle_source(request:Request,source_id:str):

@@ -128,6 +128,46 @@ MANUAL_PROVIDER = 'custom'
 SOURCE_KEY = 'edge_sources'
 MAX_SOURCE_NODES = 30
 
+# Filling a provider's clean-IP pool on demand. A fresh deployment runs with
+# ``NEXUS_SCAN_ON_BOOT=0``, so the pool is empty until an admin scans — and a
+# location built from an empty pool publishes *nothing*, which is what made every
+# hand-added location look like "it does not ping". The first sync that needs the
+# addresses fetches them itself, at most once per TTL per provider.
+POOL_FETCH_TTL = 300.0
+_POOL_FETCH = {}
+
+
+def ensure_pool(provider_id, limit=None):
+    """Seed one provider's clean-IP pool when it is empty (bounded, cached).
+
+    Returns how many addresses were added by the fetch this call performed (0
+    when the pool already had something or the TTL is still fresh). Live
+    providers answer from their published list, curated ones from their seed;
+    every failure mode degrades to "no addresses", which the panel reports as a
+    reason instead of a silent empty location.
+    """
+    wanted = str(provider_id or '').strip().lower()
+    spec = provider(wanted)
+    if not spec or spec.get('format') == 'manual':
+        return 0
+    try:
+        if rows('SELECT ip FROM cf_ips WHERE source=? LIMIT 1', (wanted,)):
+            return 0
+    except Exception:
+        return 0
+    now = time.time()
+    last, count = _POOL_FETCH.get(wanted, (0.0, 0))
+    if now - last < POOL_FETCH_TTL:
+        return count
+    _POOL_FETCH[wanted] = (now, 0)
+    try:
+        result = scan(wanted, limit=int(limit or settings.cf_probe_limit))
+    except Exception:
+        return 0
+    added = int(result.get('added') or 0) or int(result.get('found') or 0)
+    _POOL_FETCH[wanted] = (now, added)
+    return added
+
 
 def provider(provider_id):
     wanted = str(provider_id or '').strip().lower()
@@ -489,10 +529,17 @@ def delete_source(source_id):
     return kept
 
 
-def _ordered_ips(source):
-    """Addresses for one source: measured-healthy pool first, literals after."""
+def _ordered_ips(source, seed=True):
+    """Addresses for one source: measured-healthy pool first, literals after.
+
+    With ``seed`` the provider's pool is filled on demand when it is still
+    empty, so a location created by hand on a deployment that never ran a scan
+    still publishes real, pingable addresses instead of nothing at all.
+    """
     provider_id = source.get('provider')
     limit = int(source.get('max') or 5)
+    if seed:
+        ensure_pool(provider_id)
     literal = [str(ipaddress.ip_network(item, strict=False).network_address)
                for item in (source.get('ips') or [])]
     pool = [item['ip'] for item in rows(
@@ -504,6 +551,69 @@ def _ordered_ips(source):
         if value not in ordered:
             ordered.append(value)
     return ordered[:limit]
+
+
+def _node_rows():
+    return rows('SELECT name, enabled, latency_ms, metadata FROM nodes')
+
+
+def source_health(source, nodes=None):
+    """Panel view of one location: its addresses and how many of them ping.
+
+    Read from the *published* nodes rather than from the pool, because the
+    question an admin asks is «این لوکیشن پینگ می‌دهد؟» and the answer is the probe
+    verdict of the entries clients actually receive. ``reason`` is the one
+    sentence that turns a silent empty location into a fixable problem.
+    """
+    source_id = str(source.get('id') or '')
+    items = nodes if nodes is not None else _node_rows()
+    own = [node for node in items
+           if str(parse_metadata(node.get('metadata')).get('source_id') or '') == source_id]
+    healthy, failed, pending = [], [], []
+    for node in own:
+        latency = node.get('latency_ms')
+        if latency is None:
+            pending.append(node)
+        elif float(latency) < 0:
+            failed.append(node)
+        else:
+            healthy.append(node)
+    # A clean-domain location *is* its own single address; a clean-IP one is the
+    # addresses it can dial, and answering 0 there is what tells the admin to
+    # scan (or to type the IPs).
+    if source.get('kind') == 'domain':
+        addresses = 1 if source.get('host') else 0
+    else:
+        addresses = len(_ordered_ips(source, seed=False))
+    return {
+        'addresses': addresses,
+        'nodes': len(own),
+        'healthy': len(healthy),
+        'failed': len(failed),
+        'pending': len(pending),
+        'fastest_ms': min((float(n['latency_ms']) for n in healthy), default=None),
+        'reason': _health_reason(source, addresses, own, healthy, failed, pending),
+    }
+
+
+def _health_reason(source, addresses, own, healthy, failed, pending):
+    """Why a location has no working node — a short, actionable sentence."""
+    if not addresses:
+        if source.get('kind') == 'domain':
+            return 'دامنهٔ این لوکیشن خالی است'
+        if str(source.get('provider') or '') == MANUAL_PROVIDER:
+            return 'آی‌پی دستی وارد نشده — فیلد «آی‌پی‌های دستی» را پر کنید'
+        return 'آی‌پی سالمی برای این provider ثبت نشده — «اسکن منابع» را بزنید'
+    if not own:
+        return 'برای این لوکیشن نودی ساخته نشده — Sync کنید'
+    if not healthy and failed:
+        return ('هیچ آی‌پی‌ای پاسخ نداد — Host/SNI این لوکیشن با آی‌پی‌هایش سازگار نیست '
+                '(یا پورت TLS نیست)')
+    if not healthy and pending:
+        return 'هنوز پینگ نشده — «پینگ لوکیشن» را بزنید'
+    if failed:
+        return f'{len(failed)} آی‌پی پاسخ نداد و از سابلینک کنار گذاشته شد'
+    return ''
 
 
 def nodes_for_source(source, known_latency=None):
@@ -603,12 +713,27 @@ def cleanup_orphans(keep_names):
     return removed
 
 
-def status():
-    """Single payload for the panel's edge/locations card."""
+def status(nodes=None):
+    """Single payload for the panel's edge/locations card.
+
+    Every source is enriched with its own health (addresses, published nodes,
+    ping verdict and the reason when something is wrong), so the locations table
+    answers «چرا این لوکیشن پینگ نمی‌دهد؟» without a second request.
+    """
+    items = sources()
+    node_rows = _node_rows() if nodes is None else nodes
+    # Grouped once instead of re-scanning the catalog per location.
+    grouped = {}
+    for node in node_rows:
+        key = str(parse_metadata(node.get('metadata')).get('source_id') or '')
+        if key:
+            grouped.setdefault(key, []).append(node)
     return {
         'providers': provider_summary(),
-        'sources': sources(),
-        'locations': sorted({item.get('location') for item in sources() if item.get('location')}),
+        'sources': [{**item,
+                     **source_health(item, grouped.get(str(item.get('id') or ''), []))}
+                    for item in items],
+        'locations': sorted({item.get('location') for item in items if item.get('location')}),
         'default_provider': DEFAULT_PROVIDER,
         'max_nodes': MAX_SOURCE_NODES,
         'runtime': runtime.info(),

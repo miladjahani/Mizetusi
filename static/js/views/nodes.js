@@ -60,6 +60,23 @@ export class NodesView {
     return list;
   }
 
+  /* Why a node has (or has not) a latency.
+
+     The probe records the TLS handshake a client itself performs, so a location
+     whose Host/SNI its addresses cannot serve is described here instead of only
+     showing a red dash. */
+  probeTitle(node) {
+    const probe = node.probe || {};
+    if (probe.at && probe.ok) {
+      const kind = probe.tls ? 'TLS' : 'TCP';
+      return `${kind} دست‌داد · ${probe.verified ? 'گواهی معتبر' : 'گواهی تأیید نشد'}`;
+    }
+    if (probe.hint) return probe.hint;
+    if (probe.error) return probe.error;
+    if (node.latency_ms == null) return 'هنوز پینگ نشده';
+    return Number(node.latency_ms) < 0 ? 'آخرین پینگ ناموفق بود' : 'تأخیر اندازه‌گیری‌شده';
+  }
+
   /* --------------------------------------------------------------------- list */
   render() {
     const host = $('#nodeList');
@@ -75,9 +92,9 @@ export class NodesView {
         <span class="node-icon ${node.kind === 'cloudflare' ? 'cf' : ''}">${node.kind === 'cloudflare' ? '☁' : 'R'}</span>
         <div class="node-main">
           <b>${esc(node.name)} ${node.enabled ? '' : '<span class="pill bad" style="padding:2px 8px;font-size:9.5px">غیرفعال</span>'}${node.location ? ` <span class="pill info" style="padding:2px 8px;font-size:9.5px">${esc(node.location.toUpperCase())}</span>` : ''}${node.provider ? ` <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(node.provider)}</span>` : ''}</b>
-          <span>${esc(node.kind)} · ${esc(node.server)}:${esc(node.port)}${node.sni ? ` · SNI ${esc(node.sni)}` : ''}${node.host && node.host !== node.server ? ` · HOST ${esc(node.host)}` : ''}</span>
+          <span>${esc(node.kind)} · ${esc(node.server)}:${esc(node.port)}${node.sni ? ` · SNI ${esc(node.sni)}` : ''}${node.host && node.host !== node.server ? ` · HOST ${esc(node.host)}` : ''}${node.probe && node.probe.hint ? ` · <span class="muted">${esc(node.probe.hint)}</span>` : ''}</span>
         </div>
-        <span class="lat ${StatusKit.latencyTone(node.latency_ms)}" title="${Number(node.latency_ms) < 0 ? 'آخرین پینگ ناموفق بود' : 'تأخیر اندازه‌گیری‌شده'}">${StatusKit.latencyText(node.latency_ms)}</span>
+        <span class="lat ${StatusKit.latencyTone(node.latency_ms)}" title="${esc(this.probeTitle(node))}">${StatusKit.latencyText(node.latency_ms)}</span>
         <div class="acts">
           <button class="tbtn info" data-act="ping" data-name="${esc(node.name)}" title="پینگ همین نود">${ico('activity', 13)}</button>
           <button class="tbtn info" data-act="links" data-name="${esc(node.name)}" title="سابلینک این نود">${ico('link', 13)}</button>

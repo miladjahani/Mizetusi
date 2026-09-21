@@ -136,8 +136,11 @@ export class ToolsView {
     const out = $('#tlCheckOut');
     if (out) out.innerHTML = `<div class="kv-line"><span>وضعیت</span><b>در حال بررسی…</b></div>`;
     const data = await this.api.post('/api/tools/check', payload);
+    // A completed handshake with an unverified certificate is still a reachable
+    // edge (which is what a client needs), so it is reported as such instead of
+    // as a failure the admin cannot act on.
     const row = (label, item) => item ? `<div class="kv-line"><span>${label}</span>
-      <b dir="ltr" style="color:${item.ok ? '#79efbb' : '#ff9aa8'}">${item.ok ? `${Fmt.lat().format(item.latency_ms)} ms` : `ناموفق · ${esc(item.error || '')}`}</b></div>` : '';
+      <b dir="ltr" style="color:${item.ok ? '#79efbb' : '#ff9aa8'}">${item.ok ? `${Fmt.lat().format(item.latency_ms)} ms${item.verified === false ? ' · گواهی تأیید نشد' : ''}` : `ناموفق · ${esc(item.error || '')}`}</b></div>` : '';
     if (out) {
       out.innerHTML = `
         <div class="kv-line"><span>هدف</span><b dir="ltr">${esc(data.host)}:${Fmt.num(data.port)}</b></div>

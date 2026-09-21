@@ -423,16 +423,21 @@ def test_the_tools_tab_reaches_the_endpoints_it_needs(monkeypatch):
     async def fake_tcp(host, port, timeout=4, tls=False, server_hostname=''):
         return (12.5, None) if host == 'reachable.example.com' else (None, 'timeout')
 
+    async def fake_handshake(host, port, timeout=4, server_hostname=''):
+        return (12.5, None, True) if host == 'reachable.example.com' else (None, 'timeout', False)
+
     async def fake_doh(name, endpoint='https://cloudflare-dns.com/dns-query'):
         return {'Answer': [{'name': name, 'data': '203.0.113.7'}]}
 
     monkeypatch.setattr(nodes_module.NodeProbe, 'tcp', staticmethod(fake_tcp))
+    monkeypatch.setattr(nodes_module.NodeProbe, 'handshake', staticmethod(fake_handshake))
     monkeypatch.setattr('app.dns.service.doh', fake_doh)
 
     checked = client.post('/api/tools/check', headers=h(), json={
         'host': 'reachable.example.com', 'port': 443, 'tls': True}).json()
     assert checked['results']['tls']['ok'] is True
     assert checked['results']['tls']['latency_ms'] == 12.5
+    assert checked['results']['tls']['verified'] is True
     assert checked['results']['tcp']['ok'] is True
 
     dead = client.post('/api/tools/check', headers=h(), json={

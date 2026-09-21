@@ -140,7 +140,16 @@ export class AdvancedView {
     const payload = { id, action: 'install' };
     if (hosts) payload.hosts = hosts;
     const data = await this.api.post('/api/edge/packs', payload);
-    this.toasts.ok(`${Fmt.num(data.created?.length || 0)} لوکیشن نصب شد`);
+    // The created locations are pinged in the same request, so a pack whose
+    // domains do not serve this deployment reads as broken right away instead of
+    // as "installed" and silent.
+    const ping = data.ping || {};
+    if (ping.probed) {
+      (ping.healthy ? this.toasts.ok : this.toasts.err)(
+        `${Fmt.num(data.created?.length || 0)} لوکیشن نصب شد · ${Fmt.num(ping.healthy)} از ${Fmt.num(ping.probed)} آدرس پینگ داد`, 7000);
+    } else {
+      this.toasts.ok(`${Fmt.num(data.created?.length || 0)} لوکیشن نصب شد`);
+    }
     await this.load();
     await this.app.reloadNodes();
   }
@@ -174,7 +183,13 @@ export class AdvancedView {
         </tbody></table></div>`;
     }
     if (apply) {
-      this.toasts.ok(`${Fmt.num(data.created?.length || 0)} لوکیشن ساخته شد`);
+      const ping = data.ping || {};
+      if (ping.probed) {
+        (ping.healthy ? this.toasts.ok : this.toasts.err)(
+          `${Fmt.num(data.created?.length || 0)} لوکیشن ساخته شد · ${Fmt.num(ping.healthy)} از ${Fmt.num(ping.probed)} آدرس پینگ داد`, 7000);
+      } else {
+        this.toasts.ok(`${Fmt.num(data.created?.length || 0)} لوکیشن ساخته شد`);
+      }
       await this.load();
       await this.app.reloadNodes();
     }

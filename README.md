@@ -217,8 +217,15 @@ The Node Catalog is fully self-building — no admin action is ever required:
   Subscriptions are ordered fastest-first; a failed clean-IP node is dropped, but the
   Railway origin always stays published (DNS still resolves during a transient failure),
   so a subscription can never come back empty.
-- Probes run on demand («پینگ همه نودها», or per node) and on a background loop whose
-  interval is the `ping_interval` setting.
+- Probes run on demand («پینگ همه نودها», per node, or «پینگ» on any location) and on a
+  background loop whose interval is the `ping_interval` setting.
+- **A ping is the client's own handshake.** For a TLS node health means a completed TLS
+  handshake with that node's own Host/SNI — the check a client performs when it pings an
+  entry. A bare TCP connect is measured and reported too (`ping_tcp`), but it is never
+  health, so a location whose Host/SNI its addresses cannot serve is marked broken (and
+  dropped from subscriptions) instead of being advertised as healthy and timing out in
+  every client. When a certificate does not verify but the handshake completes, the node
+  stays published and the panel says so.
 
 ## Transports — one node, every protocol
 
@@ -431,6 +438,10 @@ location:
 * **IP source** — pick a provider and press «اسکن همه providerها»; the published ranges are
   downloaded, sampled, TCP-probed and turned into nodes named `<location>-<provider>-NN`. Your
   own clean IPs (or CIDRs) can be pasted instead, under any provider or as `custom`.
+  A provider whose pool is still empty is **filled on demand** the first time a location needs
+  it (bounded, cached for five minutes), so a location added by hand publishes real,
+  pingable addresses on a deployment that never ran a scan — `scan_on_boot` is off by default,
+  and without this a location published *nothing at all* and therefore could not ping.
 * **Domain source** — paste a clean domain (a custom domain behind Cloudflare, a CDN hostname,
   another server of yours); it becomes a node of its own, and the whole protocol matrix is
   published through it.
@@ -439,6 +450,15 @@ Every source carries a `location`, its own Host/SNI and a node cap; disabling or
 location stops its nodes from being published, and the leftover rows are removed on the next
 sync. `POST /api/edge/scan`, `POST /api/edge/sources`, `POST /api/edge/ips` and the matching
 `DELETE`s are the same actions over the API.
+
+`GET /api/edge` enriches every source with its own health — `addresses`, `nodes`, `healthy`,
+`failed`, `pending`, `fastest_ms` and a one-line `reason`. The locations table renders it as an
+آی‌پی count, a `پینگ` verdict (`2/3 · 42 ms`, `ناموفق · 3`, `پینگ نشده`) and a `data-edge="ping"`
+button per row, backed by **`POST /api/edge/sources/{id}/ping`**: it syncs, then probes exactly
+that location's nodes the way a client would and returns the per-address results. Saving a
+location, scanning a provider, adding clean IPs, toggling a location on, installing a location
+pack and importing a subscription all measure the affected locations in the same request, so a
+new location is never published unverified.
 
 Icons are committed, but can be regenerated after a rebrand with:
 
