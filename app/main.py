@@ -52,6 +52,9 @@ BASE_DIR=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERAL_SETTING_KEYS=('public_base_url','sub_prefix','default_protocol','default_limit_gb','default_expiry_days','default_ip_limit','session_days','ping_interval','accent','accent_secondary','app_name',
                      # Customization (the «شخصی‌سازی» tab) and the new defaults.
                      'portal_banner','support_url','flags_enabled','default_format','default_max_configs',
+                     # Whether a location's country is measured from its addresses
+                     # (app/edge/geo.py) or kept as typed.
+                     'geo_lookup',
                      # Node scope of a quick-created user (all / multi-location only /
                      # this server only / a country) — see app/subscriptions/scope.py.
                      'default_scope',
@@ -978,6 +981,13 @@ def _node_payload(node):  # noqa: D401
     item['location']=transports.node_location(node)
     item['provider']=transports.node_provider(node)
     item['source_id']=str(meta.get('source_id') or '')
+    # Where the address really is, when it has been measured: the panel shows the
+    # country next to the location label so a mismatch is visible instead of being
+    # silently trusted (a wrong country in a client's flag is exactly the bug this
+    # answers).
+    item['geo']={'country':str(meta.get('geo_cc') or ''),
+                 'declared':str(meta.get('declared_location') or ''),
+                 'measured':bool(meta.get('geo_cc'))}
     # The panel shows *why* a node has no latency (TLS refused, port closed), so
     # the verdict travels with the row instead of only living in the metadata.
     item['probe']={'ok':bool(meta.get('ping_ok')),'tls':bool(meta.get('ping_tls')),
@@ -1113,6 +1123,21 @@ def _edge_sync(request:Request):
     except Exception:
         return 0
 
+async def _edge_geo(limit=12,timeout=3.0,budget=8.0):
+    """Measure where the published addresses really are, then fix the labels.
+
+    Every location carries a country, and a client's flag comes from that one
+    field — so it is *measured* (three geo databases, majority vote) instead of
+    inherited from the range the location was built from. A location whose
+    addresses answer with another country is re-labelled here, because the flag,
+    the node names (``us-cloudflare-01``) and the per-country sublink slug all
+    read the same field. This is the fix for «پرچم کانادا زده، آی‌پی می‌زند
+    آمریکا»; see ``app/edge/geo.py`` for the measurements behind it.
+    """
+    result=await edge_sources.measure_async(limit=limit,timeout=timeout,budget=budget)
+    changes=edge_sources.align_labels()
+    return {**result,'changes':changes}
+
 def _edge_node_names(source_id='',provider_id='',only_pending=False):
     """Node names of one location (or one provider), for a scoped probe."""
     names=[]
@@ -1152,7 +1177,37 @@ def edge_status(request:Request):
     # admin-triggered, small and visible instead of hundreds of connects at boot.
     payload['probing']={'enabled':bool(settings.outbound_probe_enabled),'scan_on_boot':bool(settings.scan_on_boot),
                         'limit':int(settings.cf_probe_limit),'concurrency':int(settings.cf_probe_concurrency)}
+    # Whether a location's country is measured from its addresses (the panel
+    # switch in «شخصی‌سازی») — without it a location keeps the label it was made
+    # with instead of being corrected.
+    payload['geo']={**(payload.get('geo') or {}),'setting_on':(_setting('geo_lookup') or '1')!='0'}
     return payload
+
+@app.post('/api/edge/geo')
+async def edge_geo(request:Request):
+    """Measure the country of the published addresses and align the labels.
+
+    The honest answer to «چرا روی این آی‌پی پرچم کشور دیگری است؟»: every address of
+    every location is put to three independent geo databases, the majority answer
+    becomes the location's country, and a label the data contradicts is corrected
+    (its nodes are rebuilt from the new country, so the flag, the node names and
+    the per-country sublink all agree). Bounded: at most ``limit`` addresses that
+    have never been measured, and every answer is cached for good.
+    """
+    auth(request)
+    try: body=await request.json()
+    except Exception: body=None
+    body=body if isinstance(body,dict) else {}
+    try: limit=min(max(int(body.get('limit') or 24),1),96)
+    except (TypeError,ValueError): limit=24
+    result=await _edge_geo(limit=limit)
+    synced=_edge_sync(request)
+    status_payload=edge_sources.status()
+    _audit('edge.geo',f"{result['checked']} measured · {len(result['changes'])} labels aligned")
+    return {'success':True,'synced':synced,**result,
+            'stats':status_payload.get('geo') or {},
+            'sources':status_payload['sources'],
+            'nodes':[_node_payload(n) for n in list_nodes()]}
 
 @app.get('/api/edge/providers')
 def edge_providers(request:Request):
@@ -1180,11 +1235,16 @@ async def edge_scan(request:Request):
         detail='; '.join(str(r.get('error')) for r in results if r.get('error'))
         raise HTTPException(502,f'لیست هیچ provider دریافت نشد: {detail[:300]}')
     probed=await probe_all(limit=min(limit*2,192),provider_id=provider_id or None)
+    # A scan is where addresses are born, so it is also the moment to ask where
+    # they are: a location built from a fresh pool gets its real country here
+    # instead of publishing whichever country the range suggested.
+    geo_result=await _edge_geo(limit=8)
     synced=_edge_sync(request)
     ping=await _ping_edge_nodes(provider_id=provider_id,only_pending=True,timeout=2.5,limit=40)
     _audit('edge.scan',f"{provider_id or 'all'} · +{found} ips · {ping['healthy']}/{ping['probed']} ping")
     return {'success':True,'results':results,'found':found,'probed':len(probed),'synced':synced,'ping':ping,
-            'providers':edge_sources.provider_summary(),'nodes':[_node_payload(n) for n in list_nodes()]}
+            'geo':geo_result,'providers':edge_sources.provider_summary(),
+            'nodes':[_node_payload(n) for n in list_nodes()]}
 
 @app.get('/api/edge/ips')
 def edge_ips(request:Request,provider:str='',limit:int=200):
@@ -1225,6 +1285,15 @@ async def edge_save_source(request:Request):
     try: body=await request.json()
     except Exception: body=None
     body=body if isinstance(body,dict) else {}
+    # An admin who corrects a location by hand means it: auto-aligning the label
+    # to the measured country would silently undo the correction on the next
+    # pass, so an explicit change pins this location.
+    existing=next((item for item in edge_sources.sources()
+                   if item['id']==str(body.get('id') or '').strip()),None)
+    pinned=str(body.get('location') or '').strip().lower()
+    if (existing and pinned and 'autolabel' not in body
+            and pinned!=str(existing.get('location') or '').strip().lower()):
+        body['autolabel']=0
     try:
         source,items=edge_sources.save_source(body,str(body.get('id') or '').strip())
     except ValueError as exc:
@@ -1233,6 +1302,7 @@ async def edge_save_source(request:Request):
     if source.get('ips'):
         edge_sources.add_ips(source['ips'],source.get('provider') or edge_sources.MANUAL_PROVIDER)
     await probe_all(limit=settings.cf_probe_limit)
+    geo_result=await _edge_geo(limit=4)
     synced=_edge_sync(request)
     # The location is measured in the same request, so the panel (and the toast)
     # can say how many of its addresses really answer instead of leaving it at
@@ -1241,7 +1311,7 @@ async def edge_save_source(request:Request):
     items=edge_sources.status()['sources']
     _audit('edge.source.save',f"{source['id']} · {source['kind']} · {ping['healthy']}/{ping['probed']} ping")
     return {'success':True,'source':next((s for s in items if s['id']==source['id']),source),
-            'sources':items,'synced':synced,'ping':ping,
+            'sources':items,'synced':synced,'ping':ping,'geo':geo_result,
             'nodes':[_node_payload(n) for n in list_nodes()]}
 
 @app.post('/api/edge/sources/{source_id}/ping')
@@ -1254,11 +1324,12 @@ async def edge_ping_source(request:Request,source_id:str):
     auth(request)
     current=next((item for item in edge_sources.sources() if item['id']==source_id),None)
     if not current: raise HTTPException(404,'منبع پیدا نشد')
+    geo_result=await _edge_geo(limit=6)
     synced=_edge_sync(request)
     ping=await _ping_edge_nodes(source_id=source_id,timeout=4.0,limit=60)
     _audit('edge.source.ping',f"{source_id} · {ping['healthy']}/{ping['probed']} reachable")
     items=edge_sources.status()['sources']
-    return {'success':True,'synced':synced,**ping,
+    return {'success':True,'synced':synced,**ping,'geo':geo_result,
             'source':next((s for s in items if s['id']==source_id),current),'sources':items,
             'nodes':[_node_payload(n) for n in list_nodes()],
             'providers':edge_sources.provider_summary()}

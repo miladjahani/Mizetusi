@@ -86,12 +86,31 @@ a dedicated subscription per client.
 - **Multi-location *inside* Cloudflare.** A Cloudflare edge answers on one anycast network, so
   a clean-IP location used to be whatever single label an admin typed — every entry dialled
   the same addresses and a client showed one country for all of them. The
-  **«کلودفلر — لوکیشن‌های چندگانه»** pack (the first card in **پیشرفته**) creates eight
+  **«کلودفلر — لوکیشن‌های چندگانه»** pack (the first card in **پیشرفته**) creates six
   locations that each own *one part of Cloudflare's published ranges* (`ranges` on the source),
   so the addresses differ per country and so does what a client's geo database reports. All of
   them front the origin with the same Host/SNI — your Worker or panel domain, which the pack
   resolves for you or takes from the field above the card — and the honest probe says which of
-  them actually answers from this deployment's network.
+  them actually answers from this deployment's network. The grouping is measured rather than
+  assumed: see the next point.
+- **The country on a node is measured, not guessed.** A user reported a Cloudflare node whose
+  Canadian flag sat on an address their own lookup called American, and they were right —
+  sampling every range of the pack against three independent databases showed the six ranges
+  that used to be «کانادا» answering «United States» on two of the three, and the range
+  published as «اروپا (میلان/مادرید)» answering US *and* ES. `app/edge/geo.py` now asks
+  `ipwho.is`, `ip-api` and `ipinfo` about **each address**, takes the majority, keeps a tie as
+  *no answer* (the admin's label stays) and caches an address's country for good. A location's
+  country is decided from a deliberately stable candidate set — what the admin typed plus one
+  sample per range, not the addresses the last latency pass happened to prefer — so a label
+  never flips because a different address became the fastest. If the data contradicts the
+  label, `sources.align_labels` rewrites the location, which corrects the flag, the node names
+  (`us-cloudflare-01`) and the per-country sublink together; an address that measures elsewhere
+  is left out of that location instead of being handed to users under a flag it contradicts. A
+  clean *domain* is never touched (the Iranian relay publishes six countries through one host
+  on six ports — that label is intent, not a guess), a location an admin corrects by hand is
+  pinned, and «تشخیص کشور آی‌پی‌ها» in the edge card runs the measurement on demand. The
+  «اندازه‌گیری کشور از روی آی‌پی» switch in **شخصی‌سازی** turns the whole thing off, and the
+  locations table shows the measured country in its own column when the two disagree.
 - **Three new panel tabs.** **شخصی‌سازی** (the end-user experience: banner, support link,
   flags, recommended format, branding, default config count), **ابزار شبکه** (a multi-CDN
   scanner console, TCP/TLS reachability from the server, DoH lookup that bypasses a poisoned
@@ -553,7 +572,11 @@ sync. `POST /api/edge/scan`, `POST /api/edge/sources`, `POST /api/edge/ips` and 
 `DELETE`s are the same actions over the API.
 
 `GET /api/edge` enriches every source with its own health — `addresses`, `nodes`, `healthy`,
-`failed`, `pending`, `fastest_ms` and a one-line `reason`. The locations table renders it as an
+`failed`, `pending`, `fastest_ms`, its measured `geo` (`country`, `counts`, `measured`, `total`,
+`agree`, `flag`, `name`) and a one-line `reason`. `POST /api/edge/geo` measures the addresses
+no database has answered for yet (bounded per call), re-labels the locations the data
+contradicts and republishes — the same pass runs after a scan, after saving or pinging a
+location, and in the monitor loop, so the catalog converges on its own. The locations table renders it as an
 آی‌پی count, a `پینگ` verdict (`2/3 · 42 ms`, `ناموفق · 3`, `پینگ نشده`) and a `data-edge="ping"`
 button per row, backed by **`POST /api/edge/sources/{id}/ping`**: it syncs, then probes exactly
 that location's nodes the way a client would and returns the per-address results. Saving a

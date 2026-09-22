@@ -75,8 +75,14 @@ async def _measure(request, source_ids):
     if not ids:
         return {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': 0}
     main = _main()
+    # A pack/import writes locations from ranges and remarks, so their countries
+    # are guesses until the addresses themselves are measured — measure them
+    # before publishing, then correct any label the data contradicts (a Canadian
+    # flag on an American address is what users see otherwise).
+    geo_result = await main._edge_geo(limit=16)
     main._edge_sync(request)
-    totals = {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': len(ids), 'results': []}
+    totals = {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': len(ids),
+              'geo': geo_result, 'results': []}
     for source_id in ids:
         result = await main._ping_edge_nodes(source_id=source_id, timeout=2.5, limit=40)
         totals['probed'] += result['probed']
@@ -95,6 +101,9 @@ def _customization():
         'portal_banner': _setting('portal_banner') or '',
         'support_url': _setting('support_url') or '',
         'flags': _flags_on(),
+        # Whether a location's country is measured from its addresses (and its
+        # label corrected when the data disagrees).
+        'geo_lookup': (_setting('geo_lookup') or '1') != '0',
         'default_format': (_setting('default_format') or 'auto').strip().lower(),
         'default_max_configs': _setting('default_max_configs') or '',
         'default_scope': node_scope.normalize(_setting('default_scope') or 'all'),
@@ -134,6 +143,10 @@ async def save_customization(request: Request):
         value = str(body['flags_enabled']).strip().lower()
         _set('flags_enabled', '0' if value in ('0', 'false', 'off', 'no') else '1')
         changed.append('flags_enabled')
+    if 'geo_lookup' in body:
+        value = str(body['geo_lookup']).strip().lower()
+        _set('geo_lookup', '0' if value in ('0', 'false', 'off', 'no') else '1')
+        changed.append('geo_lookup')
     if 'default_format' in body:
         value = str(body['default_format'] or 'auto').strip().lower()
         if value not in CORE_FORMATS:

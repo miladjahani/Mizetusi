@@ -27,6 +27,7 @@ import urllib.request
 from app.config import settings
 from app.db import rows, row, execute
 from app import runtime
+from app.edge import geo
 
 # --------------------------------------------------------------------- providers
 # ``format`` is how a published list is parsed:
@@ -509,6 +510,12 @@ def normalize_source(payload, existing=None):
         'ranges': ranges,
         'max': max(1, min(maximum, MAX_SOURCE_NODES)),
         'enabled': int(bool(data.get('enabled', 1))),
+        # Whether the measured country of this location's addresses may replace
+        # its label. On for everything the panel derives by itself (a pack's
+        # range group, an import), off as soon as an admin corrects a location by
+        # hand — a deliberate country is not a guess to be overwritten on the
+        # next pass. See :func:`align_labels`.
+        'autolabel': 1 if str(data.get('autolabel', 1)).strip().lower() not in ('0', 'false', 'off', 'no') else 0,
         # Which pack (or import) created this location, so a pack can be listed,
         # re-installed idempotently or removed as a whole.
         'pack': _slug(data.get('pack') or '', '') or '',
@@ -660,6 +667,46 @@ def _health_reason(source, addresses, own, healthy, failed, pending):
     return ''
 
 
+def _country_candidates(source):
+    """The addresses a location's country is decided from — deliberately stable.
+
+    Not the currently-published addresses: those are ordered by the last latency
+    measurement, so a label decided from them could flip country the day a
+    different address becomes the fastest, renaming nodes and changing sublinks
+    for no good reason. What the admin typed and one deterministic sample per
+    range of the group do not move, so the answer is stable across a re-sync.
+    """
+    picked = [str(ipaddress.ip_network(item, strict=False).network_address)
+              for item in (source.get('ips') or [])]
+    ranges = [str(item) for item in (source.get('ranges') or [])]
+    if ranges:
+        for value in sample(ranges, limit=10, per_net=1):
+            if value not in picked:
+                picked.append(value)
+    return picked[:12]
+
+
+def _measured_location(source, location):
+    """The location a clean-IP source should publish, and the addresses it may.
+
+    The label of a range group is a guess about an anycast network, and the guess
+    is what a user's client contradicts («پرچم کانادا زده، آی‌پی می‌زند آمریکا»).
+    So the country its addresses actually answer with wins over the group's label,
+    and a location publishes exactly one country: an address that measures
+    elsewhere is left out of *this* location instead of carrying a flag that
+    contradicts its own name. Addresses nobody has measured yet keep the group
+    label — the best answer available until the panel looks.
+    """
+    declared = str(location or '').strip()
+    published = list(_ordered_ips(source))
+    answers = {ip: geo.cached(ip) for ip in published if geo.cached(ip)}
+    home = location_country(source) or declared
+    if answers:
+        kept = [ip for ip in published if (answers.get(ip) or home) == home]
+        published = kept or published
+    return home, published, answers
+
+
 def nodes_for_source(source, known_latency=None):
     """The node descriptors one source publishes (as used by ``nodes.sync``)."""
     known_latency = known_latency or {}
@@ -675,16 +722,30 @@ def nodes_for_source(source, known_latency=None):
                          'edge_host': host, 'role': 'clean-domain'},
         }]
     provider_id = str(source.get('provider') or DEFAULT_PROVIDER)
-    prefix = _slug('-'.join(part for part in (location, provider_id if provider_id != MANUAL_PROVIDER else 'custom')
-                            if part), provider_id)
+    declared = location
+    location, addresses, answers = _measured_location(source, location)
+    source_id = _slug(source.get('id') or '', '') if source.get('id') else ''
+    parts = [location, provider_id if provider_id != MANUAL_PROVIDER else 'custom']
+    # A location whose country was corrected keeps its own id in the name: two
+    # locations that measure the same country (a group relabelled to «us» and the
+    # American group itself) must not publish the same node names, or one would
+    # silently overwrite the other's nodes.
+    if source_id and source_id != _slug(location or '', ''):
+        parts.insert(1, source_id)
+    prefix = _slug('-'.join(part for part in parts if part), provider_id)
     nodes = []
-    for index, ip in enumerate(_ordered_ips(source), 1):
+    for index, ip in enumerate(addresses, 1):
         name = f'{prefix}-{index:02d}'
         nodes.append({
             'name': name, 'kind': 'cloudflare', 'server': ip, 'port': int(source.get('port') or 443),
             'tls': int(source.get('tls', 1)), 'sni': source['host'], 'host': source['host'],
             'source': f'{provider_id}-source', 'latency_ms': known_latency.get(name),
             'metadata': {'source_id': source['id'], 'provider': provider_id, 'location': location,
+                         # Where the address really is (measured, and empty while
+                         # unknown) next to the label the location was created
+                         # with, so the panel can show the difference instead of
+                         # hiding it.
+                         'geo_cc': answers.get(ip) or '', 'declared_location': declared,
                          'edge_host': source['host'], 'role': 'clean-ip'},
         })
     return nodes
@@ -743,6 +804,121 @@ def _default_candidates(limit):
     return chosen[:limit]
 
 
+# ------------------------------------------------------------------- geography
+def location_geo(source, candidates=None):
+    """Where a location's addresses really are, for the panel.
+
+    Only clean-IP locations are measured: a clean *domain* is one host an admin
+    picked on purpose (the Iranian relay publishes six countries through one host
+    on six ports), so its label is intent rather than a guess.
+
+    ``country`` is empty when the databases have no answer *or* when they split
+    the addresses evenly — a tie is not a country, and the panel says so instead
+    of printing a flag that half the addresses contradict.
+    """
+    from app.subscriptions import flags as sub_flags
+    empty = {'country': '', 'counts': {}, 'measured': 0, 'total': 0, 'agree': False,
+             'flag': '', 'name': ''}
+    if str(source.get('kind') or '') != 'ip':
+        return empty
+    addresses = _country_candidates(source) if candidates is None else list(candidates)
+    summary = geo.summary(addresses)
+    country = str(summary['country'] or '')
+    return {**summary, 'flag': sub_flags.flag_for(country),
+            'name': sub_flags.name(country) or country.upper()}
+
+
+def location_country(source, candidates=None):
+    """The measured country of a location's addresses (``''`` when unknown)."""
+    return str(location_geo(source, candidates)['country'] or '')
+
+
+def measure(limit=24, timeout=3.0, budget=8.0):
+    """Look up the country of the addresses that decide each location's label.
+
+    Bounded by ``limit`` new addresses and ``budget`` seconds per call, so a panel
+    click or a monitor pass is a handful of requests rather than a sweep of the
+    whole pool.
+    """
+    return geo.resolve(_country_addresses(), limit=limit, timeout=timeout, budget=budget)
+
+
+async def measure_async(limit=24, timeout=3.0, budget=8.0):
+    """``measure`` without blocking the event loop (the lookups are blocking HTTP)."""
+    return await geo.resolve_async(_country_addresses(), limit=limit, timeout=timeout, budget=budget)
+
+
+def _country_addresses():
+    """Every address that any enabled location decides its country from."""
+    wanted = []
+    for source in sources():
+        if source.get('enabled', 1) and str(source.get('kind') or '') == 'ip':
+            for ip in _country_candidates(source):
+                if ip not in wanted:
+                    wanted.append(ip)
+    return wanted
+
+
+def _aligned_label(label, country):
+    """A location's label after its country changed.
+
+    A machine-made label (``🇨🇦 · کانادا``) is rebuilt from the measured country;
+    an admin's own words are kept with only their leading flag corrected, so a
+    correction never throws away a note someone typed.
+    """
+    from app.subscriptions import flags as sub_flags
+    flag = sub_flags.flag_for(country)
+    name = sub_flags.name(country) or str(country or '').upper()
+    # The flag is dropped and the country name replaced by the measured one; what
+    # remains of the old label — the operator's own note after a «·» — survives, so
+    # «آلمان · کلودفلر» becomes «🇺🇸 · آمریکا · کلودفلر» rather than losing the note
+    # (and a label that only named a country simply becomes the measured one).
+    text = ''.join(ch for ch in str(label or '') if not 0x1F1E6 <= ord(ch) <= 0x1F1FF).strip()
+    head, _, rest = text.partition('·')
+    head = head.strip(' ·|-\t')
+    if sub_flags.country_code(head):
+        note = rest.strip(' ·|-\t')
+    elif sub_flags.country_code(text):
+        note = ''
+    else:
+        note = text.strip(' ·|-\t')
+    label = f'{flag} · {name}'.strip(' ·')
+    return f'{label} · {note}' if note else label
+
+
+def align_labels(items=None):
+    """Re-label the locations whose addresses measure a different country.
+
+    This is the fix for «پرچم کانادا زده، آی‌پی می‌زند آمریکا»: the flag, the node
+    names (``us-cloudflare-01``) and the per-country sublink slug all come from
+    the location, so correcting the location corrects all three at once. Skipped
+    for a location an admin pinned by hand (``autolabel`` off) and for every
+    deployment that switched the lookups off. Returns the changes made.
+    """
+    if not geo.enabled():
+        return []
+    from app.subscriptions import flags as sub_flags
+    items = list(items if items is not None else sources())
+    changes = []
+    for source in items:
+        if str(source.get('kind') or '') != 'ip' or not source.get('enabled', 1):
+            continue
+        if not int(source.get('autolabel', 1) or 0):
+            continue
+        current = str(source.get('location') or '').strip().lower()
+        target = location_country(source)
+        if not target or target == current:
+            continue
+        source['location'] = target
+        source['label'] = _aligned_label(source.get('label'), target)
+        changes.append({'id': source['id'], 'from': current, 'to': target,
+                        'flag': sub_flags.flag_for(target),
+                        'name': sub_flags.name(target) or target.upper()})
+    if changes:
+        _write_sources(items)
+    return changes
+
+
 def cleanup_orphans(keep_names):
     """Drop nodes whose source no longer exists (called after a sync)."""
     removed = []
@@ -775,10 +951,15 @@ def status(nodes=None):
     return {
         'providers': provider_summary(),
         'sources': [{**item,
-                     **source_health(item, grouped.get(str(item.get('id') or ''), []))}
+                     **source_health(item, grouped.get(str(item.get('id') or ''), [])),
+                     # Where the addresses really are, next to the label the
+                     # location carries — the panel shows both so «این لوکیشن
+                     # واقعاً کجاست؟» is answered by measurement, not by trust.
+                     'geo': location_geo(item)}
                     for item in items],
         'locations': sorted({item.get('location') for item in items if item.get('location')}),
         'default_provider': DEFAULT_PROVIDER,
         'max_nodes': MAX_SOURCE_NODES,
+        'geo': geo.stats(),
         'runtime': runtime.info(),
     }

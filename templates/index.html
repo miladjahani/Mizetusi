@@ -299,6 +299,7 @@
         <div class="panel-head">
           <div><h2>منابع لبه و لوکیشن‌ها</h2><p class="sub">آی‌پی تمیز از هر CDN، لیست دستی و دامنه‌های تمیز — هر منبع یک لوکیشن</p></div>
           <div class="actions" style="margin:0">
+            <button class="secondary compact" id="btnEdgeGeo" title="کشور هر لوکیشن از روی خودِ آدرس‌هایش اندازه‌گیری می‌شود (چند دیتابیس، رأی اکثریت)">تشخیص کشور آی‌پی‌ها</button>
             <button class="secondary compact" id="btnEdgeScan">اسکن همه providerها</button>
             <button class="secondary compact" id="btnEdgeReload">بروزرسانی</button>
           </div>
@@ -357,6 +358,8 @@
           </div>
           <div class="switch-row"><div class="txt"><b>پرچم کشور روی نام نودها</b><span>نام هر نود در سابلینک با پرچم کشورش می‌آید (🇩🇪 آلمان · ...)</span></div>
             <div class="switch on" id="czFlags"></div></div>
+          <div class="switch-row"><div class="txt"><b>اندازه‌گیری کشور از روی آی‌پی</b><span>کشور هر لوکیشن از خودِ آدرس‌هایش پرسیده می‌شود (سه دیتابیس جغرافیایی، رأی اکثریت) و برچسبی که با داده نمی‌خواند اصلاح می‌شود — تا روی آی‌پی آمریکا پرچم کانادا نیفتد. خاموش = برچسب‌ها همان‌طور که وارد کرده‌اید می‌مانند.</span></div>
+            <div class="switch on" id="czGeo"></div></div>
           <div class="actions">
             <button class="primary" id="czSave">ذخیره شخصی‌سازی</button>
             <button class="secondary" id="czReload">بازخوانی</button>

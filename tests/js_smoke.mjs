@@ -110,6 +110,9 @@ const checks = [
   [typeof loaded['views/users'].UsersView === 'function', 'UsersView'],
   [typeof loaded['views/system'].CloudflareView === 'function', 'CloudflareView'],
   [typeof loaded['views/system'].CloudflareView.prototype.pingCell === 'function', 'location ping verdict'],
+  [typeof loaded['views/system'].CloudflareView.prototype.geoCell === 'function', 'measured-country column'],
+  [typeof loaded['views/system'].CloudflareView.prototype.detectGeo === 'function', 'country detection action'],
+  [typeof loaded['views/nodes'].NodesView.prototype.geoBadge === 'function', 'node country badge'],
   [typeof loaded['views/system'].SettingsView === 'function', 'SettingsView'],
   [typeof loaded['views/customize'].CustomizeView === 'function', 'CustomizeView'],
   [typeof loaded['views/customize'].CustomizeView.prototype.load === 'function', 'customization loader'],
@@ -153,6 +156,111 @@ try {
   window.nexus.applyBrand();
 } catch (error) {
   failures.push(`render path threw: ${error.message}`);
+}
+
+// The country a location really is: a Cloudflare range used to be labelled from
+// the range it came from, so a client showed a Canadian flag on an American
+// address. The panel must show the measured country next to the label, flag the
+// disagreement and offer to align it — never hide it.
+try {
+  const view = window.nexus.cloudflare;
+  window.nexus.store.set('edge', {
+    sources: [
+      { id: 'us', location: 'us', label: '🇺🇸 · آمریکا', kind: 'ip', provider: 'cloudflare',
+        host: 'worker.example.workers.dev', port: 443, enabled: 1, addresses: 2, nodes: 2,
+        healthy: 2, failed: 0, pending: 0, fastest_ms: 40, reason: '',
+        geo: { country: 'us', counts: { us: 2 }, measured: 2, total: 2, agree: true, flag: '🇺🇸', name: 'آمریکا' } },
+      { id: 'ca', location: 'ca', label: '🇨🇦 · کانادا', kind: 'ip', provider: 'cloudflare',
+        host: 'worker.example.workers.dev', port: 443, enabled: 1, addresses: 2, nodes: 2,
+        healthy: 2, failed: 0, pending: 0, fastest_ms: 55, reason: '',
+        geo: { country: 'us', counts: { us: 2 }, measured: 2, total: 2, agree: true, flag: '🇺🇸', name: 'آمریکا' } },
+      { id: 'unmeasured', location: 'nl', label: '🇳🇱 · هلند', kind: 'ip', provider: 'cloudflare',
+        host: 'worker.example.workers.dev', port: 443, enabled: 1, addresses: 1, nodes: 1,
+        healthy: 1, failed: 0, pending: 0, fastest_ms: 60, reason: '',
+        geo: { country: '', counts: {}, measured: 0, total: 1, agree: false, flag: '', name: '' } },
+      { id: 'split', location: 'au', label: '🇦🇺 · اقیانوسیه', kind: 'ip', provider: 'cloudflare',
+        host: 'worker.example.workers.dev', port: 443, enabled: 1, addresses: 2, nodes: 2,
+        healthy: 2, failed: 0, pending: 0, fastest_ms: 65, reason: '',
+        geo: { country: '', counts: { au: 1, gt: 1 }, measured: 2, total: 2, agree: false, flag: '', name: '' } },
+      { id: 'tunnel', location: 'de', label: '🇩🇪 · تانل آلمان', kind: 'domain', provider: 'domain',
+        host: 'cdn16.qemitra.ir', port: 30524, enabled: 1, addresses: 1, nodes: 1,
+        healthy: 1, failed: 0, pending: 0, fastest_ms: 70, reason: '',
+        geo: { country: '', counts: {}, measured: 0, total: 0, agree: false, flag: '', name: '' } },
+    ],
+    nodes: [{ name: 'us-cloudflare-01', enabled: 1, source_id: 'us' }],
+    locations: ['us', 'ca', 'nl', 'de'],
+    geo: { enabled: true, known: 4, answered: 4, countries: ['us'], updated_at: 0, setting_on: true },
+    runtime: {}, providers: [], probing: {},
+  });
+  const host = elementFor('edgeSources');
+  host.innerHTML = '';
+  view.renderEdge();
+  const html = host.innerHTML;
+  if (!html.includes('🇺🇸')) failures.push('the measured country must be shown in the locations table');
+  if (!html.includes('اندازه‌گیری نشده')) failures.push('an unmeasured location must say so instead of guessing');
+  // A range whose addresses really are in different countries has no country:
+  // the label stays and the split is shown instead of a flag half of them would
+  // contradict.
+  if (!html.includes('بدون اکثریت') || !html.includes('AU×')) {
+    failures.push('a split location must show «بدون اکثریت» with the countries it measured');
+  }
+  // Only the location whose label the data contradicts gets the align action.
+  if ((html.match(/data-edge="align"/g) || []).length !== 1) failures.push('exactly the mismatched location must offer «هم‌تراز»');
+  if (!html.includes('data-country="us"')) failures.push('the align action must carry the measured country');
+  if (html.includes('undefined')) failures.push('the locations table rendered undefined');
+  // And the tidy case (measured == label) offers no action at all.
+  if ((html.match(/data-id="us"/g) || []).length !== 3) failures.push('a matching location keeps only ping/toggle/delete');
+} catch (error) {
+  failures.push(`the measured-country column threw: ${error.message}`);
+}
+
+// «شخصی‌سازی» carries the switch that decides whether a location's country is
+// measured from its addresses or kept as typed.
+try {
+  const view = window.nexus.customize;
+  window.nexus.store.set('customization', {
+    portal_banner: '', support_url: 'https://t.me/miliconfig', app_name: 'NEXUS', accent: '#c9f24c',
+    accent_secondary: '#5fce62', flags: true, geo_lookup: true, default_format: 'auto',
+    default_max_configs: '', default_scope: 'all', scopes: [], core_formats: [],
+  });
+  view.render();
+  if (!String(elements.get('czTag').innerHTML).includes('اندازه‌گیری‌شده')) {
+    failures.push('the customization tag must name the source of the country labels');
+  }
+  if (!String(elements.get('czPreview').innerHTML).includes('اندازه‌گیری از آی‌پی')) {
+    failures.push('the customization preview must show where the country labels come from');
+  }
+  window.nexus.store.set('customization', {
+    portal_banner: '', support_url: '', app_name: 'NEXUS', accent: '', accent_secondary: '',
+    flags: true, geo_lookup: false, default_format: 'auto', default_max_configs: '',
+    default_scope: 'all', scopes: [], core_formats: [],
+  });
+  view.render();
+  if (!String(elements.get('czTag').innerHTML).includes('برچسب دستی')) {
+    failures.push('a manual label must be visible in the customization tag');
+  }
+  if (!String(elements.get('czPreview').innerHTML).includes('برچسب دستی')) {
+    failures.push('a manual label must be visible in the customization preview');
+  }
+} catch (error) {
+  failures.push(`the geo switch threw: ${error.message}`);
+}
+
+// A node whose address sits elsewhere shows a warning badge rather than a flag
+// that contradicts its own IP.
+try {
+  const node = { name: 'ca-cloudflare-01', kind: 'cloudflare', server: '104.24.0.5', port: 443,
+    location: 'ca', geo: { country: 'us', declared: 'ca', measured: true } };
+  const badge = window.nexus.nodes.geoBadge(node);
+  if (!badge.includes('IP: US')) failures.push('a node whose address is elsewhere must carry the country badge');
+  if (window.nexus.nodes.geoBadge({ name: 'us-cf-01', location: 'us', geo: { country: 'us', measured: true } }) !== '') {
+    failures.push('a matching node must not carry the badge');
+  }
+  if (window.nexus.nodes.geoBadge({ name: 'x', location: 'de', geo: {} }) !== '') {
+    failures.push('an unmeasured node must not carry the badge');
+  }
+} catch (error) {
+  failures.push(`the node country badge threw: ${error.message}`);
 }
 
 // The protocol multi-select must build a chip per catalog entry with no DOM, and

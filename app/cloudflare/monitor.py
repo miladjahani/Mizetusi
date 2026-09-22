@@ -127,6 +127,17 @@ async def loop(interval=900):
             if live_settings.scan_on_boot and not rows('SELECT ip FROM cf_ips LIMIT 1'):
                 seed_ips(provider_id='cloudflare')
             await probe_all()
+            # A location's flag is only true if the address it publishes was
+            # actually checked, so the same pass measures the country of a few
+            # addresses and corrects a label the data contradicts (see
+            # ``app/edge/geo.py``). Bounded on purpose: a handful of lookups per
+            # pass, cached for good afterwards.
+            try:
+                from app.edge import sources as edge_sources
+                await edge_sources.measure_async(limit=16)
+                edge_sources.align_labels()
+            except Exception:
+                pass
             # Keep the Node Catalog synchronized with the latest healthy results —
             # with a Worker when one is configured, and otherwise via the automatic
             # edge detection (a Cloudflare-fronted panel domain).

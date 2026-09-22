@@ -5,6 +5,19 @@
 import { $, $$, ico, esc, Fmt, bindCopyButtons, copyText } from '../core.js';
 import { Charts, StatusKit } from '../ui.js';
 
+/**
+ * The flag emoji of a two-letter country code.
+ *
+ * The server measures where a location's addresses really are and sends back the
+ * code, so a wrong country in a client's flag is visible in the panel next to the
+ * label it contradicts instead of only being noticed by a user abroad.
+ */
+function geoFlag(code) {
+  const value = String(code || '').trim().toLowerCase();
+  if (!/^[a-z]{2}$/.test(value)) return '';
+  return String.fromCodePoint(...[...value].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 97));
+}
+
 export class CloudflareView {
   constructor(app) {
     this.app = app;
@@ -151,12 +164,13 @@ export class CloudflareView {
       const sources = data?.sources || [];
       const nodes = data?.nodes || [];
       host.innerHTML = sources.length ? `<div class="table-wrap" style="margin-top:12px"><table>
-        <thead><tr><th>لوکیشن</th><th>برچسب</th><th>نوع</th><th>Host / SNI</th><th>آی‌پی</th><th>نود</th><th>پینگ</th><th>وضعیت</th><th></th></tr></thead>
+        <thead><tr><th>لوکیشن</th><th>برچسب</th><th>کشور اندازه‌گیری‌شده</th><th>نوع</th><th>Host / SNI</th><th>آی‌پی</th><th>نود</th><th>پینگ</th><th>وضعیت</th><th></th></tr></thead>
         <tbody>${sources.map((source) => {
           const count = nodes.filter((node) => node.enabled && node.source_id === source.id).length;
           return `<tr>
             <td><b>${esc(source.location || '—')}</b></td>
             <td>${esc(source.label || '')}</td>
+            <td>${this.geoCell(source)}</td>
             <td>${source.kind === 'domain' ? 'دامنهٔ تمیز' : esc(source.provider)}</td>
             <td class="mono" dir="ltr">${esc(source.host)}:${esc(String(source.port))}</td>
             <td>${Fmt.num(source.addresses != null ? source.addresses : '—')}</td>
@@ -164,12 +178,14 @@ export class CloudflareView {
             <td>${this.pingCell(source)}</td>
             <td><span class="pill ${source.enabled ? 'ok' : 'warn'}">${source.enabled ? 'فعال' : 'خاموش'}</span></td>
             <td class="nowrap">
+              ${this.geoAlignButton(source)}
               <button class="tbtn info" data-edge="ping" data-id="${esc(source.id)}" title="پینگ همین لوکیشن">${ico('activity', 12)} پینگ</button>
               <button class="tbtn" data-edge="toggle" data-id="${esc(source.id)}">${source.enabled ? 'خاموش' : 'روشن'}</button>
               <button class="tbtn bad" data-edge="del" data-id="${esc(source.id)}">حذف</button></td></tr>`;
         }).join('')}</tbody></table>
         ${sources.filter((source) => source.reason).map((source) => `<p class="note">⚠ ${esc(source.location || source.id)}: ${esc(source.reason)}</p>`).join('')}
-        <p class="note">پینگ هر لوکیشن همان کاری را می‌کند که کلاینت می‌کند: دست‌دادن TLS با Host/SNI خودِ آن لوکیشن. آی‌پی‌ای که پاسخ ندهد از سابلینک کنار گذاشته می‌شود؛ ستون «آی‌پی» صفر یعنی این لوکیشن هیچ آدرسی ندارد (اسکن منابع یا آی‌پی دستی لازم است).</p></div>`
+        <p class="note">پینگ هر لوکیشن همان کاری را می‌کند که کلاینت می‌کند: دست‌دادن TLS با Host/SNI خودِ آن لوکیشن. آی‌پی‌ای که پاسخ ندهد از سابلینک کنار گذاشته می‌شود؛ ستون «آی‌پی» صفر یعنی این لوکیشن هیچ آدرسی ندارد (اسکن منابع یا آی‌پی دستی لازم است).</p>
+        <p class="note">ستون «کشور اندازه‌گیری‌شده» همان چیزی است که سه دیتابیس جغرافیایی دربارهٔ خودِ آدرس‌ها می‌گویند: اگر با برچسب لوکیشن نخواند، برچسب (و در نتیجه پرچم و نام نودها) خودکار اصلاح می‌شود تا پرچم یک کشور روی آی‌پی کشور دیگر نیفتد. دامنه‌های تمیز اندازه‌گیری نمی‌شوند، چون کشورشان انتخاب خود شماست — همان‌جا دکمهٔ «هم‌تراز» را می‌زنید.</p></div>`
         : '<div class="empty" style="margin-top:12px">هنوز لوکیشنی ساخته نشده — با فرم بالا یکی اضافه کنید (یا فقط دامنهٔ پنل را پشت Cloudflare ببرید تا خودکار ساخته شود).</div>';
       $$('#edgeSources [data-edge]').forEach((button) => {
         button.onclick = () => this.app.safe(async () => {
@@ -196,6 +212,14 @@ export class CloudflareView {
               button.disabled = false;
               button.innerHTML = original;
             }
+          } else if (button.dataset.edge === 'align') {
+            // Accept the measured country for a location that was pinned to
+            // another one by hand: the label, the flag and the node names follow
+            // it, and measuring stays on for this location.
+            await this.api.post('/api/edge/sources', {
+              id, location: button.dataset.country || '', autolabel: 1,
+            });
+            this.toasts.ok('برچسب لوکیشن با کشور اندازه‌گیری‌شده هم‌تراز شد', 4600);
           } else {
             const result = await this.api.post(`/api/edge/sources/${encodeURIComponent(id)}/toggle`, {});
             if (result.ping && result.ping.probed) {
@@ -217,6 +241,60 @@ export class CloudflareView {
     }
   }
 
+  /**
+   * The measured country of one location, and whether it matches the label.
+   *
+   * «چرا روی این آی‌پی پرچم کشور دیگری است؟» is answered here: the country comes
+   * from the addresses themselves, and a disagreement is shown (never smoothed
+   * over) with a one-tap way to accept the measurement.
+   */
+  geoCell(source) {
+    const info = source.geo || {};
+    if (source.kind !== 'ip') return '<span class="muted">—</span>';
+    if (!info.measured) {
+      return `<span class="pill" title="هنوز هیچ آدرسی از این لوکیشن اندازه‌گیری نشده">اندازه‌گیری نشده</span>`;
+    }
+    const split = Object.keys(info.counts || {}).length > 1
+      ? ` · ${Object.entries(info.counts).map(([code, count]) => `${esc(code.toUpperCase())}×${Fmt.num(count)}`).join(' / ')}`
+      : '';
+    // No majority is a real answer: the databases split the addresses evenly, so
+    // the label is kept as typed and the split is shown instead of a flag half
+    // the addresses would contradict.
+    if (!info.country) {
+      return `<span class="pill warn" title="دیتابیس‌ها روی یک کشور توافق ندارند؛ برچسب فعلی لوکیشن حفظ شده — می‌توانید برای هر کشور یک لوکیشن جدا بسازید">بدون اکثریت${split}</span>`;
+    }
+    const flag = geoFlag(info.country);
+    const label = `${flag} ${esc(info.name || (info.country || '').toUpperCase())}`.trim();
+    const same = info.country === (source.location || '').toLowerCase();
+    return `<span class="pill ${same ? 'ok' : 'warn'}" dir="rtl" title="از ${Fmt.num(info.measured)} آدرس اندازه‌گیری‌شده از ${Fmt.num(info.total)}">${label}${split}${same ? '' : ' · متفاوت'}</span>`;
+  }
+
+  /** The «هم‌تراز» action, only for a location whose label the data contradicts. */
+  geoAlignButton(source) {
+    const info = source.geo || {};
+    if (source.kind !== 'ip' || !info.country) return '';
+    if (info.country === (source.location || '').toLowerCase()) return '';
+    return `<button class="tbtn ok" data-edge="align" data-id="${esc(source.id)}" data-country="${esc(info.country)}" title="برچسب، پرچم و نام نودها را با کشور واقعی آدرس‌ها هم‌تراز کن">هم‌تراز</button>`;
+  }
+
+  async detectGeo(button = null) {
+    const original = button ? button.innerHTML : '';
+    if (button) { button.disabled = true; button.innerHTML = '<span class="spin-inline"></span> در حال اندازه‌گیری…'; }
+    try {
+      const result = await this.api.post('/api/edge/geo', { limit: 36 });
+      await this.loadEdge();
+      await this.app.reloadNodes();
+      await this.app.loadMetrics();
+      const fixed = (result.changes || []).length;
+      const message = `${Fmt.num(result.checked)} آدرس تازه اندازه‌گیری شد`
+        + (fixed ? ` · ${Fmt.num(fixed)} برچسب اصلاح شد` : '')
+        + (result.stats?.known ? ` · ${Fmt.num(result.stats.known)} آدرس در حافظه` : '');
+      (fixed ? this.toasts.ok : this.toasts.ok)(message, 6200);
+    } finally {
+      if (button) { button.disabled = false; button.innerHTML = original; }
+    }
+  }
+
   async scanEdge(provider = '', button = null) {
     const original = button ? button.innerHTML : '';
     if (button) { button.disabled = true; button.innerHTML = '<span class="spin-inline"></span> در حال اسکن…'; }
@@ -226,7 +304,9 @@ export class CloudflareView {
       await this.app.loadCfIps();
       await this.app.reloadNodes();
       await this.app.loadMetrics();
-      this.toasts.ok(`${Fmt.num(result.found)} آی‌پی تازه · ${Fmt.num(result.probed)} Probe · ${Fmt.num(result.synced)} نود`, 5200);
+      const fixed = (result.geo?.changes || []).length;
+      this.toasts.ok(`${Fmt.num(result.found)} آی‌پی تازه · ${Fmt.num(result.probed)} Probe · ${Fmt.num(result.synced)} نود`
+        + (fixed ? ` · ${Fmt.num(fixed)} برچسب کشور اصلاح شد` : ''), 5200);
     } finally {
       if (button) { button.disabled = false; button.innerHTML = original; }
     }
@@ -314,6 +394,8 @@ export class CloudflareView {
     if (probe) probe.onclick = () => this.app.safe(() => this.probe(probe));
     const edgeScan = $('#btnEdgeScan');
     if (edgeScan) edgeScan.onclick = () => this.app.safe(() => this.scanEdge('', edgeScan));
+    const edgeGeo = $('#btnEdgeGeo');
+    if (edgeGeo) edgeGeo.onclick = () => this.app.safe(() => this.detectGeo(edgeGeo));
     const edgeReload = $('#btnEdgeReload');
     if (edgeReload) edgeReload.onclick = () => this.app.safe(async () => { await this.loadEdge(); this.toasts.ok('منابع لبه بروزرسانی شد', 1600); });
     const edgeSave = $('#edgeSave');

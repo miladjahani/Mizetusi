@@ -83,6 +83,22 @@ export class NodesView {
   }
 
   /* --------------------------------------------------------------------- list */
+  /**
+   * A warning when the address of a node really sits in another country.
+   *
+   * The flag a client shows comes from `node.location`, so a node whose address
+   * measures elsewhere would carry a flag its own IP contradicts — the exact
+   * report that started this. It cannot normally happen (locations are
+   * re-labelled, and a foreign address is not published in one), so this is the
+   * smoke alarm for the cases the panel cannot fix by itself: a clean domain, or
+   * a location an admin pinned.
+   */
+  geoBadge(node) {
+    const info = node.geo || {};
+    if (!info.measured || !info.country || info.country === (node.location || '').toLowerCase()) return '';
+    return `<span class="pill warn" style="padding:2px 8px;font-size:9.5px" dir="ltr" title="کشور این آدرس از خود آدرس پرسیده شده: ${esc(info.country.toUpperCase())} — با برچسب لوکیشن (${esc((node.location || '').toUpperCase())}) نمی‌خواند">IP: ${esc(info.country.toUpperCase())}</span>`;
+  }
+
   render() {
     const host = $('#nodeList');
     if (!host) return;
@@ -97,7 +113,7 @@ export class NodesView {
       <div class="node-row" style="--i:${index};border-color:${node.enabled ? 'transparent' : 'rgba(255,107,129,.18)'}">
         <span class="node-icon ${node.kind === 'cloudflare' ? 'cf' : ''}">${node.kind === 'cloudflare' ? '☁' : 'R'}</span>
         <div class="node-main">
-          <b>${esc(node.name)} ${node.enabled ? '' : '<span class="pill bad" style="padding:2px 8px;font-size:9.5px">غیرفعال</span>'}${node.location ? ` <span class="pill info" style="padding:2px 8px;font-size:9.5px">${esc(node.location.toUpperCase())}</span>` : ''}${node.provider ? ` <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(node.provider)}</span>` : ''}</b>
+          <b>${esc(node.name)} ${node.enabled ? '' : '<span class="pill bad" style="padding:2px 8px;font-size:9.5px">غیرفعال</span>'}${node.location ? ` <span class="pill info" style="padding:2px 8px;font-size:9.5px">${esc(node.location.toUpperCase())}</span>` : ''}${this.geoBadge(node)}${node.provider ? ` <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(node.provider)}</span>` : ''}</b>
           <span>${esc(node.kind)} · ${esc(node.server)}:${esc(node.port)}${node.sni ? ` · SNI ${esc(node.sni)}` : ''}${node.host && node.host !== node.server ? ` · HOST ${esc(node.host)}` : ''}${node.probe && node.probe.hint ? ` · <span class="muted">${esc(node.probe.hint)}</span>` : ''}</span>
         </div>
         <span class="lat ${StatusKit.latencyTone(node.latency_ms)}" title="${esc(this.probeTitle(node))}">${StatusKit.latencyText(node.latency_ms)}</span>

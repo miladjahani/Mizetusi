@@ -58,21 +58,33 @@ MULTI_LOCATIONS = (
 # The ranges below were grouped by geo-locating sampled addresses of each of CF's
 # published ranges (``GET /api/edge/ips`` shows the same addresses the probe
 # measures); the honest TLS probe still decides which one really answers.
+# The grouping below is *measured*, not assumed: every range was sampled and each
+# address put to three independent databases (see :mod:`app.edge.geo` for the
+# full result). What that showed is that the previous grouping had invented a
+# country — the six ranges that used to be «کانادا» answer «United States» on two
+# of the three databases, with only ip-api disagreeing, which is why users saw a
+# Canadian flag on an American address. Those ranges are now one «آمریکا»
+# location, and the one range that was published as «اروپا (میلان/مادرید)»
+# (188.114.96.0/20, measured US *and* ES) moved in with them instead of claiming
+# a country no lookup confirmed.
+#
+# A range label is still only a starting point: the databases disagree per
+# *address*, not just per range (103.21.244.0/22 → US and MY, 162.158.0.0/15 → AU
+# and GT, 197.234.240.0/22 → ZA and CI), so every published address is measured
+# again and the location is re-labelled from that. A group whose label the data
+# contradicts loses it — see ``sources.align_labels``.
 CF_REGIONS = (
-    {'location': 'us', 'name': 'آمریکا',
-     'ranges': ('103.21.244.0/22', '103.31.4.0/22')},
-    {'location': 'ca', 'name': 'کانادا',
+    {'location': 'us', 'name': 'آمریکا', 'max': 6,
      'ranges': ('104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '198.41.128.0/17',
-                '108.162.192.0/18', '173.245.48.0/20')},
+                '108.162.192.0/18', '173.245.48.0/20', '103.21.244.0/22', '103.31.4.0/22',
+                '188.114.96.0/20')},
     {'location': 'nl', 'name': 'هلند (آمستردام)',
      'ranges': ('141.101.64.0/18',)},
-    {'location': 'it', 'name': 'اروپا (میلان/مادرید)',
-     'ranges': ('188.114.96.0/20',)},
-    {'location': 'sg', 'name': 'سنگاپور و توکیو',
+    {'location': 'sg', 'name': 'سنگاپور و آسیا',
      'ranges': ('103.22.200.0/22',)},
     {'location': 'za', 'name': 'آفریقای جنوبی',
      'ranges': ('197.234.240.0/22',)},
-    {'location': 'cr', 'name': 'آمریکای مرکزی',
+    {'location': 'cr', 'name': 'آمریکای مرکزی و برزیل',
      'ranges': ('190.93.240.0/20', '131.0.72.0/22')},
     {'location': 'au', 'name': 'اقیانوسیه',
      'ranges': ('162.158.0.0/15',)},
@@ -93,18 +105,21 @@ IRAN_TUNNELS = (
 PACKS = (
     {
         'id': 'cloudflare-regions',
-        'label': 'کلودفلر — لوکیشن‌های چندگانه (۸ منطقه)',
+        'label': 'کلودفلر — لوکیشن‌های چندگانه (۶ منطقه)',
         'note': ('برای هر گروه از رنج‌های کلودفلر یک لوکیشن جدا ساخته می‌شود؛ هر لوکیشن '
                  'فقط آدرس‌های همان بخش را منتشر می‌کند، پس برچسب کشور و مسیر ورود به '
                  'کلودفلر بین نودها فرق می‌کند و کل ماتریس پروتکل‌ها روی هرکدام می‌آید. '
-                 'همهٔ آن‌ها با Host/SNI دامنهٔ Worker (یا دامنهٔ خودِ پنل پشت کلودفلر) '
-                 'منتشر می‌شوند، پس دامنه را در فیلد بالا وارد کنید. پینگ هر لوکیشن از '
-                 'همین سرور اندازه‌گیری می‌شود؛ چون کلودفلر آدرس‌هایش را در شبکه‌های '
-                 'مختلف متفاوت اعلام می‌کند، ممکن است منطقه‌ای که از سرور پنل جواب '
-                 'ندهد از شبکهٔ کاربران جواب بدهد و برعکس — آدرس پاسخ‌نداده از سابلینک '
-                 'کنار گذاشته می‌شود و می‌توانید در همان لوکیشن رنج یا آی‌پی خودتان را '
-                 'جایگزین کنید. (خروج ترافیک همان سرور رله است؛ چیزی که عوض می‌شود '
-                 'مسیر ورود به کلودفلر است.)'),
+                 'کشور هر گروه از روی خودِ آدرس‌ها اندازه‌گیری می‌شود (چند دیتابیس '
+                 'جغرافیایی، رأی اکثریت) و اگر برچسب گروه با آن نخواند، خودکار اصلاح '
+                 'می‌شود؛ پس مثلاً روی آی‌پی‌ای که کلاینت شما «آمریکا» می‌بیند پرچم '
+                 'کانادا نمی‌افتد. همهٔ آن‌ها با Host/SNI دامنهٔ Worker (یا دامنهٔ خودِ '
+                 'پنل پشت کلودفلر) منتشر می‌شوند، پس دامنه را در فیلد بالا وارد کنید. '
+                 'پینگ هر لوکیشن از همین سرور اندازه‌گیری می‌شود؛ چون کلودفلر '
+                 'آدرس‌هایش را در شبکه‌های مختلف متفاوت اعلام می‌کند، ممکن است '
+                 'منطقه‌ای که از سرور پنل جواب ندهد از شبکهٔ کاربران جواب بدهد و '
+                 'برعکس — آدرس پاسخ‌نداده از سابلینک کنار گذاشته می‌شود و می‌توانید '
+                 'در همان لوکیشن رنج یا آی‌پی خودتان را جایگزین کنید. (خروج ترافیک '
+                 'همان سرور رله است؛ چیزی که عوض می‌شود مسیر ورود به کلودفلر است.)'),
         'provider': 'cloudflare',
         'kind': 'ip',
         'host_required': True,
@@ -217,7 +232,10 @@ def install(pack_id, override_hosts=None, default_host=''):
         payload = {
             'kind': kind, 'host': host, 'port': int(location.get('port') or 443),
             'location': location['location'], 'provider': item['provider'],
-            'max': int(item.get('max') or 3), 'pack': item['id'],
+            # A location may carry its own cap: the American group owns nine of
+            # Cloudflare's ranges and should publish more addresses than a group
+            # with one range.
+            'max': int(location.get('max') or item.get('max') or 3), 'pack': item['id'],
             'label': f"{flags.flag_for(location['location'])} · {label}".strip(),
         }
         if kind == 'ip' and location.get('ranges'):
