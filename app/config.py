@@ -68,6 +68,29 @@ class Settings(BaseSettings):
     xray_fallback_trojan_grpc_port: int = 10106
     direct_host: str = ''
     direct_port: int = 0
+    # ---------------------------------------------- second engines (app/cores)
+    # AnyTLS and TUIC v5 have no Xray inbound at all: sing-box and mihomo are the
+    # only implementations, so both binaries ship with the image and the panel
+    # picks one per protocol. Everything here is opt-in — a protocol is published
+    # only once an admin enables it *and* the port is actually reachable.
+    singbox_binary: str = '/usr/local/bin/sing-box'
+    mihomo_binary: str = '/usr/local/bin/mihomo'
+    singbox_config: str = '/data/sing-box.json'
+    mihomo_config: str = '/data/mihomo.yaml'
+    mihomo_home: str = '/data/mihomo'
+    cores_enabled: bool = True
+    cores_sync_interval: int = 15
+    # Public ports of the hosted protocols. They are free on a VPS; on Railway
+    # each one needs its own TCP proxy (and UDP is not available there at all).
+    core_anytls_port: int = 8444
+    core_tuic_port: int = 8445
+    # These protocols do their own TLS, so the certificate is self-signed for this
+    # name and the links carry ``insecure``. The name is a disguise parameter, the
+    # same job the Reality SNI does, so one innocuous host is used for both.
+    core_sni: str = 'www.cloudflare.com'
+    # Where mihomo's own API is bound (loopback only, and never the default 9090 so
+    # it cannot collide with anything else in this container).
+    mihomo_api: str = '127.0.0.1:9095'
     xray_api_port: int = 10085
     xray_sync_interval: int = 10
     model_config = SettingsConfigDict(env_file='.env', extra='ignore', case_sensitive=False)

@@ -62,6 +62,20 @@ a dedicated subscription per client.
   flag — across the line formats, sing-box and Clash, never into the Xray config (which has
   no such outbound) and never into a per-node subscription. A half-configured endpoint is
   refused rather than handed to users.
+- **Two more engines, for the protocols Xray cannot serve at all.** AnyTLS and TUIC v5 have no
+  Xray inbound — sing-box and mihomo are the only implementations — so both ship inside the image
+  (versions pinned in the `Dockerfile`) and **پیشرفته → هسته‌های دوم** switches each protocol on,
+  sets its public port and picks which of the two hosts it. A hosted protocol is not a bolt-on: it
+  becomes an ordinary transport profile, so it flows through the same subscription generator, the
+  same per-user credential, the node scope, every client format (lines, sing-box JSON, Clash YAML)
+  and the status window, with one self-signed certificate minted for the SNI the links already
+  carry. A protocol is published only when an engine is really running its listener *and* the host
+  can expose that port, and the card names whichever of the two is missing (Railway forwards TCP
+  only, so TUIC stays withheld there until a VPS or `NEXUS_UDP=1`). Both engines are off by
+  default, `sing-box check` / `mihomo -t` validate the rendered config before a single process is
+  replaced, and a config an engine refuses leaves the listener that is already serving running.
+  `tests/test_cores.py` renders both engines' configs and — whenever a real binary is available —
+  has the engine itself accept them and really starts and stops a listener.
 - **The status window keeps its shape, but the client list is split by engine.** Every client
   belongs to a family (`app/subscriptions/clients.py`) and each family is one collapsed
   dropdown: Xray clients (v2rayNG, Exclusive, Streisand, Shadowrocket, V2Box, FoXray) get
@@ -111,6 +125,28 @@ a dedicated subscription per client.
   pinned, and «تشخیص کشور آی‌پی‌ها» in the edge card runs the measurement on demand. The
   «اندازه‌گیری کشور از روی آی‌پی» switch in **شخصی‌سازی** turns the whole thing off, and the
   locations table shows the measured country in its own column when the two disagree.
+- **The client address is resolved, not taken from a header.** Asked whether nginx could be
+  added to the panel as another core, the honest answer is no: a *core* here is a protocol
+  engine (Xray, sing-box, mihomo) and nginx carries none of these protocols, so it would
+  publish exactly zero new nodes — while the one job it is normally used for (one TLS port for
+  the panel *and* every transport) already exists, with Railway/Cloudflare terminating TLS and
+  FastAPI bridging each WebSocket path to a loopback Xray listener. The nginx feature this
+  deployment genuinely needed is `real_ip`, and it was wrong: the container started uvicorn with
+  `--forwarded-allow-ips='*'`, which replaces the TCP peer with the **leftmost**
+  `X-Forwarded-For` entry — and the leftmost entry is whatever the client sent. `app/main.py`
+  keyed the login throttle (10 attempts / 5 minutes) *and* the audit log on that value, so a
+  forged hop meant a fresh bucket per attempt, and Cloudflare's authoritative
+  `CF-Connecting-IP` was ignored entirely. `app/core/clientip.py` now applies nginx's rule the
+  way `set_real_ip_from` does: the chain is read only when the raw socket peer is a trusted
+  proxy (loopback/private by default, plus any range the operator adds), `CF-Connecting-IP` is
+  believed only when the peer really is Cloudflare (its published ranges are checked, because
+  anyone can send that header), and the chain is then walked right-to-left for the first
+  address that is not a trusted proxy. An untrusted peer's headers are ignored outright. uvicorn
+  no longer overwrites the peer (cookie policy already reads `X-Forwarded-Proto` itself, so
+  nothing was lost), and a new **«IP واقعی کاربر»** card in **ابزار شبکه** shows the address the
+  panel acts on, the raw peer, the chain it refused to believe and which rule won — with a
+  switch for the trust rule and a CIDR field — so a wrong trust decision is visible instead of
+  being a black box nobody can correct.
 - **Three new panel tabs.** **شخصی‌سازی** (the end-user experience: banner, support link,
   flags, recommended format, branding, default config count), **ابزار شبکه** (a multi-CDN
   scanner console, TCP/TLS reachability from the server, DoH lookup that bypasses a poisoned
@@ -222,6 +258,7 @@ a dedicated subscription per client.
 | `app/main.py` | FastAPI routes; delegates to the services below |
 | `app/core/settings_store.py` | `SettingsStore` — typed access to the `settings` table |
 | `app/core/security.py` | `SessionManager` (signed sessions + cookie policy), `LoginThrottle` |
+| `app/core/clientip.py` | The real client address behind proxies — nginx's `real_ip` rule (trusted peers, `CF-Connecting-IP`, right-to-left chain) |
 | `app/services/audit.py` | `AuditLog` — append-only admin trail with Persian labels |
 | `app/nodes.py` | `NodeCatalog` (CRUD/sync/bootstrap) and `NodeProbe` (real latency) |
 | `app/subscriptions/generator.py` | Subscription rendering for every target/format |
@@ -389,7 +426,10 @@ is advertised.
   `/api/nodes/ping`, `/api/nodes/sync`, `/api/settings`, `/api/logs`, `/api/backup`,
   `/api/core/status`, `/api/settings/rotate-shadowsocks`
 - Newer admin API: `/api/customization`, `/api/hysteria`, `/api/edge/packs`,
-  `/api/edge/import`, `/api/tools/check`, `/api/tools/dns`, `/api/tools/cidr`, `/api/tools/parse`
+  `/api/edge/import`, `/api/tools/check`, `/api/tools/dns`, `/api/tools/cidr`, `/api/tools/parse`,
+  `/api/net/client-ip` (the resolver's verdict, and the trusted-proxy rule itself),
+  `/api/cores` + `/api/cores/reload` (the second engines: the switch, public port and hosting engine
+  of each hosted protocol, and the reconcile that starts or stops them)
 - Cloudflare Worker: `/api/cloudflare/worker-code`, `/api/cloudflare/worker-download`, `/api/cloudflare/worker-test`
 - PWA: `/manifest.webmanifest`, `/sw.js`, `/static/icons/*`
 

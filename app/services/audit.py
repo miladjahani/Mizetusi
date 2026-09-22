@@ -27,6 +27,9 @@ class AuditLog:
         'settings.clients': 'تنظیمات کلاینت‌ها',
         'settings.password': 'تغییر رمز',
         'settings.session': 'ابطال یا تمدید نشست',
+        'settings.client_ip': 'اعتماد به هدرهای پروکسی',
+        'cores.update': 'تنظیم هسته‌های دوم (AnyTLS/TUIC)',
+        'cores.reload': 'راه‌اندازی مجدد هسته‌های دوم',
         'cloudflare.worker': 'تنظیم Worker',
         'logs.clear': 'پاک‌سازی گزارش',
     }

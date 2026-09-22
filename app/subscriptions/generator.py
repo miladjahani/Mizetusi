@@ -33,7 +33,7 @@ ALIASES = {
 ALIASES.update({cid: fmt for cid, fmt in CLIENT_FORMATS.items() if cid not in FORMATS})
 
 # Targets that pick profiles by protocol or by transport instead of by format.
-PROTOCOL_TARGETS = ('vless', 'trojan', 'vmess', 'ss')
+PROTOCOL_TARGETS = ('vless', 'trojan', 'vmess', 'ss', tp.ANYTLS, tp.TUIC)
 TRANSPORT_TARGETS = ('ws', 'cdn', 'reality', 'grpc', 'httpupgrade', 'xhttp', 'warp')
 LINE_FORMATS = ('auto', 'all', 'base64', 'vless', 'trojan', 'vmess')
 
@@ -68,6 +68,43 @@ def hy2_node():
             'port': int(hy2.get('port') or 443), 'tls': 1, 'host': host,
             'sni': hy2.get('sni') or host, 'latency_ms': None,
             'metadata': {'role': 'hysteria2', 'provider': 'hysteria2'}}
+
+
+def core_node(profile=None):
+    """A pseudo-node for this deployment's own hosted protocols.
+
+    AnyTLS and TUIC answer on the server itself, so they are *one* node — the
+    origin — with a raw port each, not a node per edge location: a CDN forwards
+    neither a raw TLS connection nor QUIC to an origin. Naming it after the
+    origin node keeps a client list readable (the same server appears once per
+    transport family) and keeps its country flag and label truthful.
+    """
+    core = tp.core_config() or {}
+    host = str(core.get('host') or '')
+    node = None
+    try:
+        from app.nodes import origin_node_name
+        found = rows('SELECT * FROM nodes WHERE name=?', (origin_node_name(),))
+        node = dict(found[0]) if found else None
+    except Exception:
+        node = None
+    if not node:
+        node = {'name': host or 'NEXUS', 'kind': 'core', 'server': host, 'port': 443,
+                'tls': 1, 'host': host, 'sni': core.get('sni') or host,
+                'latency_ms': None, 'metadata': {}}
+    node = dict(node)
+    node.update({'kind': node.get('kind') or 'core', 'server': host, 'host': host,
+                 'sni': core.get('sni') or host, 'tls': 1})
+    return node
+
+
+def _is_origin(node):
+    """Whether a node is this deployment itself (so a hosted link belongs on it)."""
+    try:
+        from app.nodes import origin_node_name
+        return str((node or {}).get('name') or '') == origin_node_name()
+    except Exception:
+        return False
 
 
 def _profile_for(profile_id):
@@ -167,6 +204,41 @@ def hy2_uri(user, node, profile, prefix=''):
             f"{hy2['host']}:{int(hy2['port'])}?{_params(query)}#{name}")
 
 
+def anytls_uri(user, node, profile, prefix=''):
+    """AnyTLS as the ``anytls://`` link its clients import.
+
+    The query keys are the ones the clients actually read for this protocol
+    (``insecure``/``sni``/``fp``), and the password is the user's own credential —
+    the hosted listener authenticates one entry per user, exactly like the Xray
+    inbounds do.
+    """
+    address, port = tp.node_address(node, profile)
+    core = tp.core_config() or {}
+    query = {'insecure': '1', 'sni': core.get('sni') or address,
+             'fp': user.get('fingerprint') or 'chrome'}
+    name = urllib.parse.quote(label(user, node, profile, prefix), safe='')
+    return (f"anytls://{urllib.parse.quote(user['uuid'], safe='')}@"
+            f"{address}:{port}?{_params(query)}#{name}")
+
+
+def tuic_uri(user, node, profile, prefix=''):
+    """TUIC v5 as the ``tuic://`` link its clients import.
+
+    Two spellings of "the certificate is self-signed" are in use — ``allow_insecure``
+    is what v2rayN writes and reads, ``insecure`` is what the sing-box based
+    clients use — so both are sent: unknown query parameters are ignored, and
+    sending only one would leave the other family of clients rejecting a
+    self-signed certificate that can never be anything else.
+    """
+    address, port = tp.node_address(node, profile)
+    core = tp.core_config() or {}
+    uuid = urllib.parse.quote(user['uuid'], safe='')
+    query = {'allow_insecure': '1', 'insecure': '1', 'sni': core.get('sni') or address,
+             'congestion_control': 'bbr'}
+    name = urllib.parse.quote(label(user, node, profile, prefix), safe='')
+    return f"tuic://{uuid}:{uuid}@{address}:{port}?{_params(query)}#{name}"
+
+
 def vmess_uri(user, node, profile, prefix=''):
     """VMess has no parameterised URI: it is one base64 JSON blob."""
     address, port = tp.node_address(node, profile)
@@ -190,7 +262,7 @@ def vmess_uri(user, node, profile, prefix=''):
 
 
 URI_BUILDERS = {'vless': vless_uri, 'trojan': trojan_uri, 'vmess': vmess_uri, 'ss': ss_uri,
-                'hy2': hy2_uri}
+                'hy2': hy2_uri, 'anytls': anytls_uri, 'tuic': tuic_uri}
 
 
 def uri(user, node, profile, prefix=''):
@@ -228,6 +300,21 @@ def _transport(node, profile):
 def singbox(user, node, profile, prefix=''):
     address, port = tp.node_address(node, profile)
     protocol = profile['protocol']
+    if profile.get('group') == tp.CORE:
+        # A hosted protocol terminates its own TLS on this server, one credential
+        # per user, so the outbound names the user's uuid instead of an endpoint
+        # password. ``insecure`` is unavoidable: the certificate is self-signed. 
+        core = tp.core_config() or {}
+        tls = {'enabled': True, 'server_name': core.get('sni') or address, 'insecure': True}
+        entry = {'tag': label(user, node, profile, prefix), 'server': address, 'server_port': port}
+        if protocol == tp.ANYTLS:
+            entry.update({'type': 'anytls', 'password': user['uuid'],
+                          'tls': {**tls, 'utls': {'enabled': True,
+                                                  'fingerprint': user.get('fingerprint') or 'chrome'}}})
+            return entry
+        entry.update({'type': 'tuic', 'uuid': user['uuid'], 'password': user['uuid'],
+                      'congestion_control': 'bbr', 'udp_relay_mode': 'native', 'tls': tls})
+        return entry
     if profile.get('group') == tp.HY2:
         hy2 = tp.hysteria_config() or {}
         entry = {'tag': label(user, node, profile, prefix), 'type': 'hysteria2',
@@ -265,6 +352,17 @@ def singbox(user, node, profile, prefix=''):
 
 def clash(user, node, profile, prefix=''):
     address, port = tp.node_address(node, profile)
+    if profile.get('group') == tp.CORE:
+        core = tp.core_config() or {}
+        entry = {'name': label(user, node, profile, prefix), 'server': address, 'port': port,
+                 'udp': True, 'sni': core.get('sni') or address, 'skip-cert-verify': True,
+                 'client-fingerprint': user.get('fingerprint') or 'chrome'}
+        if profile['protocol'] == tp.ANYTLS:
+            entry.update({'type': 'anytls', 'password': user['uuid']})
+        else:
+            entry.update({'type': 'tuic', 'uuid': user['uuid'], 'password': user['uuid'],
+                          'congestion-controller': 'bbr', 'udp-relay-mode': 'native'})
+        return entry
     if profile.get('group') == tp.HY2:
         hy2 = tp.hysteria_config() or {}
         entry = {'name': label(user, node, profile, prefix), 'type': 'hysteria2',
@@ -313,6 +411,10 @@ def clash(user, node, profile, prefix=''):
 def xray(user, node, profile, prefix=''):
     address, port = tp.node_address(node, profile)
     protocol = profile['protocol']
+    if profile.get('group') == tp.CORE:
+        # Xray has no AnyTLS or TUIC outbound either: they are served by sing-box
+        # and mihomo only, which is exactly why they are hosted ones now.
+        raise ValueError(f'xray cannot express {protocol}')
     if protocol == 'hy2':
         # Xray has no Hysteria2 outbound at all: QUIC terminates in a hysteria2
         # server, so the Xray JSON subscription simply omits this entry instead of
@@ -441,35 +543,48 @@ def _disabled_message(protocol):
     return f"پروتکل {str(protocol).upper()} برای این کاربر فعال نشده است"
 
 
-def entry_pairs(user, nodes, profiles, include_hy2=True):
+def entry_pairs(user, nodes, profiles, include_extras=True):
     """The (node × profile) pairs a subscription really contains.
 
     This is the **only** place the per-user config cap is applied, so the line
     formats, sing-box, Clash and Xray hand out exactly the same set and a client
-    that imports several of them sees one consistent list. The Hysteria2 node is
-    appended once (it is a single external endpoint), and included only when the
-    caller wants it — a per-node subscription must not drag it in.
+    that imports several of them sees one consistent list.
+
+    Two kinds of entry are not tied to the node list: the external Hysteria2
+    endpoint (one shared endpoint) and the hosted protocols (one node — this
+    server — with a raw port each). Both are appended once and only when the
+    caller wants them, because a per-node subscription must not drag them in.
     """
-    node_profiles = [p for p in profiles if p.get('group') != tp.HY2]
+    extra_groups = (tp.HY2, tp.CORE)
+    node_profiles = [p for p in profiles if p.get('group') not in extra_groups]
     pairs = [(n, p) for n in nodes for p in node_profiles]
-    if include_hy2:
+    if include_extras:
         pairs += [(hy2_node(), p) for p in profiles if p.get('group') == tp.HY2]
+        # A hosted protocol answers on *this* server, so it belongs to the origin
+        # slice and follows the user's node scope like the origin node does: a
+        # user scoped to «فقط نودهای مولتی‌لوکیشن» or «فقط آمریکا» must not be
+        # handed a raw-port node on the panel's own address.
+        core = core_node()
+        if scopes.matches(core, tp.user_scope(user)):
+            pairs += [(core, p) for p in profiles if p.get('group') == tp.CORE]
     limit = tp.user_max_configs(user)
     return pairs[:limit] if limit else pairs
 
 
-def _json_subscription(user, nodes, profiles, kind, prefix='', include_hy2=True):
+def _json_subscription(user, nodes, profiles, kind, prefix='', include_extras=True):
     builder = {'singbox': singbox, 'clash': clash, 'xray': xray}[kind]
     key = 'proxies' if kind == 'clash' else 'outbounds'
     entries = []
-    for node, profile in entry_pairs(user, nodes, profiles, include_hy2):
-        if kind == 'xray' and profile.get('group') == tp.HY2:
-            continue  # Xray simply has no hysteria2 outbound
+    for node, profile in entry_pairs(user, nodes, profiles, include_extras):
+        # Xray has neither a hysteria2 nor an AnyTLS/TUIC outbound: those entries
+        # are left out rather than emitted as a line every Xray client rejects.
+        if kind == 'xray' and profile.get('group') in (tp.HY2, tp.CORE):
+            continue
         entries.append(builder(user, node, profile, prefix))
     return json.dumps({key: entries}, ensure_ascii=False, indent=2)
 
 
-def render(user, base, target, nodes=None, prefix='', include_hy2=True):
+def render(user, base, target, nodes=None, prefix='', include_extras=True):
     target = normalize_target(target)
     # With no explicit node list the user's own scope decides what is published,
     # so every caller (the subscription routes *and* the panel's previews) hands
@@ -484,7 +599,7 @@ def render(user, base, target, nodes=None, prefix='', include_hy2=True):
     # A client id resolves to the format that client imports best.
     resolved = CLIENT_FORMATS.get(target, target)
     if resolved in ('singbox', 'clash', 'xray'):
-        return _json_subscription(user, nodes, profiles_for('all', protocols), resolved, prefix, include_hy2)
+        return _json_subscription(user, nodes, profiles_for('all', protocols), resolved, prefix, include_extras)
     if resolved == 'json':
         return json.dumps({'transports': [{'id': p['id'], 'tag': p['tag'], 'protocol': p['protocol'],
                                           'network': p['network'], 'group': p['group']}
@@ -501,14 +616,14 @@ def render(user, base, target, nodes=None, prefix='', include_hy2=True):
             # A profile set with no link form at all (Reality only, when it is
             # the sole published transport) still returns something a client can
             # import instead of a 400 that reads as "broken".
-            return _json_subscription(user, nodes, profiles, 'singbox', prefix, include_hy2)
+            return _json_subscription(user, nodes, profiles, 'singbox', prefix, include_extras)
         raise ValueError(f"{target}: روی این نصب هنوز منتشر نشده است "
                          f"(نیازمند پورت TCP اختصاصی یا فعال‌سازی WARP)")
     # Node-major and fastest-first: the first entries of the subscription are the
     # fastest node's full transport set, which is what a client shows on top.
     # Every entry name carries its country flag, so a mixed-location list stays
     # readable in a client that shows nothing but the remark.
-    lines = [uri(user, n, p, prefix) for n, p in entry_pairs(user, nodes, line_profiles, include_hy2)]
+    lines = [uri(user, n, p, prefix) for n, p in entry_pairs(user, nodes, line_profiles, include_extras)]
     body = '\n'.join(lines) + '\n'
     if resolved == 'base64':
         return base64.b64encode(body.encode()).decode()
@@ -516,8 +631,14 @@ def render(user, base, target, nodes=None, prefix='', include_hy2=True):
 
 
 def node_links(user, node, prefix=''):
-    """Every raw link combination for ONE node (used by the panel drawers)."""
-    profiles = tp.available_profiles(tp.user_protocols(user))
+    """Every raw link combination for ONE node (used by the panel drawers).
+
+    A hosted protocol answers on this deployment, not on an edge location, so it
+    only appears in the drawer of the origin node — offering an AnyTLS link under
+    a Cloudflare node's name would dial a different server than the card says.
+    """
+    profiles = [p for p in tp.available_profiles(tp.user_protocols(user))
+                if p.get('group') != tp.CORE or _is_origin(node)]
     entries = []
     for profile in profiles:
         entry = {'id': profile['id'], 'tag': profile['tag'], 'protocol': profile['protocol'],
@@ -527,9 +648,10 @@ def node_links(user, node, prefix=''):
             entry['link'] = uri(user, node, profile, prefix)
         entry['singbox'] = singbox(user, node, profile, prefix)
         entry['clash'] = clash(user, node, profile, prefix)
-        # Hysteria2 has no Xray outbound, so that column stays empty for it
-        # rather than failing the whole drawer.
-        entry['xray'] = None if profile.get('group') == tp.HY2 else xray(user, node, profile, prefix)
+        # Neither Hysteria2 nor a hosted protocol has an Xray outbound, so that
+        # column stays empty for them rather than failing the whole drawer.
+        entry['xray'] = (None if profile.get('group') in (tp.HY2, tp.CORE)
+                         else xray(user, node, profile, prefix))
         entries.append(entry)
     primary = next((p for p in entries if p['id'] == 'vless-ws'), entries[0] if entries else None)
     return {

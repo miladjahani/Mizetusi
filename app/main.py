@@ -33,6 +33,8 @@ from app.api_extra import router as extra_router
 from app import runtime
 from app.core.settings_store import store
 from app.core.security import SessionManager, LoginThrottle
+from app.core.clientip import client_ip as resolve_client_ip
+from app.cores import service as cores
 from app.services.audit import AuditLog
 from app import xray
 import websockets
@@ -60,7 +62,10 @@ GENERAL_SETTING_KEYS=('public_base_url','sub_prefix','default_protocol','default
                      'default_scope',
                      # Hysteria2 endpoint (the password is deliberately absent: it is
                      # never echoed back to the panel, only its presence is reported).
-                     'hy2_enabled','hy2_host','hy2_port','hy2_sni','hy2_obfs','hy2_insecure','hy2_label')
+                     'hy2_enabled','hy2_host','hy2_port','hy2_sni','hy2_obfs','hy2_insecure','hy2_label',
+                     # Which address the panel believes a request came from — see
+                     # app/core/clientip.py and «شبکه و لبه → IP واقعی کاربر».
+                     'trust_client_ip','trusted_proxy_cidrs')
 # Subscription shapes the status window offers as its four main buttons. The
 # matching validation lives next to the endpoints that own them
 # (``app/api_extra.py``), so nothing is declared twice here.
@@ -105,6 +110,22 @@ def _audit(action,detail=''):
 def _flags_on():
     """Whether subscription labels carry the country flag (on by default)."""
     return (_setting('flags_enabled') or '1') != '0'
+
+
+def _trust_cdn_headers():
+    """Whether CDN/proxy headers may be believed for the client address."""
+    return (_setting('trust_client_ip') or '1') != '0'
+
+
+def _client_ip(request:Request):
+    """The real client address of a request (app/core/clientip.py).
+
+    Never ``request.client.host`` directly: behind Railway/Cloudflare that is the
+    proxy, and the raw header is client-controlled. The login throttle and the
+    audit log both key on this value.
+    """
+    return resolve_client_ip(request,extra_trusted=_setting('trusted_proxy_cidrs') or '',
+                             trust_headers=_trust_cdn_headers())
 
 
 def _brand():
@@ -258,10 +279,13 @@ async def bootstrap_nodes_full():
 async def lifespan(app:FastAPI):
     init_db(); bootstrap(); ensure_nodes(); bootstrap_nodes()
     await xray.start_or_reload(force=True)
-    task=asyncio.create_task(maintenance()); cf_task=asyncio.create_task(cf_loop(settings.cf_probe_interval)); xray_task=asyncio.create_task(xray.loop()); ping_task=asyncio.create_task(ping_loop(settings.cf_probe_interval,_ping_interval)); auto_task=asyncio.create_task(bootstrap_nodes_full()); cat_task=asyncio.create_task(catalog_loop())
+    # The second engines (AnyTLS/TUIC) reconcile themselves, then keep doing so:
+    # an admin switch is picked up without a restart.
+    await cores.sync(force=True)
+    task=asyncio.create_task(maintenance()); cf_task=asyncio.create_task(cf_loop(settings.cf_probe_interval)); xray_task=asyncio.create_task(xray.loop()); ping_task=asyncio.create_task(ping_loop(settings.cf_probe_interval,_ping_interval)); auto_task=asyncio.create_task(bootstrap_nodes_full()); cat_task=asyncio.create_task(catalog_loop()); cores_task=asyncio.create_task(cores.loop())
     try: yield
     finally:
-        task.cancel(); cf_task.cancel(); xray_task.cancel(); ping_task.cancel(); auto_task.cancel(); cat_task.cancel()
+        task.cancel(); cf_task.cancel(); xray_task.cancel(); ping_task.cancel(); auto_task.cancel(); cat_task.cancel(); cores_task.cancel()
         try: await task
         except asyncio.CancelledError: pass
         try: await cf_task
@@ -274,6 +298,10 @@ async def lifespan(app:FastAPI):
         except asyncio.CancelledError: pass
         try: await cat_task
         except asyncio.CancelledError: pass
+        try: await cores_task
+        except asyncio.CancelledError: pass
+        try: await cores.stop_all()
+        except Exception: pass
         try: await xray._stop()
         except Exception: pass
 app=FastAPI(title=settings.app_name,version=APP_VERSION,lifespan=lifespan)
@@ -302,7 +330,7 @@ def home(request:Request,token:str=''):
 def login_page(request:Request): return templates.TemplateResponse(request,'login.html',{'brand':_brand()})
 @app.post('/api/login')
 async def login(request:Request):
-    ip=request.client.host if request.client else 'unknown'
+    ip=_client_ip(request)
     if throttle.blocked(ip): raise HTTPException(429,'too many login attempts')
     try: body=await request.json()
     except Exception: body=None
@@ -631,9 +659,10 @@ def subscription(request:Request,token:str,target:str='auto',node:str='',locatio
     # Generate from the live Node Catalog on every request. This means a client
     # refresh automatically receives the current origin node plus every healthy
     # clean IP / clean domain of every configured location.
-    # The Hysteria2 entry belongs to the whole subscription, not to one node, so a
-    # per-node address (``?node=``) leaves it out.
-    try: text=render(u,public_base(request),target,nodes,_sub_prefix(),include_hy2=not node)
+    # The Hysteria2 endpoint and the hosted protocols belong to the whole
+    # subscription, not to one node, so a per-node address (``?node=``) leaves
+    # them out.
+    try: text=render(u,public_base(request),target,nodes,_sub_prefix(),include_extras=not node)
     except ValueError as e: raise HTTPException(400,str(e))
     cap=transports.user_max_configs(u)
     headers={'Cache-Control':'no-store, max-age=0','X-Content-Type-Options':'nosniff',

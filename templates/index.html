@@ -426,6 +426,23 @@
         </div>
       </div>
 
+      <div class="panel glass" style="margin-top:13px" data-acc="IP واقعی کاربر|چه آدرسی پشت CDN و پروکسی‌ها دیده می‌شود و کدام هدرها قابل‌اعتمادند|shield">
+        <div class="panel-head">
+          <div><h2>IP واقعی کاربر</h2><p class="sub">همان کاری که real_ip در nginx می‌کند: فقط هدر پروکسی‌های مورداعتماد خوانده می‌شود، پس یک IP جعل‌شده نه در لاگ می‌نشیند و نه سقف تلاش ورود را دور می‌زند</p></div>
+          <span class="pill" id="tlIpTag">—</span>
+        </div>
+        <div class="stats" style="margin-top:0" id="tlIpStats"></div>
+        <div class="switch-row"><div class="txt"><b>اعتماد به هدرهای CDN</b><span>خاموش = فقط آدرس مستقیم اتصال گزارش می‌شود؛ مناسب سروری که خودش روی اینترنت است</span></div>
+          <div class="switch" id="tlIpTrust"></div></div>
+        <label>پروکسی‌های مورداعتماد <span class="hint">CIDR با کاما — لوپ‌بک و شبکه‌های داخلی همیشه مورداعتمادند</span></label>
+        <input id="tlIpCidrs" dir="ltr" placeholder="203.0.113.0/24, 198.51.100.7">
+        <div class="actions">
+          <button class="primary" id="tlIpSave">ذخیره</button>
+          <button class="secondary" id="tlIpRefresh">بررسی دوباره</button>
+        </div>
+        <div class="kv-list" id="tlIpOut"></div>
+      </div>
+
       <div class="panel glass" style="margin-top:13px" data-acc="تحلیل سابلینک|هاست‌ها و پرچم کشورها را جدا می‌کند و به لوکیشن تبدیل می‌کند|search">
         <div class="panel-head">
           <div><h2>تحلیل سابلینک</h2><p class="sub">متن کانفیگ‌ها یا آدرس سابلینک را بدهید: پروتکل‌ها، هاست‌ها و پرچم کشورها را جدا می‌کند و در صورت خواستن، به لوکیشن تبدیل می‌کند</p></div>
@@ -474,6 +491,24 @@
           <label>دامنه‌های جایگزین / Host-SNI <span class="hint">اختیاری برای بسته‌های دامنه‌محور — برای بستهٔ کلودفلر دامنهٔ Worker یا دامنهٔ پنل (هر خط/کاما یک دامنه، به ترتیب روی لوکیشن‌ها می‌نشیند)</span></label>
           <input id="adPackHosts" dir="ltr" placeholder="worker.example.workers.dev">
         </div>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px" data-acc="هسته‌های دوم (sing-box · mihomo)|پروتکل‌هایی که Xray ندارد: AnyTLS و TUIC v5 — هر کدام با یک پورت و یک موتور|zap">
+        <div class="panel-head">
+          <div><h2>هسته‌های دوم (sing-box · mihomo)</h2><p class="sub">AnyTLS و TUIC v5 در Xray اینباند ندارند؛ روی همین سرور با sing-box یا mihomo سرو می‌شوند و مثل بقیهٔ نودها در همهٔ سابلینک‌ها منتشر می‌شوند — هر کاربر یک اعتبار جدا دارد</p></div>
+          <span class="pill" id="coTag">—</span>
+        </div>
+        <div class="stats" style="margin-top:0" id="coStats"></div>
+        <div id="coProfiles"></div>
+        <div class="field-grid">
+          <div><label>نام SNI گواهی <span class="hint">گواهی خودامضا برای همین نام صادر می‌شود؛ لینک‌ها insecure هستند</span></label><input id="coSni" dir="ltr" placeholder="www.cloudflare.com"></div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="coSave">ذخیره و انتشار</button>
+          <button class="secondary" id="coReload">راه‌اندازی مجدد موتورها</button>
+        </div>
+        <div class="kv-list" id="coEngines"></div>
+        <div class="kv-list" id="coNotes"></div>
       </div>
 
       <div class="grid-2b" style="margin-top:13px">

@@ -24,6 +24,8 @@ import urllib.parse
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.core import clientip
+from app.cores import service as core_service
 from app.core.settings_store import store
 from app.db import execute
 from app.edge import packs as edge_packs
@@ -481,6 +483,112 @@ async def _json_body(request):
     except Exception:
         body = None
     return body if isinstance(body, dict) else {}
+
+
+# ------------------------------------------------------------------ client ip
+def _trust_cdn_headers():
+    return (_setting('trust_client_ip') or '1') != '0'
+
+
+def _client_ip_state(request, state=None):
+    """What the panel believes this request's address is, and the evidence.
+
+    The panel renders every field — the raw peer, the forwarded chain and which
+    rule won — because a trust decision nobody can inspect is a trust decision
+    nobody can fix. The default trusted ranges are listed too, so it is obvious
+    that a same-host nginx or the platform's own proxy is already covered.
+    """
+    extra = _setting('trusted_proxy_cidrs') or ''
+    resolved = state or clientip.resolve(request, extra_trusted=extra,
+                                         trust_headers=_trust_cdn_headers())
+    return {
+        **resolved,
+        'trust_cdn_headers': _trust_cdn_headers(),
+        'trusted_proxy_cidrs': extra,
+        'default_trusted': list(clientip.DEFAULT_TRUSTED),
+        'cloudflare_ranges': len(clientip.CLOUDFLARE),
+    }
+
+
+@router.get('/api/net/client-ip')
+def get_client_ip(request: Request):
+    """The address behind the proxies, the way nginx ``real_ip`` resolves it."""
+    _auth(request)
+    return {'success': True, **_client_ip_state(request)}
+
+
+@router.post('/api/net/client-ip')
+async def save_client_ip(request: Request):
+    """Store the trusted-proxy rule (the panel's ``set_real_ip_from``).
+
+    An unusable CIDR is a 400 instead of a silently dropped token: an operator
+    who typed a range has to know whether it took effect.
+    """
+    _auth(request)
+    body = await _json_body(request)
+    changed = []
+    if 'trust_client_ip' in body:
+        value = str(body['trust_client_ip']).strip().lower()
+        _set('trust_client_ip', '0' if value in ('0', 'false', 'off', 'no') else '1')
+        changed.append('trust_client_ip')
+    if 'trusted_proxy_cidrs' in body:
+        raw = str(body['trusted_proxy_cidrs'] or '').strip()
+        unusable = clientip.invalid_cidrs(raw)
+        if unusable:
+            raise HTTPException(400, 'این مقدارها آی‌پی یا CIDR معتبر نیستند: ' + ', '.join(unusable[:6]))
+        _set('trusted_proxy_cidrs', raw)
+        changed.append('trusted_proxy_cidrs')
+    if changed:
+        _audit('settings.client_ip', ','.join(changed))
+    return {'success': True, 'changed': changed, **_client_ip_state(request)}
+
+
+# ---------------------------------------------------------------------- cores
+def _sync_summary(result):
+    """Just enough of a sync result to show on the card after saving."""
+    return {engine: {'running': bool(item.get('running')), 'profiles': item.get('profiles') or [],
+                     'reason': item.get('reason') or ''}
+            for engine, item in (result or {}).items()}
+
+
+@router.get('/api/cores')
+def get_cores(request: Request):
+    """The second engines: what each one serves and what is actually published."""
+    _auth(request)
+    return {'success': True, **core_service.catalog()}
+
+
+@router.post('/api/cores')
+async def save_cores(request: Request):
+    """Store the switch, public port and hosting engine of every hosted protocol.
+
+    The engines are reconciled before the answer goes out, so the panel shows the
+    real result of the change (a port the host cannot expose is reported as
+    withheld, not as published).
+    """
+    _auth(request)
+    body = await _json_body(request)
+    updates = dict(body.get('profiles') or {}) if isinstance(body.get('profiles'), dict) else {}
+    if 'sni' in body:
+        updates['sni'] = body['sni']
+    try:
+        changed = core_service.save(updates)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    result = await core_service.sync(force=True)
+    if changed:
+        _audit('cores.update', ','.join(changed))
+    return {'success': True, 'changed': changed, 'sync': _sync_summary(result), **core_service.catalog()}
+
+
+@router.post('/api/cores/reload')
+async def reload_cores(request: Request):
+    """Bring the engines to the state the settings ask for, right now."""
+    _auth(request)
+    result = await core_service.sync(force=True)
+    _audit('cores.reload', ' '.join(f"{engine}:{'up' if item.get('running') else 'down'}"
+                                    for engine, item in result.items()) or 'nothing enabled')
+    return {'success': True, 'sync': _sync_summary(result), **core_service.catalog()}
 
 
 # --------------------------------------------------------------------- scopes

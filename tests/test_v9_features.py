@@ -233,7 +233,7 @@ def test_hysteria2_stays_out_until_it_is_configured_and_then_reaches_every_forma
 
     # It is one shared external endpoint, so a per-node subscription leaves it out
     # and Xray (which has no hysteria2 outbound) never carries it.
-    assert 'hysteria2://' not in render(user, 'https://panel.example.com', 'auto', include_hy2=False)
+    assert 'hysteria2://' not in render(user, 'https://panel.example.com', 'auto', include_extras=False)
     assert 'hysteria2' not in render(user, 'https://panel.example.com', 'xray')
 
     off = client.post('/api/hysteria', headers=h(), json={'action': 'disable'}).json()

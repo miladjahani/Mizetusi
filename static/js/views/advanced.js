@@ -29,11 +29,13 @@ export class AdvancedView {
       this.api.get('/api/edge/packs'),
       this.api.get('/api/transports'),
       this.api.get('/api/edge'),
+      this.api.get('/api/cores'),
     ]);
-    const [hy2, packs, transports, edge] = results.map((item) => (item.status === 'fulfilled' ? item.value : null));
+    const [hy2, packs, transports, edge, cores] = results.map((item) => (item.status === 'fulfilled' ? item.value : null));
     if (hy2) this.store.set('hysteria', hy2);
     if (packs) this.store.set('packs', packs);
     if (transports) this.store.set('transports', transports);
+    if (cores) this.store.set('cores', cores);
     if (edge) {
       this.store.set('edge', edge);
       const select = $('#adImportProvider');
@@ -51,6 +53,74 @@ export class AdvancedView {
     this.renderHy2();
     this.renderPacks();
     this.renderProfiles();
+    this.renderCores();
+  }
+
+  /* --------------------------------------------------- second engines */
+  renderCores() {
+    const data = this.store.get('cores');
+    if (!data) return;
+    const sni = $('#coSni');
+    if (sni && document.activeElement !== sni) sni.value = data.sni || '';
+    const catalog = data.catalog || [];
+    const published = catalog.filter((item) => item.published);
+    const running = (data.engines || []).filter((item) => item.running);
+    const tag = $('#coTag');
+    if (tag) {
+      tag.className = `pill ${published.length ? 'ok' : 'warn'}`;
+      tag.innerHTML = published.length
+        ? `<i class="dot"></i> ${Fmt.num(published.length)} پروتکل منتشرشده`
+        : 'هیچ پروتکلی منتشر نشده';
+    }
+    const stats = $('#coStats');
+    if (stats) {
+      stats.innerHTML = `
+        <div class="stat glass a-ok"><div class="top"><span class="lbl">پروتکل منتشرشده</span><span class="ico">${ico('zap', 15)}</span></div>
+          <div class="val">${Fmt.num(published.length)}</div><div class="foot">از ${Fmt.num(catalog.length)} پروتکل</div></div>
+        <div class="stat glass"><div class="top"><span class="lbl">موتور فعال</span><span class="ico">${ico('server', 15)}</span></div>
+          <div class="val">${Fmt.num(running.length)}</div><div class="foot">${esc(running.map((item) => item.label).join(' · ') || 'هیچ موتوری روشن نیست')}</div></div>
+        <div class="stat glass a-violet"><div class="top"><span class="lbl">آدرس انتشار</span><span class="ico">${ico('globe', 15)}</span></div>
+          <div class="val" dir="ltr" style="font-size:15px">${esc(data.host || '—')}</div><div class="foot">${data.udp ? 'TCP و UDP در دسترس' : 'بدون UDP'}</div></div>`;
+    }
+    const host = $('#coProfiles');
+    if (host) {
+      host.innerHTML = catalog.map((item) => `
+        <div class="setting-row${item.published ? ' ok' : ''}">
+          <div class="txt">
+            <b>${esc(item.tag)}${item.published ? ' · منتشرشده' : (item.enabled ? ' · منتشر نشده' : '')}</b>
+            <p>${esc(item.note)}</p>
+            ${item.enabled && !item.reachable ? `<p class="muted" style="margin-top:4px">${esc(item.reason)}</p>` : ''}
+          </div>
+          <div class="actions" style="margin:0;gap:6px;flex-wrap:wrap">
+            <input id="coPort-${esc(item.id)}" type="number" min="1" max="65535" value="${Fmt.num(item.port)}" dir="ltr" style="width:98px" title="پورت عمومی">
+            <select id="coEngine-${esc(item.id)}" style="width:auto" title="موتوری که این پروتکل را سرو می‌کند">
+              <option value="singbox"${item.engine === 'singbox' ? ' selected' : ''}>sing-box</option>
+              <option value="mihomo"${item.engine === 'mihomo' ? ' selected' : ''}>mihomo</option>
+            </select>
+            <div class="switch${item.enabled ? ' on' : ''}" id="coToggle-${esc(item.id)}" data-co-toggle="${esc(item.id)}"></div>
+          </div>
+        </div>`).join('') || '<div class="empty">پروتکلی تعریف نشده است.</div>';
+      $$('[data-co-toggle]', host).forEach((element) => {
+        element.onclick = () => element.classList.toggle('on');
+      });
+    }
+    const engines = $('#coEngines');
+    if (engines) {
+      engines.innerHTML = (data.engines || []).map((item) => `
+        <div class="kv-line"><span>${esc(item.label)} <span class="hint">${esc(item.binary)}</span></span>
+          <b dir="ltr" style="white-space:normal">${item.installed
+            ? (item.running ? `Running${item.pid ? ` · PID ${Fmt.num(item.pid)}` : ''}` : 'خاموش')
+            : 'نصب نیست'}${(item.profiles || []).length ? ` · ${esc((item.profiles || []).join(' + '))}` : ''}${
+            item.error ? ` · ${esc(Fmt.truncate(item.error, 90))}` : ''}</b></div>`).join('');
+    }
+    const notes = $('#coNotes');
+    if (notes) {
+      notes.innerHTML = [
+        ...(data.notes || []).map((note) => `<div class="kv-line"><span>نکته</span><b style="white-space:normal">${esc(note)}</b></div>`),
+        `<div class="kv-line"><span>SNI گواهی</span><b dir="ltr">${esc(data.sni || '—')}</b></div>`,
+        `<div class="kv-line"><span>اعتبار کاربران</span><b>هر کاربر یک UUID جدا دارد؛ غیرفعال کردن کاربر این نودها را هم قطع می‌کند</b></div>`,
+      ].join('');
+    }
   }
 
   renderHy2() {
@@ -196,6 +266,36 @@ export class AdvancedView {
     }
   }
 
+  async saveCores() {
+    const catalog = this.store.get('cores')?.catalog || [];
+    const profiles = {};
+    catalog.forEach((item) => {
+      profiles[item.id] = {
+        enabled: $(`#coToggle-${item.id}`)?.classList.contains('on') ? '1' : '0',
+        port: Number($(`#coPort-${item.id}`)?.value || item.port),
+        engine: $(`#coEngine-${item.id}`)?.value || item.engine,
+      };
+    });
+    const data = await this.api.post('/api/cores', { profiles, sni: $('#coSni')?.value.trim() || '' });
+    this.store.set('cores', data);
+    this.renderCores();
+    // A protocol that cannot be reached here is not a silent success: the engine
+    // reports why, and that reason is what the admin needs to act on.
+    const failed = Object.entries(data.sync || {}).filter(([, item]) => item.reason);
+    if (failed.length) this.toasts.err(`${failed[0][0]}: ${failed[0][1].reason}`, 9000);
+    else this.toasts.ok('تنظیمات هسته‌های دوم ذخیره شد');
+    await this.app.reloadNodes();
+  }
+
+  async reloadCores() {
+    const data = await this.api.post('/api/cores/reload', {});
+    this.store.set('cores', data);
+    this.renderCores();
+    const up = Object.values(data.sync || {}).filter((item) => item.running);
+    this.toasts.ok(`${Fmt.num(up.length)} موتور فعال است`);
+    await this.app.reloadNodes();
+  }
+
   async saveHysteria() {
     const payload = {
       host: $('#adHy2Host')?.value.trim() || '',
@@ -237,6 +337,10 @@ export class AdvancedView {
       this.renderHy2();
       this.toasts.info('نود Hysteria2 حذف شد');
     });
+    const coresSave = $('#coSave');
+    if (coresSave) coresSave.onclick = () => this.app.safe(() => this.saveCores());
+    const coresReload = $('#coReload');
+    if (coresReload) coresReload.onclick = () => this.app.safe(() => this.reloadCores());
     const preview = $('#adImportPreview');
     if (preview) preview.onclick = () => this.app.safe(() => this.importSubscription(false));
     const apply = $('#adImportApply');

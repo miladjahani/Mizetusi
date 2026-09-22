@@ -632,7 +632,9 @@ def test_a_user_is_provisioned_on_every_inbound_by_default():
     _seed_nodes()
     execute('DELETE FROM users')
     created = client.post('/api/users', headers=h(), json={'username': 'allproto'}).json()
-    assert created['protocols'] == ['vless', 'vmess', 'trojan', 'ss']
+    # Every protocol this deployment knows, which is the Xray set plus the ones a
+    # second engine hosts (AnyTLS, TUIC) — see ``app/cores``.
+    assert created['protocols'] == ['vless', 'vmess', 'trojan', 'ss', 'anytls', 'tuic']
     assert 'همه' in created['protocol_label']
 
     for protocol in ('vless', 'vmess', 'trojan'):
@@ -666,10 +668,13 @@ def test_protocol_selection_can_be_all_or_a_subset():
     execute('DELETE FROM users')
     client.post('/api/users', headers=h(), json={'username': 'multi'})
 
-    # All protocols selected at once (what the default form submits).
-    every = client.put('/api/users/multi', headers=h(),
-                       json={'protocol': ['vless', 'vmess', 'trojan', 'ss']}).json()
-    assert sorted(every['protocols']) == ['ss', 'trojan', 'vless', 'vmess']
+    # All protocols selected at once (what the default form submits), asked for
+    # from the panel's own catalog so a new protocol cannot quietly fall out.
+    settings_payload = client.get('/api/settings', headers=h()).json()
+    catalog = [item['id'] for item in settings_payload['subscription']['protocol_catalog']['protocols']]
+    assert catalog, 'the panel must publish its own protocol catalog'
+    every = client.put('/api/users/multi', headers=h(), json={'protocol': catalog}).json()
+    assert every['protocols'] == catalog
     assert every['protocol_value'] == 'all'
 
     # A real subset only offers what was selected.
@@ -692,7 +697,7 @@ def test_protocol_selection_can_be_all_or_a_subset():
     # out of every inbound.
     assert client.put('/api/users/multi', headers=h(), json={'protocol': 'vless,trojan'}).json()['protocols'] == ['vless', 'trojan']
     assert client.post('/api/users', headers=h(), json={'username': 'bad', 'protocol': 'wireguard'}).status_code == 422
-    assert client.put('/api/users/multi', headers=h(), json={'protocol': []}).json()['protocols'] == ['vless', 'vmess', 'trojan', 'ss']
+    assert client.put('/api/users/multi', headers=h(), json={'protocol': []}).json()['protocols'] == catalog
 
     # Legacy single-value rows keep meaning "the whole matrix".
     execute("UPDATE users SET protocol='vless' WHERE username='multi'")

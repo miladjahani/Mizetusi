@@ -23,16 +23,26 @@ import secrets
 
 from app import runtime
 from app.config import settings
+# The hosted protocols are pure data (no imports of their own), so re-exporting
+# their ids here keeps this module the one place the app looks for the protocol
+# catalog — without the cycle that importing the service would create.
+from app.cores import profiles as core_profiles
 from app.db import row, execute
 
 EDGE = 'edge'
 DIRECT = 'direct'
 WARP = 'warp'
 HY2 = 'hy2'
+# Protocols served by a second engine (AnyTLS, TUIC) — see ``app/cores``.
+CORE = 'core'
+ANYTLS = core_profiles.ANYTLS
+TUIC = core_profiles.TUIC
 
 # The protocols a user can be subscribed to. Every user is created with the full
 # set, so every path is live by default and an admin only narrows it on purpose.
-PROTOCOLS = ('vless', 'vmess', 'trojan', 'ss')
+# The hosted protocols belong here like any other: they carry one credential per
+# user, so narrowing a user's set really does remove them.
+PROTOCOLS = ('vless', 'vmess', 'trojan', 'ss', ANYTLS, TUIC)
 ALL_PROTOCOLS = 'all'
 
 # Shadowsocks ciphers, one profile/listener per cipher and path shape.
@@ -182,9 +192,35 @@ def user_protocols(user):
     return parse_protocols((user or {}).get('protocol'))
 
 
+def _cores():
+    """The second-engine facade, imported lazily to keep the import graph flat."""
+    from app.cores import service as cores
+    return cores
+
+
+def _core_profiles():
+    """Profiles hosted by a second engine — only those really listening.
+
+    This is a *published* list, not a *configured* one. An enabled protocol whose
+    engine is down, whose port this host cannot expose, or that no active user is
+    enrolled in yet is withheld exactly like an Xray transport that had to be
+    dropped, because a subscription entry has to answer when a client dials it.
+    """
+    cores = _cores()
+    out = []
+    for item in cores.chosen():
+        if not cores.is_published(item['id']):
+            continue
+        out.append({'id': item['id'], 'protocol': item['protocol'], 'network': item['network'],
+                    'security': item['security'], 'tag': item['tag'], 'group': CORE,
+                    'port': item['port'], 'engine': item['engine'], 'path': '', 'port_setting': None})
+    return out
+
+
 def protocol_catalog():
     """Panel view of the protocol selector (labels + the SS cipher families)."""
-    labels = {'vless': 'VLESS', 'vmess': 'VMess', 'trojan': 'Trojan', 'ss': 'Shadowsocks'}
+    labels = {'vless': 'VLESS', 'vmess': 'VMess', 'trojan': 'Trojan', 'ss': 'Shadowsocks',
+              'anytls': 'AnyTLS', 'tuic': 'TUIC v5'}
     return {
         'all': ALL_PROTOCOLS,
         'protocols': [{'id': p, 'label': labels[p]} for p in PROTOCOLS],
@@ -238,7 +274,7 @@ HY2_KEYS = ('hy2_enabled', 'hy2_host', 'hy2_port', 'hy2_password', 'hy2_sni',
 # rides the edge through the ``v2ray-plugin`` SIP003 plugin, which is exactly what
 # the SIP002 ``plugin=`` parameter is for, so it is a first-class link too: the
 # Shadowsocks nodes now show up in v2rayNG/NekoBox config lists like the rest.
-URI_PROTOCOLS = ('vless', 'trojan', 'vmess', 'ss', HY2)
+URI_PROTOCOLS = ('vless', 'trojan', 'vmess', 'ss', HY2, 'anytls', 'tuic')
 
 TRANSPORT_GROUPS = (
     ('all', 'همه'),
@@ -253,6 +289,10 @@ TRANSPORT_GROUPS = (
 
 
 def profile_port(profile):
+    if profile.get('group') == CORE:
+        # A hosted protocol's listener port is the admin's own setting (it is the
+        # public port, not an internal bridge port like the edge profiles use).
+        return int(profile.get('port') or 0) or None
     key = profile.get('port_setting')
     return int(getattr(settings, key)) if key else None
 
@@ -338,9 +378,13 @@ def available_profiles(protocols=None):
         items.append(dict(HY2_PROFILE, group=HY2))
     if direct_endpoint() and reality_keys():
         items.extend(dict(p, group=DIRECT) for p in DIRECT_PROFILES)
+    items.extend(_core_profiles())
     served = _served_profiles
     if served is not None:
-        items = [item for item in items if item['id'] in served or item['group'] == HY2]
+        # The Xray config's own list only speaks for the Xray inbounds; a hosted
+        # protocol answers to its engine instead (``_core_profiles`` already
+        # dropped the ones that are not listening).
+        items = [item for item in items if item['id'] in served or item['group'] in (HY2, CORE)]
     if protocols is not None:
         wanted = set(protocols)
         items = [item for item in items if item['protocol'] in wanted or item['group'] == HY2]
@@ -489,7 +533,14 @@ def ss_plugin_opts(profile, host, leading_name=True):
 
 
 def node_address(node, profile):
-    """The host:port a client dials for this profile."""
+    """The host:port a client dials for this profile.
+
+    A hosted protocol always answers on this deployment's own address and its own
+    public port — it cannot ride a Cloudflare node, because a CDN forwards neither
+    a raw TLS connection nor QUIC to an origin.
+    """
+    if profile.get('group') == CORE:
+        return str(_cores().host() or node.get('server') or ''), int(profile.get('port') or 443)
     if profile.get('group') == HY2:
         hy2 = hysteria_config() or {}
         return str(hy2.get('host') or ''), int(hy2.get('port') or 443)
@@ -546,6 +597,28 @@ def node_label(node):
     name = str((node or {}).get('name') or '')
     flag = node_flag(node)
     return f'{flag} {name}'.strip() if flag else name
+
+
+# ----------------------------------------------------------------- hosted cores
+def core_config():
+    """The second engines' shared endpoint, or ``None`` when none is published.
+
+    Mirrors :func:`hysteria_config`: nothing about a hosted protocol appears in a
+    subscription until its listener is really up *and* the port is reachable from
+    outside, so nobody is ever handed a link that cannot answer. What the hosted
+    protocols add on top of the external Hysteria2 is per-user credentials — see
+    :mod:`app.cores.service`.
+    """
+    cores = _cores()
+    host = cores.host()
+    # ``None`` means "no engine was ever started" (a fresh process, a test), which
+    # is *not* the same as "nothing is published": the catalog and the links are
+    # built from the settings until the first reconcile says otherwise.
+    published = cores.published_profiles()
+    if not host or published == set():
+        return None
+    return {'host': host, 'sni': str(_setting('core_sni') or settings.core_sni),
+            'profiles': sorted(published) if published else []}
 
 
 # ------------------------------------------------------------------- hysteria2

@@ -118,6 +118,8 @@ const checks = [
   [typeof loaded['views/customize'].CustomizeView.prototype.load === 'function', 'customization loader'],
   [typeof loaded['views/tools'].ToolsView === 'function', 'ToolsView'],
   [typeof loaded['views/tools'].ToolsView.prototype.scan === 'function', 'CDN scanner action'],
+  [typeof loaded['views/tools'].ToolsView.prototype.renderClientIp === 'function', 'real client-ip card'],
+  [typeof loaded['views/tools'].ToolsView.prototype.saveClientIp === 'function', 'trusted-proxy save'],
   [typeof loaded['views/advanced'].AdvancedView === 'function', 'AdvancedView'],
   [typeof loaded['views/advanced'].AdvancedView.prototype.saveHysteria === 'function', 'hysteria2 form'],
   [typeof loaded['views/guide'].GuideView === 'function', 'GuideView'],
@@ -244,6 +246,41 @@ try {
   }
 } catch (error) {
   failures.push(`the geo switch threw: ${error.message}`);
+}
+
+// The address the panel acts on must never be a header the client wrote. The
+// tools tab renders the resolver's own verdict — the address it settled on, the
+// raw TCP peer, the chain it did not believe, and why — so a wrong trust list is
+// visible instead of being an invisible decision nobody can correct.
+try {
+  const view = window.nexus.tools;
+  view.renderClientIp({
+    ip: '198.51.100.7', peer: '10.0.0.9', source: 'forwarded', cloudflare: false,
+    trusted_peer: true, chain: ['9.9.9.9', '198.51.100.7', '10.0.0.1'], spoofed: true,
+    trust_cdn_headers: true, trusted_proxy_cidrs: '', default_trusted: ['127.0.0.0/8'],
+    cloudflare_ranges: 22,
+  });
+  const out = String(elements.get('tlIpOut')?.innerHTML || '');
+  const stats = String(elements.get('tlIpStats')?.innerHTML || '');
+  if (!out.includes('198.51.100.7')) failures.push('the client-ip card must show the address the panel acts on');
+  if (!out.includes('10.0.0.9')) failures.push('the client-ip card must show the raw TCP peer');
+  if (!out.includes('9.9.9.9')) failures.push('the client-ip card must show the hop it refused to believe');
+  if (!stats.includes('198.51.100.7')) failures.push('the client-ip summary must show the resolved address');
+  if (!String(elements.get('tlIpTag')?.innerHTML || '').includes('جعلی')) {
+    failures.push('an ignored forged hop must be labelled in the panel');
+  }
+  if (out.includes('undefined')) failures.push('the client-ip card rendered undefined');
+  // Turning header trust off is reported as the socket peer, not as a blank.
+  view.renderClientIp({
+    ip: '10.0.0.9', peer: '10.0.0.9', source: 'peer', cloudflare: false, trusted_peer: true,
+    chain: ['203.0.113.9'], spoofed: true, trust_cdn_headers: false,
+    trusted_proxy_cidrs: '203.0.113.0/24', default_trusted: [], cloudflare_ranges: 22,
+  });
+  if (!String(elements.get('tlIpOut')?.innerHTML || '').includes('خاموش')) {
+    failures.push('the client-ip card must report the trust switch as off');
+  }
+} catch (error) {
+  failures.push(`the client-ip card threw: ${error.message}`);
 }
 
 // A node whose address sits elsewhere shows a warning badge rather than a flag
@@ -532,6 +569,69 @@ try {
   globalThis.fetch = realFetch;
 } catch (error) {
   failures.push(`api client threw: ${error.message}`);
+}
+
+// The second engines (AnyTLS / TUIC). One payload drives the whole card: the rows
+// are built from `catalog`, the engines from `engines`, and the save button
+// rebuilds its request from that same list. When the server nested that status
+// one level down, the card painted «هیچ پروتکلی منتشر نشده» and the save posted an
+// empty profile map — the switch looked live and did nothing.
+try {
+  const view = window.nexus.advanced;
+  const payload = {
+    success: true, enabled: true, host: '203.0.113.10', port_host: '203.0.113.10',
+    tcp: true, udp: false, sni: 'www.cloudflare.com', published: ['anytls'],
+    catalog: [
+      { id: 'anytls', protocol: 'anytls', tag: 'AnyTLS · TLS', note: 'ضد DPI', needs: 'tcp',
+        port: 8444, engine: 'singbox', enabled: true, reachable: true, running: true,
+        published: true, unknown: false, reason: '' },
+      { id: 'tuic', protocol: 'tuic', tag: 'TUIC v5 · QUIC', note: 'روی QUIC', needs: 'udp',
+        port: 8445, engine: 'mihomo', enabled: true, reachable: false, running: false,
+        published: false, unknown: false, reason: 'این پلتفرم پورت UDP نمی‌دهد' },
+    ],
+    engines: [
+      { id: 'singbox', label: 'sing-box', binary: '/usr/local/bin/sing-box', installed: true,
+        running: true, pid: 12, profiles: ['anytls'], error: '' },
+      { id: 'mihomo', label: 'mihomo', binary: '/usr/local/bin/mihomo', installed: true,
+        running: false, pid: null, profiles: [], error: '' },
+    ],
+    notes: ['پورت UDP در دسترس نیست؛ TUIC روی VPS منتشر می‌شود.'],
+    profiles: [], counts: { enabled: 2, published: 1, engines: 1 },
+  };
+  window.nexus.store.set('cores', payload);
+  view.renderCores();
+  const rows = String(elements.get('coProfiles')?.innerHTML || '');
+  if (!rows.includes('AnyTLS') || !rows.includes('TUIC')) {
+    failures.push('the cores card must list every hosted protocol');
+  }
+  if ((rows.match(/data-co-toggle=/g) || []).length !== 2) {
+    failures.push('every hosted protocol needs its own switch in the cores card');
+  }
+  if (!rows.includes('این پلتفرم پورت UDP نمی‌دهد')) failures.push('a withheld protocol must show why');
+  if (!rows.includes('منتشرشده')) failures.push('a published protocol must be labelled as such');
+  if (rows.includes('undefined')) failures.push('the cores card rendered undefined');
+  const engineRows = String(elements.get('coEngines')?.innerHTML || '');
+  if (!engineRows.includes('sing-box') || !engineRows.includes('mihomo')) {
+    failures.push('the cores card must show both engines');
+  }
+  if (!engineRows.includes('Running')) failures.push('a running engine must say so');
+
+  const realApi = window.nexus.api;
+  let sent = null;
+  window.nexus.api = { get: async () => payload, post: async (url, body) => { sent = { url, body }; return payload; } };
+  // The reload that follows a save is offline in this test; the request itself is
+  // what matters here.
+  await view.saveCores().catch(() => {});
+  window.nexus.api = realApi;
+  if (!sent || sent.url !== '/api/cores') failures.push('the cores save must post to /api/cores');
+  if (sent && Object.keys(sent.body.profiles || {}).join(',') !== 'anytls,tuic') {
+    failures.push('the cores save must send one profile entry per hosted protocol');
+  }
+  if (sent && (sent.body.profiles.anytls.port !== 8444 || sent.body.profiles.anytls.engine !== 'singbox')) {
+    failures.push('the cores save must carry the port and engine the card is showing');
+  }
+} catch (error) {
+  failures.push(`the cores card threw: ${error.message}`);
 }
 
 await new Promise((resolve) => setTimeout(resolve, 50));
