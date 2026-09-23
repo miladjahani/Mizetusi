@@ -2,15 +2,21 @@
 #
 #   NEXUS_PUBLIC_DOMAIN=panel.example.com docker compose up -d --build
 #
-# Two ports are published on purpose:
+# The ports are published on purpose:
 #   * 8080 — the panel and the whole WebSocket edge (VLESS/VMess/Trojan/…);
 #   * 8443 — the raw TCP port Reality terminates TLS on. Nothing has to be
 #     configured in the panel: on a host with a public port the direct endpoint
-#     is detected, the Reality inbound is generated and the link is published.
+#     is detected, the Reality inbound is generated and the link is published;
+#   * 8446/8448/8449 — the Telegram proxies, each a raw TCP listener: MTProto
+#     (8446), the HTTP web proxy (8448) and the SOCKS5 one (8449). They stay
+#     idle until an admin switches them on in the «پروکسی تلگرام» tab, so the
+#     published ports cost nothing but a closed port is what "the card says
+#     published and nothing connects" looks like.
 #
-# Open both in the firewall (ufw allow 8080,8443/tcp; or the cloud security group)
-# and point a domain (or a Cloudflare-proxied one) at the host if you want TLS
-# in front of the panel too. NET_ADMIN is only needed by the optional WARP exit.
+# Open them in the firewall (ufw allow 8080,8443,8446,8448,8449/tcp; or the
+# cloud security group) and point a domain (or a Cloudflare-proxied one) at the
+# host if you want TLS in front of the panel too. NET_ADMIN is only needed by
+# the optional WARP exit.
 services:
   nexus:
     build: .
@@ -19,6 +25,9 @@ services:
     ports:
       - '8080:8080'
       - '8443:8443'
+      - '8446:8446'   # MTProto proxy (mtg)
+      - '8448:8448'   # HTTP web proxy
+      - '8449:8449'   # SOCKS5 web proxy
     environment:
       PORT: '8080'
       NEXUS_PLATFORM: vps
@@ -33,6 +42,11 @@ services:
       ADMIN_PASSWORD: '${ADMIN_PASSWORD:-admin}'
       JWT_SECRET: '${JWT_SECRET:-}'
       WARP_ENABLED: '${WARP_ENABLED:-0}'
+      # The Telegram proxies are off until an admin enables them in the panel;
+      # these are only the ports they will listen on.
+      NEXUS_TELEGRAM_MTPROTO_PORT: '8446'
+      NEXUS_TELEGRAM_HTTP_PORT: '8448'
+      NEXUS_TELEGRAM_SOCKS_PORT: '8449'
     volumes:
       - ./data:/data
     cap_add:

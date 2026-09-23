@@ -22,6 +22,7 @@ import { UsersView } from './views/users.js';
 import { CloudflareView, SettingsView } from './views/system.js';
 import { CustomizeView } from './views/customize.js';
 import { ToolsView } from './views/tools.js';
+import { TelegramView } from './views/telegram.js';
 import { AdvancedView } from './views/advanced.js';
 import { GuideView } from './views/guide.js';
 
@@ -43,6 +44,7 @@ export class NexusApp {
     this.cloudflare = new CloudflareView(this);
     this.customize = new CustomizeView(this);
     this.tools = new ToolsView(this);
+    this.telegram = new TelegramView(this);
     this.advanced = new AdvancedView(this);
     this.settings = new SettingsView(this);
     this.guide = new GuideView(this);
@@ -185,6 +187,7 @@ export class NexusApp {
     set('cloudflare', Fmt.num(totals.cf_ips_ok));
     set('customize', null);
     set('tools', null);
+    set('telegram', null);
     set('advanced', null);
   }
 
@@ -344,6 +347,10 @@ export class NexusApp {
       await Promise.all([this.loadNodes(), this.tools.load()]);
       return;
     }
+    if (section === 'telegram') {
+      await Promise.all([this.loadWorkerSettings(), this.telegram.load()]);
+      return;
+    }
     if (section === 'advanced') {
       await Promise.all([this.loadNodes(), this.advanced.load()]);
       return;
@@ -382,6 +389,7 @@ export class NexusApp {
         await this.loadNodes();
         this.tools.render();
       }
+      if (section === 'telegram') await this.telegram.load();
       if (section === 'advanced') await this.advanced.load();
       if (section === 'settings') await this.loadSettings();
       this.safe(() => this.guide.load(section));
@@ -564,6 +572,7 @@ export class NexusApp {
     this.cloudflare.bindEvents();
     this.customize.bindEvents();
     this.tools.bindEvents();
+    this.telegram.bindEvents();
     this.advanced.bindEvents();
     this.settings.bindEvents();
     this.guide.bindEvents();

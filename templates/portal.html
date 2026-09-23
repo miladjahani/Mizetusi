@@ -159,6 +159,43 @@
     </div>
   </section>
 
+  {% if p.telegram %}
+  <section>
+    <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-link"/></svg> پروکسی تلگرام
+      <span class="count">فقط برای تلگرام — بدون کلاینت اضافه</span></h2>
+    {% if p.telegram.mtproto %}
+    <div class="link-box">
+      <div class="lb-main">
+        <b>پروکسی MTProto · {{ p.telegram.mtproto.label }}</b>
+        <code>{{ p.telegram.mtproto.url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ p.telegram.mtproto.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+      <a class="tbtn" href="{{ p.telegram.mtproto.tme }}" target="_blank" rel="noopener">افزودن با یک کلیک</a>
+    </div>
+    {% endif %}
+    {% for line in p.telegram.lines %}
+    <div class="link-box">
+      <div class="lb-main">
+        <b>وب‌پروکسی {{ line.label }} <span class="muted" style="font-weight:400">نام کاربری: {{ line.username }}</span></b>
+        <code>{{ line.url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ line.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+    </div>
+    {% endfor %}
+    {% if p.telegram.web %}
+    <div class="link-box">
+      <div class="lb-main">
+        <b>{{ p.telegram.web.label }}</b>
+        <code>{{ p.telegram.web.url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ p.telegram.web.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+      <a class="tbtn" href="{{ p.telegram.web.url }}" target="_blank" rel="noopener">باز کردن</a>
+    </div>
+    {% endif %}
+    <p class="fam-hint">{{ p.telegram.hint }}</p>
+  </section>
+  {% endif %}
+
   {% if p.scope_empty %}
   <div class="notice">
     محدودهٔ فعلی این اشتراک («{{ p.scope_label }}») هیچ نودی ندارد. یکی از گزینه‌های زیر را استفاده کنید یا از پشتیبانی بخواهید محدوده را عوض کند.

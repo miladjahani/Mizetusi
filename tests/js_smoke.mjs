@@ -74,7 +74,7 @@ process.on('unhandledRejection', (error) => failures.push(`unhandled: ${error.me
 // ES-module syntax in .js files), so this needs no build step and no copy.
 const BASE = new URL('../static/js/', import.meta.url);
 const mods = ['core', 'ui', 'session', 'api', 'store', 'pwa', 'views/dashboard', 'views/nodes', 'views/users',
-  'views/system', 'views/customize', 'views/tools', 'views/advanced', 'views/guide'];
+  'views/system', 'views/customize', 'views/tools', 'views/telegram', 'views/advanced', 'views/guide'];
 const loaded = {};
 for (const name of mods) {
   loaded[name] = await import(new URL(`${name}.js`, BASE));
@@ -90,9 +90,9 @@ const checks = [
   [loaded.ui.Charts.bars !== undefined && loaded.ui.Charts.area !== undefined, 'Charts API'],
   [typeof loaded.session.SessionManager === 'function', 'SessionManager'],
   [typeof loaded.api.ApiClient === 'function', 'ApiClient'],
-  [loaded.store.SECTIONS.length === 8, 'SECTIONS'],
+  [loaded.store.SECTIONS.length === 9, 'SECTIONS'],
   [loaded.store.SECTIONS.map((item) => item.id).join(',') ===
-    'dashboard,users,nodes,cloudflare,tools,customize,advanced,settings', 'SECTIONS order'],
+    'dashboard,users,nodes,cloudflare,tools,telegram,customize,advanced,settings', 'SECTIONS order'],
   // The sidebar is five collapsible groups, and every section belongs to one of
   // them — a section left out of a group would be unreachable in the UI.
   [loaded.store.NAV_GROUPS.length === 5, 'nav groups'],
@@ -120,6 +120,11 @@ const checks = [
   [typeof loaded['views/tools'].ToolsView.prototype.scan === 'function', 'CDN scanner action'],
   [typeof loaded['views/tools'].ToolsView.prototype.renderClientIp === 'function', 'real client-ip card'],
   [typeof loaded['views/tools'].ToolsView.prototype.saveClientIp === 'function', 'trusted-proxy save'],
+  [typeof loaded['views/telegram'].TelegramView === 'function', 'TelegramView'],
+  [typeof loaded['views/telegram'].TelegramView.prototype.load === 'function', 'telegram loader'],
+  [typeof loaded['views/telegram'].TelegramView.prototype.rotate === 'function', 'mtproto secret rotation'],
+  [typeof loaded['views/telegram'].TelegramView.prototype.probe === 'function', 'telegram web probe'],
+  [typeof loaded['views/telegram'].TelegramView.prototype.payload === 'function', 'telegram form payload'],
   [typeof loaded['views/advanced'].AdvancedView === 'function', 'AdvancedView'],
   [typeof loaded['views/advanced'].AdvancedView.prototype.saveHysteria === 'function', 'hysteria2 form'],
   [typeof loaded['views/guide'].GuideView === 'function', 'GuideView'],
@@ -134,7 +139,7 @@ const checks = [
   // bar — empty on every load.
   [(elements.get('navGroups')?.innerHTML.match(/class="nav-group[ "]/g) || []).length === 5,
     'the grouped navigation must render five groups'],
-  [(elements.get('navGroups')?.innerHTML.match(/data-section=/g) || []).length === 8,
+  [(elements.get('navGroups')?.innerHTML.match(/data-section=/g) || []).length === 9,
     'the grouped navigation must offer every section'],
   [typeof window.nexus?.handleSessionLost === 'function', 'session recovery hook'],
 ];

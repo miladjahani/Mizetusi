@@ -7,6 +7,29 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **Telegram, three ways: an MTProto proxy, an HTTP/SOCKS5 web proxy, and `web.telegram.org`
+  through your own domain.** Telegram is not a VPN and none of the three is a VPN transport,
+  so each one gets the implementation it actually needs. **MTProto** is the `tg://proxy` link
+  a user pastes into the Telegram app itself — nothing to install — served by `mtg`, the only
+  implementation that still speaks the current FakeTLS handshake, whose pinned binary ships
+  inside the image next to sing-box and mihomo. The secret is generated here (`ee` + 16 random
+  bytes + the hex of the fronting name) and stored in the database, so a redeploy does not
+  reissue every link a user already added; `mtg access` parses the rendered config before a
+  process is started; and changing the fronting name reissues the secret, because the name
+  lives *inside* it. The **HTTP/SOCKS5 web proxy** is what Telegram Desktop calls «custom
+  proxy»: two Xray inbounds (`http` with `accounts`, `socks` with `auth: password`) carrying
+  **one account per user** — their username and their one credential — so disabling a user
+  revokes their proxy line with every other link and no two users share a password.
+  **`web.telegram.org`** is served from this deployment's own domain at `/tg/…` by a
+  host-allowlisted reverse proxy (`web.telegram.org`, `*.web.telegram.org`, `telegram.org`,
+  `t.me` — and nothing else, because an open proxy is an SSRF hole), with a small shim that
+  routes the app's runtime WebSocket and API calls through the same path: a plain path proxy
+  loads the page and then never connects. The Cloudflare Worker forwards the same prefix, so
+  the web app works from a clean Cloudflare IP when the panel's own address is blocked. All
+  three are off by default, each is published only when its listener really runs **and** its
+  port is reachable (a VPS owns its ports; on Railway every port needs its own TCP proxy),
+  the card names whichever half is missing, and a «تست دسترسی سرور» button really fetches the
+  app shell from here before anyone is told it works. See **Telegram proxies** below.
 - **The boot crash is gone, and a bad response can no longer take a tab down.** The grouped
   navigation read `NAV_GROUPS` off the *store*, where it does not exist (`groups`/
   `groupMeta` live on the router), so `renderNav()` threw «Cannot read properties of undefined
@@ -196,9 +219,11 @@ a dedicated subscription per client.
   a user has to present. One key per cipher is accepted by every client, so the panel rotates
   keys per cipher (Settings → «چرخش کلید شادوساکس») to revoke a leaked link.
 - **A transport the engine refuses can no longer kill the deployment.** The config is tried
-  richest-first (full → without WARP/Reality → Shadowsocks reduced cipher by cipher), and only
-  the profiles the running engine really contains are published, so a subscription can never
-  point at a listener that does not exist.
+  richest-first (full → without WARP/Reality → without the Telegram web proxies → Shadowsocks
+  reduced cipher by cipher), and only the profiles the running engine really contains are
+  published, so a subscription can never point at a listener that does not exist. The Telegram
+  inbounds are the newest thing in that file, so they are the first rung dropped: a Telegram
+  listener must never cost the VPN a transport.
 - **The Cloudflare Worker proxies the whole matrix.** It only knew `/ws`, `/ws/vless` and
   `/ws/trojan`, so every VMess, Shadowsocks, CDN and WARP node 404'd behind Cloudflare while
   working on the Railway origin. It also forwards the real client IP, keeps the handshake
@@ -268,6 +293,10 @@ a dedicated subscription per client.
 | `app/subscriptions/transports.py` | Transport profiles and the Shadowsocks cipher table |
 | `app/subscriptions/clients.py` | Client catalog + the Iran-ready quick-create presets |
 | `app/xray.py` | Xray-core supervisor: config generation, reload, StatsService sync |
+| `app/telegram/mtproto.py` | The MTProto proxy: `mtg` config, secret lifecycle, real `mtg access` validation, supervisor |
+| `app/telegram/webproxy.py` | The HTTP/SOCKS5 web proxies: Xray inbounds, one account per user, port reachability |
+| `app/telegram/webapp.py` | `web.telegram.org` through this domain: host allowlist, HTML/redirect/cookie rewriting, runtime socket tunnel |
+| `app/telegram/service.py` | The three in one status/payload/reconcile loop, for the panel and the status window |
 
 Xray is the protocol engine while FastAPI stays the public HTTPS/WebSocket edge on whatever
 host this runs on: the edge terminates TLS and bridges WebSocket streams to the loopback
@@ -285,7 +314,7 @@ providers, the clean domains and the locations they form.
 | `api.js` | `ApiClient`/`ApiError` — timeouts, JSON, single-flight 401 |
 | `store.js` | `PanelStore` state container, `Router`, `SECTIONS`/`NAV_GROUPS` |
 | `pwa.js` | `PwaManager` — service worker + install prompt |
-| `views/*.js` | `DashboardView`, `NodesView`, `UsersView`, `CloudflareView`, `CustomizeView`, `ToolsView`, `AdvancedView`, `SettingsView`, `GuideView` |
+| `views/*.js` | `DashboardView`, `NodesView`, `UsersView`, `TelegramView`, `CloudflareView`, `CustomizeView`, `ToolsView`, `AdvancedView`, `SettingsView`, `GuideView` |
 | `app.js` | `NexusApp` — wiring, loaders, clock, polling, auth recovery |
 
 #### Keeping a tab one screen long
@@ -411,8 +440,76 @@ with `WARP_CONFIG` set proves the tunnel on the host that will run it.
 Reality profile). AmneziaWG itself is not an Xray protocol, so no Amnezia-specific inbound
 is advertised.
 
+## Telegram proxies
+
+Telegram is not a VPN and none of these is a VPN transport, so each one is built out of what
+actually implements it. All of them are **off by default** and each is published only when its
+listener is really running **and** its port is reachable from outside; the card names whichever
+half is missing instead of handing out a link that dead-ends. A VPS owns its ports as soon as
+they are open; on Railway every published port needs its own TCP proxy, and the panel reads
+Railway's own `RAILWAY_TCP_PROXY_DOMAIN`/`RAILWAY_TCP_PROXY_PORT` for the port it does expose.
+
+| Way | What the user gets | Port | Needs |
+|---|---|---|---|
+| MTProto | `tg://proxy?server=…&port=…&secret=…` — pasted into the Telegram app itself | 8446 | the `mtg` binary (shipped in the image) + a raw TCP port |
+| HTTP web proxy | `http://user:pass@host:8448` — «Custom proxy» in Telegram Desktop, and a browser | 8448 | a raw TCP port |
+| SOCKS5 web proxy | `socks5://user:pass@host:8449` | 8449 | a raw TCP port |
+| `web.telegram.org` | `https://<this-deployment>/tg/…` — the web app served from here | the panel's own port | nothing extra |
+
+### MTProto (`mtg`)
+
+Xray has no MTProto inbound, so this is the one place a second binary is genuinely required.
+`mtg` is the implementation to use — it is the maintained one and the only one that still
+speaks the current FakeTLS handshake — and its pinned release lives in the image next to
+sing-box and mihomo. The panel owns the whole lifecycle: it generates the secret, writes
+`/data/mtg.toml`, **validates it with the binary itself before starting anything**
+(`mtg access`, whose parsed output is what the panel shows), runs it under the same
+supervisor discipline as the engines, and re-syncs every `telegram_sync_interval` seconds so a
+new user is on the listener without a reload.
+
+The **secret is generated here and stored in the database** — `ee` + 16 random bytes + the hex
+of the fronting name, in the format Telegram clients expect — so a redeploy does not reissue
+every link a user already added. Because the fronting name lives *inside* that secret, changing
+it reissues the secret; that is not a bug to paper over but the reason the name has to be a
+hostname that really serves TLS. Settings → «پروکسی تلگرام» exposes the switch, the port, the
+fronting domain, the DNS resolver (`https://1.1.1.1` by default — the panel's own resolution of
+that name is what an active probe would compare against), the optional fronting IP for when
+the name cannot be resolved locally, and the concurrency cap (8192 by default).
+
+### HTTP/SOCKS5 web proxies
+
+These are what Telegram Desktop calls «custom proxy»: one `host:port` plus credentials, not a
+config list. They are **not** a new service — Xray, the engine this deployment already runs,
+serves both inbound types with a real account list, so they ride along in the same config as
+the transports and each profile gets its own listener (an HTTP inbound does not speak SOCKS5
+and vice versa, and a client that wants one should not have to guess).
+
+There is **one account per active user**: the username is the panel username and the password
+is that user's own credential, so nobody shares a password, a leaked line can be revoked on its
+own, and a user who is disabled loses their proxy line with every other link. Two listeners,
+two profiles (`web-http` and `web-socks`), each with its own switch and port in the panel.
+
+### `web.telegram.org` through your own domain
+
+The web version of Telegram is a website, so the only way to unblock it is to serve it from a
+host that is not blocked. `app/telegram/webapp.py` is a **host-allowlisted** reverse proxy for
+exactly that: this deployment answers on `/tg/…` and forwards only `web.telegram.org`,
+`*.web.telegram.org`, `telegram.org` and `t.me` — the allowlist is the point, because a
+path-and-host proxy without one is an open relay. Redirects and cookie scopes are rewritten
+back to our own domain, and a small shim injected into the page routes the app's own runtime
+WebSocket and JSON API calls through `/tg/__ws/<host>/…` and `/tg/__p/<host>/…`: proxying the
+HTML alone loads the page and then never connects, which reads as "it half works". The
+Cloudflare Worker forwards the same prefix, so the web app also opens from a clean Cloudflare
+IP when the panel's own address is blocked. The «تست دسترسی سرور» button really fetches the app
+shell from here rather than trusting the configuration.
+
+The tab is **پروکسی تلگرام** in the panel, and the status window gives each user their own
+lines — the `tg://` link, both web-proxy links with their credentials and the web app URL —
+next to the VPN links they already had.
+
 ## Public endpoints
 
+- Telegram: `tg://proxy` (MTProto) · `http://user:pass@host:8448` · `socks5://user:pass@host:8449` · `/tg/…` (Telegram Web), including its own `X-NEXUS-` headers
 - VLESS: `/ws/vless` · VMess: `/ws/vmess` · Trojan: `/ws/trojan` · WARP: `/ws/warp`
 - Shadowsocks: `/ws/ss-classic` (AES-256-GCM, every client) · `/ws/ss` (2022 · AES-128-GCM) · `/ws/ss-aes256` · `/ws/ss-chacha` · `/ws/ss-legacy`
 - CDN path shapes: `/cdn/vless`, `/cdn/vmess`, `/cdn/trojan`, `/cdn/ss-classic`, `/cdn/ss`, `/cdn/ss-aes256`, `/cdn/ss-chacha`, `/cdn/ss-legacy` · legacy `/ws`
@@ -429,7 +526,10 @@ is advertised.
   `/api/edge/import`, `/api/tools/check`, `/api/tools/dns`, `/api/tools/cidr`, `/api/tools/parse`,
   `/api/net/client-ip` (the resolver's verdict, and the trusted-proxy rule itself),
   `/api/cores` + `/api/cores/reload` (the second engines: the switch, public port and hosting engine
-  of each hosted protocol, and the reconcile that starts or stops them)
+  of each hosted protocol, and the reconcile that starts or stops them),
+  `/api/telegram` + `/api/telegram/probe` (the three Telegram proxies: switches, ports, the
+  MTProto secret/link, the running listener's own parsed config, and the real fetch of
+  `web.telegram.org` from this host)
 - Cloudflare Worker: `/api/cloudflare/worker-code`, `/api/cloudflare/worker-download`, `/api/cloudflare/worker-test`
 - PWA: `/manifest.webmanifest`, `/sw.js`, `/static/icons/*`
 
@@ -456,8 +556,11 @@ Settings → «امنیت پنل»), which reloads the engine so old links stop 
 `cloudflare-worker/worker.js` is a narrow WebSocket reverse proxy (never a generic fetch or
 open relay) so Iranian users can dial a clean Cloudflare IP while the traffic still ends in
 the Railway container. It proxies **every** published path, not a hand-picked subset: a path
-the panel hands out but the Worker refuses 404s behind Cloudflare while working on the
-Railway origin, which reads as "the Worker is broken". It also forwards the real client IP as
+the panel hands out but the Worker refuses 404s behind Cloudflare while working onthe Railway origin, which reads as "the Worker is broken". It also **forwards `/tg/…` to the
+origin unchanged** — method, query and body included — which is what makes the Telegram Web
+proxy work from a clean Cloudflare IP; that prefix is a plain HTTP forward, so it is
+deliberately outside the WebSocket-only path table, and it is the one path whose WebSocket
+half (`/tg/__ws/…`) *is* in it. It forwards the real client IP as
 `X-Forwarded-For` (so IP limits and quota attribution survive Cloudflare), keeps
 `Connection: upgrade`/`Upgrade: websocket` (the origin's handshake requires both), and turns
 an unreachable origin into a JSON `502` instead of letting the rejection escape into
@@ -531,8 +634,10 @@ detected):
 * **Render** — Render → New → Blueprint, then pick this repository (`render.yaml`). The disk
   needs a paid instance; without it the app stores sqlite in a local directory and still boots.
 * **VPS** — `NEXUS_PUBLIC_DOMAIN=panel.example.com docker compose up -d --build`, then open
-  8080 (panel + WebSocket edge) and 8443 (Reality) in the firewall. `NET_ADMIN` is only needed
-  by the optional WARP exit.
+  8080 (panel + WebSocket edge) and 8443 (Reality) in the firewall — plus 8446 (MTProto),
+  8448 (HTTP) and 8449 (SOCKS5) once the Telegram proxies are switched on, since each of them
+  is a raw TCP listener and a closed port is exactly what "the card says published but nothing
+  connects" looks like. `NET_ADMIN` is only needed by the optional WARP exit.
 * **Anywhere else** — set `NEXUS_PUBLIC_DOMAIN` (and `NEXUS_DIRECT_HOST`/`NEXUS_DIRECT_PORT` if
   a raw port is reachable) and run the image; nothing else is provider-specific.
 
@@ -639,6 +744,10 @@ node tests/worker_smoke.mjs                # routes every published path through
 python scripts/check_subscriptions.py      # prints the exact matrix one user receives
 python scripts/check_xray_config.py        # builds the real Xray config and runs `xray run -test`
 python scripts/check_transports_e2e.py     # drives real traffic through each direct transport
+
+# the tests that need the real engines instead of a rendered config
+NEXUS_TEST_MTG_BINARY=/usr/local/bin/mtg NEXUS_TEST_XRAY_BINARY=/usr/local/bin/xray \
+  python -m pytest -q tests/test_telegram.py
 ```
 
 The three `check_*` scripts build their own throwaway database, so they never touch the
@@ -650,8 +759,14 @@ the transports that need no raw TCP port, so a rejected optional inbound can nev
 transport every deployment already serves down.
 
 The Python suite covers the parsers, subscription rendering, panel API, session/cookie
-policy, presets, client catalog, per-node links, settings validation, node bootstrap and the
-PWA assets. The Node smoke test does not need a browser or a build step.
+policy, presets, client catalog, per-node links, settings validation, node bootstrap andthe PWA assets. The Node smoke test does not need a browser or a build step.
+
+`tests/test_telegram.py` is the exception that does not trust the config it renders: with the
+pinned `mtg` and `xray` binaries present it runs `mtg access` against the real rendered file,
+starts the real listener, and has Xray `-test` the HTTP/SOCKS5 inbounds it generated; without
+the binaries those cases skip, so the suite stays runnable anywhere. The Telegram Web proxy is
+proved by the allowlist tests (an unlisted host must not be proxied at all) and by the Worker
+smoke test, which routes `/tg/…` through the real Worker source.
 
 Initial panel password: `admin` — change it right after the first login. Do not expose the
 Xray API port publicly; it is bound to loopback.

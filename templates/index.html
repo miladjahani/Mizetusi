@@ -461,6 +461,64 @@
       </div>
     </section>
 
+    <!-- ================= TELEGRAM PROXIES ================= -->
+    <section class="section" id="section-telegram">
+      <div class="grid-2b">
+        <div class="panel glass" data-acc="پروکسی MTProto (لینک tg://)|پروکسی خود تلگرام؛ کاربر فقط یک لینک اضافه می‌کند|link" data-acc-open="1">
+          <div class="panel-head">
+            <div><h2>پروکسی MTProto (لینک tg://)</h2><p class="sub">با mtg و حالت FakeTLS سرو می‌شود: کاربر لینک را در خود تلگرام اضافه می‌کند و نیازی به نصب کلاینت ندارد</p></div>
+            <span class="pill" id="tgMtTag">—</span>
+          </div>
+          <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>تا فعال نشود هیچ لینکی منتشر نمی‌شود</span></div>
+            <div class="switch" id="tgMtEnabled"></div></div>
+          <div class="field-grid">
+            <div><label>پورت عمومی <span class="hint">روی Railway برای این پورت هم TCP Proxy بسازید</span></label><input id="tgMtPort" type="number" min="1" max="65535" dir="ltr" value="8446"></div>
+            <div><label>دامنهٔ fronting (SNI) <span class="hint">داخل secret ذخیره می‌شود؛ تغییرش لینک را تازه می‌کند</span></label><input id="tgMtDomain" dir="ltr" placeholder="www.cloudflare.com"></div>
+            <div><label>حداکثر اتصال همزمان</label><input id="tgMtConcurrency" type="number" min="1" max="100000" dir="ltr" value="8192"></div>
+            <div><label>DoH برای حل نام</label><input id="tgMtDns" dir="ltr" placeholder="https://1.1.1.1"></div>
+            <div><label>آی‌پی fronting <span class="hint">اختیاری؛ وقتی دامنه روی این سرور DNS نمی‌شود</span></label><input id="tgMtFrontIp" dir="ltr" placeholder="1.2.3.4"></div>
+          </div>
+          <div class="actions">
+            <button class="primary" id="tgSave">ذخیره و انتشار</button>
+            <button class="secondary" id="tgReload">همگام‌سازی</button>
+            <button class="secondary" id="tgMtRotate">چرخش secret</button>
+            <button class="danger-btn" id="tgMtOff">غیرفعال</button>
+          </div>
+          <div class="kv-list" id="tgMtInfo"></div>
+          <div id="tgMtLinks"></div>
+        </div>
+
+        <div class="panel glass" data-acc="وب‌پروکسی HTTP / SOCKS5|همان Custom Proxy تلگرام دسکتاپ و مرورگر؛ هر کاربر اعتبار جدا|server">
+          <div class="panel-head">
+            <div><h2>وب‌پروکسی HTTP / SOCKS5</h2><p class="sub">روی همان Xray سرو می‌شود؛ هر کاربر نام کاربری و رمز خودش را دارد و با غیرفعال شدن کاربر، خط پروکسی‌اش هم قطع می‌شود</p></div>
+            <span class="pill" id="tgWebHost">—</span>
+          </div>
+          <div id="tgWebProfiles"></div>
+          <div id="tgWebAccounts"></div>
+        </div>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px" data-acc="پروکسی وب تلگرام (web.telegram.org)|نسخهٔ وب تلگرام از همین دامنه باز می‌شود؛ پشت Cloudflare هم کار می‌کند|globe">
+        <div class="panel-head">
+          <div><h2>پروکسی وب تلگرام (web.telegram.org)</h2><p class="sub">تلگرام وب از دامنهٔ خودتان سرو می‌شود (مسیر زیر)؛ همان مسیر از دامنهٔ Worker کلودفلر هم عبور می‌کند تا وقتی آی‌پی پنل بسته است</p></div>
+          <span class="pill" id="tgAppTag">—</span>
+        </div>
+        <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>پروکسی فقط به هاست‌های خود تلگرام وصل می‌شود (web.telegram.org، telegram.org، t.me)</span></div>
+          <div class="switch" id="tgAppEnabled"></div></div>
+        <div class="actions">
+          <button class="secondary" id="tgAppProbe">تست دسترسی سرور</button>
+          <a class="tbtn" id="tgAppOpen" target="_blank" rel="noopener">باز کردن تلگرام وب</a>
+        </div>
+        <div class="kv-list" id="tgAppInfo"></div>
+        <p class="muted" id="tgAppWorker"></p>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head"><div><h2>نکته‌ها و محدودیت‌ها</h2><p class="sub">هر چیزی که برای منتشر شدن این پروکسی‌ها لازم است، همین‌جا نوشته می‌شود</p></div></div>
+        <div class="kv-list" id="tgNotes"></div>
+      </div>
+    </section>
+
     <!-- ================= ADVANCED ================= -->
     <section class="section" id="section-advanced">
       <div class="grid-2b">

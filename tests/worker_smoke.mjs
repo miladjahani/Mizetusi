@@ -161,6 +161,37 @@ for (const path of ADVERTISED) {
   check(legacy.status === 200, 'the legacy ZEUS_ORIGIN name must still work');
 }
 
+// ------------------------------------------------------- Telegram Web prefix
+// The panel proxies web.telegram.org itself; the Worker only has to carry the
+// prefix, because the whole reason a user needs the Worker is the address, not
+// the proxying. Every part of the hop has to survive: the path (including the
+// API-host form), the query, the method and the client address.
+{
+  const page = await call('/tg/k/', { headers: { 'cf-connecting-ip': '203.0.113.7' } });
+  check(page.status === 200, 'the Telegram Web prefix should be forwarded');
+  const forwarded = seen.find((request) => new URL(request.url).pathname === '/tg/k/');
+  check(Boolean(forwarded), '/tg/k/ was never forwarded to the origin');
+  if (forwarded) {
+    check(forwarded.url.startsWith(ORIGIN + '/tg/k/'), 'the Telegram path must reach the origin unchanged');
+    check(forwarded.headers.get('X-Forwarded-Proto') === 'https', 'the Telegram hop must be forwarded as https');
+    check(forwarded.headers.get('X-Forwarded-For') === '203.0.113.7', 'the client address must reach the origin');
+    check(!forwarded.headers.get('cf-connecting-ip'), 'Cloudflare internals must not leak to the origin');
+  }
+  const api = await call('/tg/__p/pluto.web.telegram.org/apiws?dc=2');
+  check(api.status === 200, 'a nested Telegram API host should be forwarded');
+  const nested = seen.find((request) => new URL(request.url).pathname === '/tg/__p/pluto.web.telegram.org/apiws');
+  check(Boolean(nested) && new URL(nested.url).search === '?dc=2', 'the Telegram API path and query must survive');
+  seen.length = 0;
+  await worker.fetch(new Request(EDGE + '/tg/', {
+    method: 'POST',
+    body: 'login=1',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  }), { NEXUS_ORIGIN: ORIGIN }, {});
+  check(Boolean(seen.find((request) => request.method === 'POST')), 'a POST to the Telegram prefix must stay a POST');
+  const without = await call('/tg/k/', { env: {} });
+  check(without.status === 503, 'the Telegram prefix without an origin must be 503');
+}
+
 if (failures.length) {
   console.error('FAILED');
   failures.forEach((line) => console.error(' -', line));

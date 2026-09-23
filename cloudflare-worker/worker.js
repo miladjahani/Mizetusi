@@ -55,7 +55,14 @@ const EDGE_PATHS = [
 ];
 
 const HEALTH_PATHS = ['/health', '/diag'];
-const WORKER_VERSION = 'nexus-ws-3';
+const WORKER_VERSION = 'nexus-ws-4';
+
+// Telegram Web through this Worker. The origin (the NEXUS panel) already serves
+// web.telegram.org on its own domain — HTTP *and* the app's WebSocket — so the
+// only thing that has to happen here is to forward the prefix. That matters for
+// exactly the reason this Worker exists: the clean Cloudflare IP is what the
+// user's network can reach when the panel's own address is blocked.
+const TELEGRAM_PREFIX = '/tg';
 
 // Edge/Cloudflare internals must not leak into the origin request: they would
 // confuse Host/SNI handling and let a client spoof its own country or scheme.
@@ -142,12 +149,43 @@ async function handleHealth(request, env, origin) {
   return json(body, body.ok ? 200 : 503);
 }
 
+function isTelegramPath(pathname) {
+  return pathname === TELEGRAM_PREFIX || pathname.startsWith(TELEGRAM_PREFIX + '/');
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const origin = normalizeOrigin((env && env.NEXUS_ORIGIN) || (env && env.ZEUS_ORIGIN) || ORIGIN_FALLBACK);
 
     if (HEALTH_PATHS.includes(url.pathname)) return handleHealth(request, env, origin);
+
+    if (isTelegramPath(url.pathname)) {
+      if (!origin) return json({ ok: false, error: 'NEXUS_ORIGIN is not configured' }, 503);
+      // Built *from* the incoming request, so method, query, WebSocket upgrade and
+      // an upload body all ride through untouched (a POST of a file to Telegram
+      // must not be buffered here); only the edge headers are replaced. This is
+      // also what the smoke test drives, so the hop is checked without a deploy.
+      const forward = new Request(origin + url.pathname + url.search, request);
+      forward.headers.delete('host');
+      for (const name of STRIP_HEADERS) forward.headers.delete(name);
+      const edgeHost = (request.headers.get('Host') || url.hostname).toLowerCase();
+      forward.headers.set('X-Forwarded-Proto', 'https');
+      forward.headers.set('X-Forwarded-Host', edgeHost);
+      const seenFrom = edgeOriginOf(request);
+      if (seenFrom) forward.headers.set('X-Forwarded-For', seenFrom);
+      forward.headers.set('X-Nexus-Edge', WORKER_VERSION);
+      try {
+        return await fetch(forward);
+      } catch (error) {
+        return json({
+          ok: false,
+          error: 'origin unreachable',
+          origin,
+          detail: String(error && error.message || error),
+        }, 502);
+      }
+    }
 
     if (!EDGE_PATHS.includes(url.pathname)) {
       return text(

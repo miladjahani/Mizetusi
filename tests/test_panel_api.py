@@ -21,7 +21,8 @@ client = TestClient(app)
 PANEL_MODULES = [
     'js/core.js', 'js/ui.js', 'js/session.js', 'js/api.js', 'js/store.js', 'js/pwa.js',
     'js/views/dashboard.js', 'js/views/nodes.js', 'js/views/users.js', 'js/views/system.js',
-    'js/views/customize.js', 'js/views/tools.js', 'js/views/advanced.js', 'js/views/guide.js',
+    'js/views/customize.js', 'js/views/tools.js', 'js/views/telegram.js',
+    'js/views/advanced.js', 'js/views/guide.js',
     'js/app.js',
 ]
 LEGACY_MODULES = ['app.js', 'app-dashboard.js', 'app-nodes.js', 'app-users.js', 'app-panel.js']
@@ -355,7 +356,11 @@ def test_a_rejected_transport_shrinks_the_config_instead_of_killing_it():
     from app.subscriptions import transports as tp
 
     ladder = list(xray._candidate_configs())
-    assert len(ladder) == 2 + len(tp.SS_CIPHERS)
+    # The full config, the one without WARP/Reality, the one without the Telegram
+    # web proxies (the newest inbounds, so the first thing dropped), then one rung
+    # per Shadowsocks cipher family.
+    assert len(ladder) == 3 + len(tp.SS_CIPHERS)
+    assert not [item for item in ladder[2][0]['inbounds'] if item['tag'].startswith('tg-')]
     served_sets = [set(served) for _config, served, _note in ladder]
     assert all(len(before) >= len(after) for before, after in zip(served_sets, served_sets[1:]))
     assert len(served_sets[0]) == len(xray._config()['inbounds'])

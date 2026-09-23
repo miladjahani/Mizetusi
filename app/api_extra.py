@@ -33,6 +33,8 @@ from app.edge import sources as edge_sources
 from app.subscriptions import transports
 from app.subscriptions import scope as node_scope
 from app.subscriptions import flags as sub_flags
+from app.telegram import mtproto as tg_mtproto
+from app.telegram import service as tg_service
 
 router = APIRouter()
 
@@ -543,6 +545,65 @@ async def save_client_ip(request: Request):
     return {'success': True, 'changed': changed, **_client_ip_state(request)}
 
 
+# ------------------------------------------------------------------- telegram
+def _telegram_payload(request):
+    """The Telegram card's payload, absolute URLs included."""
+    return tg_service.payload(_main().public_base(request))
+
+
+@router.get('/api/telegram')
+def get_telegram(request: Request):
+    """The Telegram proxies: MTProto, the HTTP/SOCKS5 web proxy and Telegram Web.
+
+    One payload for all three because they are one card: each entry carries its
+    own switch, its own reason when it is not published, and every link it would
+    hand out — per user for the web proxies, so one leaked line is visible here.
+    """
+    _auth(request)
+    return _telegram_payload(request)
+
+
+@router.post('/api/telegram')
+async def save_telegram(request: Request):
+    """Store the switches and bring the listeners to exactly that state.
+
+    ``action`` picks between a save, a secret rotation (the old ``tg://`` link
+    stops working — that is what rotation is for) and a plain reconcile of the
+    processes. The listeners are reconciled before the answer goes out, so the
+    card shows what really came up rather than what was asked for.
+    """
+    _auth(request)
+    body = await _json_body(request)
+    action = str(body.get('action') or 'save').strip().lower()
+    if action == 'rotate':
+        secret = tg_mtproto.rotate_secret()
+        sync = await tg_service.reconcile()
+        _audit('telegram.rotate', 'mtproto secret reissued')
+        return {'success': True, 'secret': secret, 'sync': sync, **_telegram_payload(request)}
+    if action == 'reload':
+        sync = await tg_service.reconcile()
+        _audit('telegram.reload', ' '.join(f"{name}:{'up' if item.get('running') else 'down'}"
+                                          for name, item in sync.items()))
+        return {'success': True, 'changed': [], 'sync': sync, **_telegram_payload(request)}
+    try:
+        changed = tg_service.save(body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    sync = await tg_service.reconcile()
+    if changed:
+        _audit('telegram.update', ','.join(changed))
+    return {'success': True, 'changed': changed, 'sync': sync, **_telegram_payload(request)}
+
+
+@router.post('/api/telegram/probe')
+async def probe_telegram(request: Request):
+    """Fetch Telegram Web from this server and report what actually came back."""
+    _auth(request)
+    result = await tg_service.probe()
+    _audit('telegram.probe', f"status={result.get('status')} bytes={result.get('bytes')}")
+    return {'success': True, 'probe': result, **_telegram_payload(request)}
+
+
 # ---------------------------------------------------------------------- cores
 def _sync_summary(result):
     """Just enough of a sync result to show on the card after saving."""
@@ -653,6 +714,11 @@ SECTION_TIPS = {
         'بستهٔ «کلودفلر — لوکیشن‌های چندگانه» با یک کلیک ۸ منطقهٔ واقعی می‌سازد.',
         'نود Hysteria2 تا وقتی هاست و رمز ذخیره و فعال نشود هیچ‌جا منتشر نمی‌شود.',
     ]},
+    'telegram': {'title': 'پروکسی تلگرام', 'items': [
+        'اگر کاربر فقط تلگرام می‌خواهد، لینک <b>tg://</b> را بدهید: در خود تلگرام اضافه می‌شود و نیازی به نصب کلاینت ندارد.',
+        'وب‌پروکسی HTTP/SOCKS5 همان «Custom Proxy» تلگرام دسکتاپ است و هر کاربر اعتبار جدا دارد.',
+        'web.telegram.org از همین دامنه باز می‌شود؛ اگر آی‌پی پنل بسته است، همین مسیر از دامنهٔ Worker هم کار می‌کند.',
+    ]},
     'settings': {'title': 'تنظیمات و امنیت', 'items': [
         'پیشوند برچسب و آدرس پایه را یک‌بار درست کنید تا همهٔ لینک‌ها تمیز باشند.',
         'با «ابطال همه نشست‌ها» هر دستگاه دیگری از پنل بیرون می‌آید.',
@@ -673,6 +739,10 @@ def _guide_state(request):
     users = list(main.list_users())
     active = [u for u in users if u.get('is_active')]
     scoped = [u for u in users if transports.user_scope(u) != node_scope.SCOPE_ALL]
+    # The Telegram proxies are their own step: they are the one thing a user asks
+    # for before anything else, and each of the three is a switch an admin has to
+    # turn on deliberately.
+    tg_counts = tg_service.counts()
     brand = main._brand()
     base = main.public_base(request)
     newest = active[0] if active else (users[0] if users else None)
@@ -701,6 +771,11 @@ def _guide_state(request):
          'hint': 'سابلینک هوشمند را بدهید یا پنجرهٔ وضعیت را برای کاربر باز کنید.',
          'detail': (f"{newest['username']} · {node_scope.label(transports.user_scope(newest))}" if newest else 'کاربری نیست'),
          'done': bool(active)},
+        {'id': 'telegram', 'title': 'پروکسی تلگرام (MTProto · وب‌پروکسی)', 'section': 'telegram',
+         'hint': 'اگر کاربر فقط تلگرام می‌خواهد، از این تب یک لینک tg://، وب‌پروکسی HTTP/SOCKS5 یا نسخهٔ وب بسازید.',
+         'detail': (f"{tg_counts['published']} منتشرشده از {tg_counts['enabled']} روشن"
+                    if tg_counts['enabled'] else 'هیچ‌کدام روشن نیست'),
+         'done': bool(tg_counts['enabled'])},
         {'id': 'brand', 'title': 'برند و پنجرهٔ وضعیت', 'section': 'customize',
          'hint': 'نام برنامه، بنر و لینک پشتیبانی را تنظیم کنید تا کاربر بداند کجاست.',
          'detail': brand.get('app_name') or 'NEXUS',

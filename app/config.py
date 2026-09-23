@@ -91,6 +91,35 @@ class Settings(BaseSettings):
     # Where mihomo's own API is bound (loopback only, and never the default 9090 so
     # it cannot collide with anything else in this container).
     mihomo_api: str = '127.0.0.1:9095'
+    # ------------------------------------------------- Telegram proxies
+    # Three ways an end user reaches Telegram from this deployment, each with its
+    # own switch, and each published only when its listener really runs and its
+    # port is reachable from outside:
+    #
+    # * an **MTProto proxy** (``mtg``) — the ``tg://proxy`` link a user pastes in
+    #   the Telegram app itself, so no client has to be installed;
+    # * an **HTTP/SOCKS5 web proxy** on the Xray engine the panel already runs,
+    #   with one credential per user — what Telegram Desktop calls «custom proxy»
+    #   (and what a browser can use as well);
+    # * **web.telegram.org** through this deployment's own domain, so the web app
+    #   opens where the site itself is blocked (and through the Cloudflare Worker
+    #   in front of it when the panel's own address is blocked too).
+    mtg_binary: str = '/usr/local/bin/mtg'
+    mtg_config: str = '/data/mtg.toml'
+    telegram_mtproto_port: int = 8446
+    telegram_mtproto_concurrency: int = 8192
+    # The FakeTLS fronting name. It goes *inside* the secret and is the SNI an
+    # active probe sees, so it has to be a hostname that really serves TLS.
+    telegram_mtproto_domain: str = 'www.cloudflare.com'
+    telegram_mtproto_dns: str = 'https://1.1.1.1'
+    telegram_sync_interval: int = 15
+    # Public ports of the HTTP and SOCKS5 web proxies (Xray inbounds).
+    telegram_http_port: int = 8448
+    telegram_socks_port: int = 8449
+    # web.telegram.org through this deployment: one path prefix on the panel's own
+    # domain (and the same prefix forwarded by the Cloudflare Worker).
+    telegram_web_path: str = '/tg'
+    telegram_web_origin: str = 'https://web.telegram.org'
     xray_api_port: int = 10085
     xray_sync_interval: int = 10
     model_config = SettingsConfigDict(env_file='.env', extra='ignore', case_sensitive=False)

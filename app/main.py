@@ -35,6 +35,8 @@ from app.core.settings_store import store
 from app.core.security import SessionManager, LoginThrottle
 from app.core.clientip import client_ip as resolve_client_ip
 from app.cores import service as cores
+from app.telegram import service as telegram_proxies
+from app.telegram import webapp as telegram_web
 from app.services.audit import AuditLog
 from app import xray
 import websockets
@@ -282,10 +284,14 @@ async def lifespan(app:FastAPI):
     # The second engines (AnyTLS/TUIC) reconcile themselves, then keep doing so:
     # an admin switch is picked up without a restart.
     await cores.sync(force=True)
-    task=asyncio.create_task(maintenance()); cf_task=asyncio.create_task(cf_loop(settings.cf_probe_interval)); xray_task=asyncio.create_task(xray.loop()); ping_task=asyncio.create_task(ping_loop(settings.cf_probe_interval,_ping_interval)); auto_task=asyncio.create_task(bootstrap_nodes_full()); cat_task=asyncio.create_task(catalog_loop()); cores_task=asyncio.create_task(cores.loop())
+    # The Telegram proxies: the web-proxy inbounds are in the Xray config Xray
+    # itself just rendered above, so this reconciles the MTProto process and only
+    # restarts Xray if the Telegram inbounds really changed its config.
+    await telegram_proxies.reconcile(force=False)
+    task=asyncio.create_task(maintenance()); cf_task=asyncio.create_task(cf_loop(settings.cf_probe_interval)); xray_task=asyncio.create_task(xray.loop()); ping_task=asyncio.create_task(ping_loop(settings.cf_probe_interval,_ping_interval)); auto_task=asyncio.create_task(bootstrap_nodes_full()); cat_task=asyncio.create_task(catalog_loop()); cores_task=asyncio.create_task(cores.loop()); tg_task=asyncio.create_task(telegram_proxies.loop())
     try: yield
     finally:
-        task.cancel(); cf_task.cancel(); xray_task.cancel(); ping_task.cancel(); auto_task.cancel(); cat_task.cancel(); cores_task.cancel()
+        task.cancel(); cf_task.cancel(); xray_task.cancel(); ping_task.cancel(); auto_task.cancel(); cat_task.cancel(); cores_task.cancel(); tg_task.cancel()
         try: await task
         except asyncio.CancelledError: pass
         try: await cf_task
@@ -300,6 +306,10 @@ async def lifespan(app:FastAPI):
         except asyncio.CancelledError: pass
         try: await cores_task
         except asyncio.CancelledError: pass
+        try: await tg_task
+        except asyncio.CancelledError: pass
+        try: await telegram_proxies.stop_all()
+        except Exception: pass
         try: await cores.stop_all()
         except Exception: pass
         try: await xray._stop()
@@ -311,6 +321,10 @@ app.mount('/static',StaticFiles(directory=os.path.join(BASE_DIR,'static')),name=
 # The newer capability endpoints (customization, Hysteria2, location packs, the
 # network tools) live in their own router so this module keeps owning the core.
 app.include_router(extra_router)
+# The Telegram Web proxy is a public path on this domain (``/tg/…``), so it owns
+# its own router: the admin API lives in the extra router, this one is reached by
+# whoever opens the Telegram web app from a blocked network.
+app.include_router(telegram_web.router)
 @app.get('/health')
 def health():
     try:
@@ -910,6 +924,10 @@ def _portal_data(request:Request,u):
                   for item in node_scope.options(catalog_nodes,user_scope)],
         # Deployment-wide extras an end user should still see.
         'hysteria':transports.catalog()['hysteria2'],
+        # The Telegram proxies this user may use: their own web-proxy lines (their
+        # username and credential), the shared MTProto link and the web address.
+        # Empty when nothing is published, so the window grows no empty section.
+        'telegram':telegram_proxies.portal_payload(base,u),
         # Which of the four core sublinks the status window highlights, and whether
         # node names carry their country flag.
         'default_format':_brand()['default_format'],
