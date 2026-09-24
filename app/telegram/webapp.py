@@ -44,8 +44,8 @@ EXTRA_HOSTS = ('telegram.org', 'www.telegram.org', 't.me')
 # an account server-side: NEXUS never receives a Telegram API hash or a user's
 # MTProto credentials, so pretending the server could join a chat for them would
 # be both impossible and unsafe.
-SPONSOR_URL = 'https://t.me/milonfig'
-SPONSOR_HANDLE = 'milonfig'
+SPONSOR_URL = 'https://t.me/miliconfig'
+SPONSOR_HANDLE = 'miliconfig'
 SPONSOR_TITLE = 'کانال اسپانسر'
 
 # Hop-by-hop headers are per-connection: passing them on corrupts the response.
