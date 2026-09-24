@@ -30,6 +30,20 @@ nothing and says exactly which variable is missing.
 Each half runs **once**: the markers are settings, so an admin who turns the WEB
 proxy off afterwards — or deletes a proxy — keeps that across every later boot.
 Both can also be re-run by hand from the panel.
+
+The TCP-proxy half has one Railway-specific hazard it closes by itself: creating a
+TCP proxy makes Railway hand the service that proxy's *application* port as
+``PORT``, and that port is one Xray already listens on — so the pass pins the port
+the HTTP edge is really on (``railway.pin_http_port``) before it redeploys, instead
+of leaving behind a panel that crash-loops on a port it does not own.
+
+A marker is written only once the pass has nothing left to do, though — that is,
+when it switched the WEB proxy on, or when there is no candidate left because an
+admin has already had their say. A boot on an image whose relay binary is not
+there yet leaves it **unwritten on purpose**, so the next boot (a redeploy onto
+an image that really has it) still switches the WEB proxy on by itself. Marking
+a pass that did nothing as «done» would make the one capability that needs no
+decision the one capability somebody has to be asked to turn on.
 """
 import time
 
@@ -132,6 +146,16 @@ def railway_ports(force=False):
         created.append(item['port'])
     _store(ports.DONE, str(int(time.time())))
     if created:
+        # The HTTP edge first. On Railway, the moment a TCP proxy exists the service
+        # is handed that proxy's *application* port as ``PORT`` — and that port is
+        # the one Xray is already listening on for Reality, AnyTLS or MTProto, so the
+        # panel would come back up on a port somebody else owns and die on «address
+        # already in use». That is unrecoverable from inside the app (a crash-looping
+        # panel has no card to show the reason), so the pass pins the port while this
+        # container is still on it — before the redeploy that would move it.
+        pinned, reason = railway.pin_http_port()
+        if not pinned:
+            failed.append({'id': 'http-port', 'port': 0, 'reason': reason})
         # A TCP proxy created through the API is only active after the service is
         # redeployed (the API says so itself), and the container is where this
         # pass runs — so the pass ends by asking for exactly that one restart.
@@ -159,13 +183,22 @@ def apply(force=False):
         return []
     changed = []
     if not _setting(DONE):
-        for item in candidates():
+        pending = candidates()
+        for item in pending:
             if item['id'] == 'webrelay' and item['ready']:
                 # The switch only: the domain stays empty until an admin names one,
                 # so the link follows whatever hostname this deployment is served on.
                 webrelay.save({'enabled': '1'})
                 changed.append(item['id'])
-        _store(DONE, str(int(time.time())))
+        # The marker means «the pass has nothing left to do», not «the pass ran»:
+        # it goes down when the WEB proxy is on, and also when there is no
+        # candidate at all because an admin has already had their say. It stays
+        # *down* after a boot on an image whose relay binary is missing, because
+        # that is the one thing a later boot can still fix on its own — and until
+        # it does, the one decision-free capability must not become a question
+        # for the admin to answer by hand.
+        if changed or not pending:
+            _store(DONE, str(int(time.time())))
     try:
         outcome = railway_ports(force=force)
     except Exception as exc:

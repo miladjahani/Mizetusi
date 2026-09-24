@@ -84,6 +84,32 @@ def test_a_host_that_cannot_serve_it_switches_nothing_on(monkeypatch):
     assert 'mtproto-proxy' in candidates[0]['reason']
 
 
+def test_a_boot_without_the_relay_binary_does_not_retire_the_pass(monkeypatch):
+    """The marker means «the pass has nothing left to do», not «the pass ran».
+
+    A relay binary that is missing when the container boots is the one thing that
+    can change before the next boot (a redeploy onto a fixed image), so the WEB
+    proxy still has to be switched on by itself then — instead of becoming the one
+    thing an admin has to be asked to turn on by hand.
+    """
+    monkeypatch.setattr(webrelay, 'available', lambda: False)
+    assert autoconfig.apply(force=True) == []
+    assert autoconfig._setting(autoconfig.DONE) is None      # not retired
+    monkeypatch.setattr(webrelay, 'available', lambda: True)
+    assert autoconfig.apply(force=True) == ['webrelay']      # done, unasked
+    assert webrelay.enabled() is True
+    assert autoconfig._setting(autoconfig.DONE) is not None
+
+
+def test_an_admin_who_said_no_still_ends_the_pass(monkeypatch, relay_installed):
+    """The opposite case: once an admin has had their say, there is nothing left to
+    do, so the marker is correct and the pass does not raise the question again."""
+    webrelay.save({'enabled': '0'})
+    assert autoconfig.apply(force=True) == []
+    assert autoconfig._setting(autoconfig.DONE) is not None
+    assert webrelay.enabled() is False
+
+
 def test_the_whole_pass_can_be_switched_off(relay_installed):
     autoconfig._store(autoconfig.SWITCH, '0')
     assert autoconfig.allowed() is False
@@ -143,9 +169,14 @@ def test_the_railway_half_needs_a_token_and_says_so(monkeypatch):
 
 
 def _fake_railway(monkeypatch, existing=()):
-    """Railway as the pass sees it: no token needed, one proxy per created port."""
+    """Railway as the pass sees it: no token needed, one proxy per created port.
+
+    Returns the variables the pass wrote, so a test can assert that the HTTP port
+    was pinned (and that nothing else was touched).
+    """
     from app import railway
 
+    written = {}
     monkeypatch.setattr(railway, 'configured', lambda: True)
     monkeypatch.setattr(railway, 'proxies', lambda: (list(existing), ''))
     monkeypatch.setattr(railway, 'create', lambda port: (
@@ -153,7 +184,17 @@ def _fake_railway(monkeypatch, existing=()):
          'proxyPort': 20000 + int(port), 'applicationPort': int(port),
          'syncStatus': 'ACTIVE'}, ''))
     monkeypatch.setattr(railway, 'redeploy', lambda: (True, ''))
-    return railway
+
+    def set_variable(name, value, redeploy=False):
+        written[name] = value
+        return True, ''
+
+    monkeypatch.setattr(railway, 'set_variable', set_variable)
+    # The edge port the container is really on, so the real ``pin_http_port``
+    # resolution runs instead of being stubbed away.
+    monkeypatch.setenv('PORT', '8080')
+    monkeypatch.delenv('NEXUS_HTTP_PORT', raising=False)
+    return written
 
 
 def test_the_railway_half_forwards_exactly_what_is_switched_on(monkeypatch):
@@ -171,6 +212,65 @@ def test_the_railway_half_forwards_exactly_what_is_switched_on(monkeypatch):
     assert ports.published_port(8443) == 28443
     assert ports.published_host(8443) == 'roundhouse.proxy.rlwy.net'
     assert autoconfig.state()['railway']['created'] == [8443]
+
+
+def test_the_pass_pins_the_http_port_before_it_moves_it(monkeypatch):
+    """Railway hands a service with a TCP proxy that proxy's *application* port as
+    ``PORT`` — and that is the port Xray already owns for the raw transport, so the
+    panel would come back up crash-looping on a port somebody else is listening on.
+    Pinning the port the edge is really on, once, is what keeps both on one service.
+    """
+    written = _fake_railway(monkeypatch)
+    assert autoconfig.railway_ports(force=True)['created'] == [8443]
+    assert written == {'PORT': '8080'}
+
+
+def test_a_pass_that_creates_nothing_writes_no_variable(monkeypatch):
+    """The pin belongs to the change that needs it, not to every boot."""
+    written = _fake_railway(monkeypatch, existing=[
+        {'id': 'p8443', 'domain': 'roundhouse.proxy.rlwy.net', 'proxyPort': 28443,
+         'applicationPort': 8443, 'syncStatus': 'ACTIVE'}])
+    outcome = autoconfig.railway_ports(force=True)
+    assert outcome['created'] == [] and written == {}
+
+
+def test_a_pin_that_cannot_be_written_is_reported_not_hidden(monkeypatch):
+    """A proxy in front of a port the panel cannot come back up on is not a success."""
+    from app import railway
+
+    _fake_railway(monkeypatch)
+    monkeypatch.setattr(railway, 'pin_http_port',
+                        lambda: (False, 'توکن API رِیلوی مجاز نیست'))
+    outcome = autoconfig.railway_ports(force=True)
+    assert outcome['ok'] is False and outcome['failed'][0]['id'] == 'http-port'
+    assert 'مجاز نیست' in outcome['reason']
+
+
+def test_the_http_port_prefers_the_operators_override(monkeypatch):
+    """The ``Dockerfile`` gives uvicorn the same two names in the same order.
+
+    If these ever disagree, the pass would pin the edge to a port nothing serves on
+    — which is the failure this whole path exists to prevent.
+    """
+    from app import railway
+
+    written = {}
+
+    def record(name, value, redeploy=False):
+        written[name] = value
+        return True, ''
+
+    monkeypatch.setattr(railway, 'set_variable', record)
+    monkeypatch.setenv('PORT', '8080')
+    monkeypatch.delenv('NEXUS_HTTP_PORT', raising=False)
+    assert railway.http_port() == 8080
+    assert railway.pin_http_port() == (True, '')
+    assert written == {'PORT': '8080'}
+    monkeypatch.setenv('NEXUS_HTTP_PORT', '9000')
+    assert railway.http_port() == 9000            # the operator's override wins
+    monkeypatch.setenv('PORT', 'nonsense')
+    monkeypatch.delenv('NEXUS_HTTP_PORT', raising=False)
+    assert railway.http_port() == 8080            # the Dockerfile's own default
 
 
 def test_a_later_run_remembers_the_ports_an_earlier_one_created(monkeypatch):

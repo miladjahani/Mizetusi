@@ -35,9 +35,13 @@ processes alive, serve the bridge on our own domain, and hand out
 ``tg://webproxy`` links only while a WebView would really connect.
 """
 import asyncio
+import base64
 import hashlib
+import hmac
 import os
+import re as _re
 import secrets as _secrets
+import socket
 import urllib.parse
 
 import httpx
@@ -497,6 +501,67 @@ def save(updates):
 
 
 # ------------------------------------------------------------- bridge + socket
+def bridge_capability():
+    """The capability a bridge URL carries, derived the way Telegram derives it.
+
+    Telegram Desktop builds ``https://<host>/?bridge=<capability>`` from the
+    ``dd…`` secret and the host the link names, with the derivation the relay
+    implements (``base64url(hmac_sha256(\xdd || secret, "tdesktop-web-proxy-bridge-v1\n" || host))``).
+    The panel needs the same value for *this* deployment for one reason only: so
+    its own check can load the page and open the socket the way the client does,
+    instead of reporting that a port is bound. Nothing is handed out from here —
+    a link still carries the secret and Telegram still makes its own capability.
+    """
+    raw = secret(create=False)
+    host = domain()
+    if not host or len(raw) != 32:
+        return ''
+    try:
+        key = b'\xdd' + bytes.fromhex(raw)
+    except ValueError:
+        return ''
+    digest = hmac.new(key, b'tdesktop-web-proxy-bridge-v1\n' + host.encode(),
+                      hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
+
+
+def _page_token(html):
+    """The carrier token the relay puts in the bridge page it just served."""
+    found = _re.search(r'TOKEN="([^"]+)"', html or '')
+    return found.group(1) if found else ''
+
+
+async def _dial_relay(subprotocols=None, forwarded=None, query='', timeout=12.0):
+    """Open the relay's socket half with **one** ``Host`` header — ours.
+
+    The relay serves one site and picks it by ``Host``, compared verbatim. The
+    WebSocket client always writes the host from the URI into that header and
+    *appends* any header handed to it separately, so passing the public host as an
+    extra header reaches the relay as two ``Host`` values whose first one is
+    ``127.0.0.1:<port>`` — the page loads, the socket is answered with ``404``, and
+    the WEB proxy connects nothing. The socket is therefore dialled here and handed
+    over already connected, while the URI names the public host *without* a port:
+    the URI only builds that header, the bytes still go down the loopback socket
+    this function opened.
+    """
+    host = domain()
+    if not host:
+        raise RuntimeError('دامنهٔ عمومی پروکسی WEB پیدا نشد')
+    sock = socket.create_connection(('127.0.0.1', port()), timeout=min(float(timeout), 5.0))
+    try:
+        from websockets.asyncio.client import connect
+        return await connect(f'ws://{host}{WS_PATH}{query}', sock=sock,
+                             additional_headers=dict(forwarded or {}),
+                             subprotocols=list(subprotocols) if subprotocols else None,
+                             open_timeout=timeout, ping_interval=None, max_size=None)
+    except BaseException:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        raise
+
+
 def _client_address(request):
     """The browser's real address, so it survives the hop to the relay.
 
@@ -580,31 +645,26 @@ async def web_relay_socket(websocket: WebSocket):
     ``Sec-WebSocket-Protocol`` (``tproxy-v1.<token>``), so that header has to be
     offered upstream and echoed back to the client — Telegram's WebView refuses
     the socket otherwise.
+
+    The dial itself goes through :func:`_dial_relay`, because the ``Host`` header
+    is what the relay selects the bridge by and a second copy of it is a proxy that
+    silently serves the page and nothing else.
     """
     if not published():
         await websocket.close(code=1013)
         return
-    from websockets.asyncio.client import connect
-
     offered = [part.strip() for part in
                (websocket.headers.get('sec-websocket-protocol') or '').split(',') if part.strip()]
-    target = f'ws://127.0.0.1:{port()}{WS_PATH}'
-    if websocket.url.query:
-        target += '?' + str(websocket.url.query)
-    extra = {
-        'host': domain(),
-        'x-forwarded-proto': 'wss',
-        'x-forwarded-host': domain(),
-    }
+    forwarded = {'x-forwarded-proto': 'wss', 'x-forwarded-host': domain()}
     origin = websocket.headers.get('origin')
     if origin:
-        extra['origin'] = origin
+        forwarded['origin'] = origin
     address = _client_address(websocket)
     if address:
-        extra['x-forwarded-for'] = address
+        forwarded['x-forwarded-for'] = address
+    query = ('?' + str(websocket.url.query)) if websocket.url.query else ''
     try:
-        upstream = await connect(target, additional_headers=extra, subprotocols=offered or None,
-                                 open_timeout=12, ping_interval=None, max_size=None)
+        upstream = await _dial_relay(subprotocols=offered, forwarded=forwarded, query=query)
     except Exception:
         await websocket.close(code=1011)
         return
@@ -625,17 +685,59 @@ async def web_relay_socket(websocket: WebSocket):
 
 # ---------------------------------------------------------------------- probe
 async def probe(timeout=6.0):
-    """Ask the relay itself whether it is really serving on loopback.
+    """Can a WebView outside really connect *here*? Both halves, for real.
 
-    Without a valid capability the relay answers 404 — and that is the proof
-    wanted here: the process is up, bound, and selecting the bridge by Host. A
-    connection refused, or a 5xx, is what the card must not hide behind
-    «روشن».
+    The question «does the WEB proxy work» is not «is the port bound»: a page that
+    loads while its socket is refused looks healthy in every cheap check and
+    connects nothing. So this does exactly what Telegram Desktop does — loads
+    ``/?bridge=<capability>`` for our own host, takes the token the page carries,
+    and opens the same-origin socket with ``tproxy-v1.<token>`` — and reports the
+    subprotocol the relay echoed back as the proof that the carrier handshake
+    completed. «The port is bound» is the question that let a broken carrier look
+    healthy, so this never asks it.
     """
-    url = f'http://127.0.0.1:{port()}/'
+    host = domain()
+    capability = bridge_capability()
+    url = f'http://127.0.0.1:{port()}/?bridge={capability}' if capability else ''
+    result = {'ok': False, 'error': '', 'host': host, 'url': url, 'status': 0, 'bytes': 0,
+              'page': {'ok': False, 'status': 0, 'bytes': 0, 'error': ''},
+              'socket': {'ok': False, 'protocol': '', 'error': ''}}
+    if not enabled():
+        result['error'] = 'پروکسی WEB خاموش است'
+        return result
+    if not (host and capability):
+        result['error'] = 'دامنه یا secret پروکسی WEB آماده نیست'
+        return result
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(url, headers={'host': domain() or 'localhost'})
+            response = await client.get(url, headers={'host': host, 'accept': 'text/html',
+                                                      'accept-encoding': 'identity'})
     except Exception as exc:
-        return {'ok': False, 'error': f'{type(exc).__name__}: {exc}'}
-    return {'ok': response.status_code < 500, 'status': response.status_code, 'url': url}
+        result['error'] = f'{type(exc).__name__}: {exc}'
+        result['page']['error'] = result['error']
+        return result
+    result['status'] = response.status_code
+    result['bytes'] = len(response.content)
+    result['page'] = {'ok': response.status_code == 200, 'status': response.status_code,
+                      'bytes': len(response.content),
+                      'error': '' if response.status_code == 200 else
+                               f'صفحهٔ bridge با کد {response.status_code} پاسخ داد'}
+    token = _page_token(response.text) if result['page']['ok'] else ''
+    if not token:
+        result['socket']['error'] = (result['page']['error'] or
+                                     'صفحهٔ bridge توکن سوکت را برنگرداند')
+        result['error'] = result['socket']['error']
+        return result
+    try:
+        upstream = await _dial_relay(subprotocols=['tproxy-v1.' + token], timeout=timeout)
+    except Exception as exc:
+        result['socket']['error'] = f'{type(exc).__name__}: {exc}'
+        result['error'] = result['socket']['error']
+        return result
+    result['socket'] = {'ok': True, 'protocol': upstream.subprotocol or '', 'error': ''}
+    try:
+        await upstream.close()
+    except Exception:
+        pass
+    result['ok'] = True
+    return result

@@ -56,6 +56,7 @@ _CREATE = ('mutation($input:TCPProxyCreateInput!){ tcpProxyCreate(input:$input){
 _DELETE = 'mutation($id:String!){ tcpProxyDelete(id:$id) }'
 _REDEPLOY = ('mutation($serviceId:String!,$environmentId:String!){'
              ' serviceInstanceRedeploy(serviceId:$serviceId,environmentId:$environmentId) }')
+_VARIABLE = ('mutation($input:VariableUpsertInput!){ variableUpsert(input:$input) }')
 
 
 def _env(*names):
@@ -101,6 +102,22 @@ def missing():
     if not project():
         out.append('RAILWAY_PROJECT_ID')
     return out
+
+
+def http_port():
+    """The port the HTTP edge really serves on.
+
+    Railway injects ``PORT`` for that edge, and ``NEXUS_HTTP_PORT`` is the
+    operator's override (the ``Dockerfile`` gives uvicorn the same two names, so
+    this and the process that binds it cannot disagree). The fallback is the
+    ``Dockerfile``'s own default.
+    """
+    raw = _env('NEXUS_HTTP_PORT', 'PORT')
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 0
+    return value if 1 <= value <= 65535 else 8080
 
 
 def _headers():
@@ -202,12 +219,55 @@ def redeploy():
     return bool(data), ''
 
 
+def set_variable(name, value, redeploy=False):
+    """Store one variable on the service. ``(ok, error)``.
+
+    ``skipDeploys`` is deliberate: the pass that needs this redeploys once itself
+    straight afterwards — a TCP proxy is only active after a restart — and a second
+    restart for the same change is one too many.
+    """
+    if not (project() and environment() and service()):
+        return False, 'شناسه‌های پروژه/محیط/سرویس رِیلوی در دسترس نیست (' + '، '.join(missing()) + ')'
+    if not str(name or '').strip():
+        return False, 'نام متغیر خالی است'
+    data, error = _call(_VARIABLE, {'input': {'projectId': project(),
+                                              'environmentId': environment(),
+                                              'serviceId': service(),
+                                              'name': str(name).strip(), 'value': str(value),
+                                              'skipDeploys': not redeploy}})
+    if error:
+        return False, error
+    return bool((data or {}).get('variableUpsert')), ''
+
+
+def pin_http_port():
+    """Keep the HTTP edge off the ports the raw transports own. ``(ok, error)``.
+
+    Railway hands a service whose networking was only HTTPS the port it already
+    serves on — but the moment a **TCP proxy** exists it hands the service that
+    proxy's *application* port as ``PORT`` instead, and that port is one Xray is
+    already listening on (Reality, AnyTLS, MTProto, a web proxy). uvicorn then dies
+    on «address already in use» and the panel crash-loops, which is a failure no card
+    can show because there is no panel left to show it.
+
+    Writing the *same* port as a **stored variable** is what fixes it: Railway
+    rewrites the ``PORT`` it injects, not one the service owns. Called from the pass
+    that creates the proxies, while this container is still serving on the real port.
+    """
+    if not _env('PORT'):
+        # No injected HTTP port to protect: a host that owns its ports (a VPS, a
+        # container started by hand) is not the case this exists for.
+        return True, ''
+    return set_variable('PORT', str(http_port()))
+
+
 def info(**extra):
     """The panel's view of this integration — never the token itself."""
     return {
         'configured': configured(),
         'missing': missing(),
         'endpoint': ENDPOINT,
+        'http_port': http_port(),
         'project_id': project(),
         'environment_id': environment(),
         'service_id': service(),

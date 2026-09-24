@@ -82,4 +82,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 CMD pytho
 # throttle forgeable. The app resolves the real address itself
 # (app/core/clientip.py), where the raw peer is still visible, and reads
 # X-Forwarded-Proto itself for cookie policy, so nothing is lost here.
-CMD ["sh","-c","exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips='127.0.0.1' --workers 1 --timeout-keep-alive 30"]
+# The port is ``NEXUS_HTTP_PORT`` first, then the platform's own $PORT, then 8080.
+# The override exists for one measured reason: on Railway, creating a TCP proxy
+# makes Railway hand the service that proxy's *application* port as $PORT — and a
+# raw transport (Reality, AnyTLS, MTProto, a web proxy) is already listening on it,
+# so uvicorn would die on «address already in use» and the panel crash-loop.
+# ``app/railway.py`` pins the port the edge is really on (``pin_http_port``) before
+# it redeploys, and this is the other half of that: the same two names, in the same
+# order, so app/railway.py and this command can never disagree about the edge port.
+CMD ["sh","-c","exec uvicorn app.main:app --host 0.0.0.0 --port ${NEXUS_HTTP_PORT:-${PORT:-8080}} --proxy-headers --forwarded-allow-ips='127.0.0.1' --workers 1 --timeout-keep-alive 30"]

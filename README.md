@@ -28,6 +28,23 @@ a dedicated subscription per client.
   real binary), and `tests/test_runtime.py` asserts that every binary path the app looks for is
   really in that image — the one gap a rendered-config test cannot see, which is exactly how this
   relay's own binary was once installed in a build stage and never copied where a client runs.
+- **Telegram Desktop's WEB proxy now really connects — the page *and* the socket it opens,
+  and a check that would have caught it.** The bridge page was served while the same-origin
+  socket that page opens was answered with `404`, so the one Telegram proxy that needs no raw
+  port loaded a page and connected nothing — a WEB link that looks right in every cheap test.
+  The relay serves one site and picks it by the `Host` header, compared verbatim; the
+  WebSocket client always writes the URL's host into that header and *appends* anything it is
+  handed separately, so restoring the public host as an extra header sent the relay two `Host`
+  values whose first was `127.0.0.1:<port>`. The carrier socket is now dialled on loopback and
+  handed over already connected, with the URI naming the public host **without** a port
+  (`webrelay._dial_relay`) — the only shape the relay accepts. The card's new **تست اتصال**
+  button no longer answers «the port is bound»: it derives the bridge capability from this
+  deployment's own secret exactly the way Telegram derives it, loads `/?bridge=<capability>`
+  for our own host, reads the token that page carries, opens the same-origin socket with
+  `tproxy-v1.<token>`, and reports the subprotocol the relay echoed back. `tests/test_webrelay.py`
+  asserts that end to end against the real binary, alongside the two shapes that broke it: a
+  handshake carrying exactly one `Host` header, and a page whose socket is refused being
+  reported as a failure instead of a success.
 - **A fresh deployment configures itself, and on Railway the random TCP ports are created for
   you.** Every card that needs a raw port used to say «on Railway add a TCP proxy» and leave the
   number to the dashboard — but Railway allocates that public port **at random**, so the port a
@@ -42,7 +59,25 @@ a dedicated subscription per client.
   host/port, and performs the single redeploy the API itself says a new proxy needs. Nothing is
   invented and no admin choice is overwritten: a switch the admin has ever touched is never
   flipped, an API failure is reported verbatim, and each half runs once (its marker is a
-  setting). The new **پیشرفته → پیکربندی خودکار پس از استقرار** card shows the mapping, names
+  setting). The marker is only written once the pass has **nothing left to do** — it
+  switched the WEB proxy on, or an admin has already had their say. A boot on an image
+  whose relay binary is missing leaves it unwritten, so the next boot still switches the
+  WEB proxy on by itself: marking a pass that did nothing as «done» would turn the one
+  capability that needs no decision into the one question an admin has to answer by hand.
+  A TCP proxy turned out to move the HTTP edge with it, which is now the third thing the
+  pass owns: on Railway, the moment one exists, the service is handed that proxy's
+  *application* port as `PORT` — and that port is the one Xray already listens on for Reality,
+  AnyTLS or MTProto, so the panel came back up on a port somebody else owned, died on
+  «address already in use» and crash-looped where no card can show the reason because there
+  is no panel left. So the pass pins `PORT` to the port the edge is really on **before** the
+  redeploy that would move it (`railway.pin_http_port` → `railway.set_variable`): a *stored*
+  variable is not the one Railway rewrites, and this is measured on the deployment rather
+  than assumed — the `Dockerfile` gives uvicorn the same two names in the same order
+  (`NEXUS_HTTP_PORT`, then `PORT`, then `8080`) so the process that binds the port and the
+  pass that pins it can never disagree. `tests/test_autoconfig.py` asserts the pin happens,
+  that a pass which creates no proxy writes nothing, and that a pin that cannot be written is
+  reported as a failure instead of a silent success.
+  The new **پیشرفته → پیکربندی خودکار پس از استقرار** card shows the mapping, names
   the missing variables and re-runs either half on demand.
 - **Telegram, three ways: an MTProto proxy, an HTTP/SOCKS5 web proxy, and `web.telegram.org`
   through your own domain.** Telegram is not a VPN and none of the three is a VPN transport,
@@ -357,9 +392,9 @@ a dedicated subscription per client.
 | `app/telegram/webproxy.py` | The HTTP/SOCKS5 web proxies: Xray inbounds, one account per user, port reachability |
 | `app/telegram/webapp.py` | `web.telegram.org` through this domain: host allowlist, HTML/redirect/cookie rewriting, runtime socket tunnel |
 | `app/telegram/service.py` | The four in one mode/status/payload/reconcile loop, for the panel and the status window |
-| `app/autoconfig.py` | The one-time deploy pass: switch on what needs no decision, create the Railway TCP proxies the raw ports need, and say what is left |
+| `app/autoconfig.py` | The one-time deploy pass: switch on what needs no decision, create the Railway TCP proxies the raw ports need (pinning the HTTP edge port first), and say what is left |
 | `app/ports.py` | Listen port vs *published* port: the stored mapping every link is built from (falling back to the listen port on a host that owns its ports) |
-| `app/railway.py` | Railway's TCP proxies from the panel: create/list/redeploy over the GraphQL API, with every failure returned as a readable reason |
+| `app/railway.py` | Railway's TCP proxies from the panel: create/list/redeploy over the GraphQL API, plus the stored variables that keep the HTTP edge off a raw port (`pin_http_port`), with every failure returned as a readable reason |
 
 Xray is the protocol engine while FastAPI stays the public HTTPS/WebSocket edge on whatever
 host this runs on: the edge terminates TLS and bridges WebSocket streams to the loopback
@@ -554,6 +589,15 @@ and stop under the engines' supervisor discipline, and a change is picked up by 
 page and its socket as one site, so the public Host is restored explicitly — and tunnels the
 carrier's `Sec-WebSocket-Protocol` (`tproxy-v1.<token>`) untouched, without which the page loads
 and then never connects.
+
+*Restored explicitly* is a narrow claim, and getting it half right is what made the socket 404:
+the relay serves exactly one site and compares `Host` verbatim, while the WebSocket client always
+writes the URL's host into that header and appends anything it is handed separately. Our host is
+therefore no longer passed as a header at all — the loopback socket is opened here and handed over
+already connected, and the URI (`ws://<domain>/api/v1/socket`, **no port**) is what builds the one
+`Host` header the relay routes by. The card's **تست اتصال** button runs the same two steps a
+WebView runs (page, then `tproxy-v1.<token>` socket) and reports the subprotocol the relay echoed
+back. `tests/test_webrelay.py` pins both halves, including against the real binary.
 
 Two details are easy to get wrong and are asserted by `tests/test_webrelay.py`: the link carries
 **no port** (Telegram refuses a WEB link that names one) and its secret is a **`dd…`** secret,

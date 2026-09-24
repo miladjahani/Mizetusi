@@ -592,6 +592,14 @@ async def save_telegram(request: Request):
         sync = await tg_service.reconcile()
         _audit('telegram.rotate', 'webrelay secret reissued')
         return {'success': True, 'secret': secret, 'sync': sync, **_telegram_payload(request)}
+    if action == 'probe-webrelay':
+        # «Does the WEB proxy really connect?» — the bridge page *and* the carrier
+        # socket it opens, which is the half a bound loopback port hides: the page
+        # can load perfectly while the socket is refused.
+        result = await tg_service.probe_webrelay()
+        _audit('telegram.probe', f"webrelay ok={result.get('ok')} "
+                                 f"socket={bool((result.get('socket') or {}).get('ok'))}")
+        return {'success': True, 'webrelay_probe': result, **_telegram_payload(request)}
     if action == 'reload':
         sync = await tg_service.reconcile()
         _audit('telegram.reload', ' '.join(f"{name}:{'up' if item.get('running') else 'down'}"

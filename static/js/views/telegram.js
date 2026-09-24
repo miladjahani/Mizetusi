@@ -106,6 +106,7 @@ export class TelegramView {
       <div class="kv-line"><span>سوکت حمل</span><b dir="ltr">${esc(data.ws_path || '')}</b></div>
       <div class="kv-line"><span>سقف اتصال</span><b dir="ltr">${Fmt.num(data.max_connections)}</b></div>
       <div class="kv-line"><span>secret</span><b dir="ltr" style="white-space:normal;word-break:break-all">${esc(data.link_secret || '—')}</b></div>
+      ${this.store.get('telegramRelayProbe') ? `<div class="kv-line"><span>آخرین تست</span><b style="white-space:normal">${esc(this.store.get('telegramRelayProbe'))}</b></div>` : ''}
       ${data.reason ? `<div class="kv-line"><span>دلیل منتشر نشدن</span><b style="white-space:normal">${esc(data.reason)}</b></div>` : ''}`;
     const links = $('#tgRelayLinks');
     if (!links) return;
@@ -327,6 +328,37 @@ export class TelegramView {
     this.toasts.ok('secret پروکسی WEB تازه شد — لینک‌های قبلی از کار افتادند', 6000);
   }
 
+  /* «تست اتصال» on the WEB card: the bridge page *and* the carrier socket it
+     opens. A bound loopback port is not an answer — the page can load perfectly
+     while the socket is refused, which is exactly a WEB proxy that connects
+     nothing — so both halves are checked and both are reported. */
+  async probeRelay() {
+    const button = $('#tgRelayProbe');
+    if (button) {
+      button.disabled = true;
+      button.innerHTML = '<span class="spin-inline"></span> در حال تست…';
+    }
+    try {
+      const data = await this.api.post('/api/telegram', { action: 'probe-webrelay' });
+      const result = data.webrelay_probe || {};
+      const socket = result.socket || {};
+      this.store.set('telegramRelayProbe', result.ok
+        ? `موفق — صفحه ${Fmt.num(result.status)} · سوکت ${socket.protocol || 'باز شد'}`
+        : `ناموفق — ${result.error || 'پاسخ نامعتبر'}`);
+      this.store.set('telegram', data);
+      this.render();
+      (result.ok ? this.toasts.ok : this.toasts.err)(
+        result.ok
+          ? 'پروکسی WEB واقعاً وصل می‌شود: صفحه و سوکت حمل هر دو پاسخ دادند'
+          : `پروکسی WEB وصل نمی‌شود (${result.error || 'دلیل نامشخص'})`, 9000);
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'تست اتصال';
+      }
+    }
+  }
+
   async probe() {
     const button = $('#tgAppProbe');
     if (button) {
@@ -360,6 +392,8 @@ export class TelegramView {
     if (relaySave) relaySave.onclick = () => this.app.safe(() => this.save());
     const relayRotate = $('#tgRelayRotate');
     if (relayRotate) relayRotate.onclick = () => this.app.safe(() => this.rotateRelay());
+    const relayProbe = $('#tgRelayProbe');
+    if (relayProbe) relayProbe.onclick = () => this.app.safe(() => this.probeRelay());
     const mtproto = $('#tgMtEnabled');
     if (mtproto) mtproto.onclick = () => mtproto.classList.toggle('on');
     const webapp = $('#tgAppEnabled');

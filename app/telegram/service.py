@@ -197,6 +197,16 @@ async def probe():
     return await webapp.probe()
 
 
+async def probe_webrelay():
+    """Load the WEB bridge and open its carrier socket — the WEB card's «تست».
+
+    A different question from :func:`probe`: that one asks whether this host can
+    reach web.telegram.org, this one asks whether a WebView outside can reach
+    *us*, over the page and the same-origin socket the WEB proxy is made of.
+    """
+    return await webrelay.probe()
+
+
 # ------------------------------------------------------------------- portal
 def portal_payload(base, user):
     """What one end user gets: their own proxy links, and nothing else.
