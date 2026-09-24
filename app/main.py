@@ -14,7 +14,8 @@ from app.users.service import (list_users, get_user, get_by_token, create_user, 
 from app.subscriptions.generator import (render, active_nodes, node_links, normalize_target, profiles_for,
     entry_pairs, TRANSPORT_TARGETS as SUB_TRANSPORT_TARGETS, TARGETS as SUB_TARGETS)
 from app.subscriptions.clients import (CLIENTS, PRESETS, FAMILIES, FORMAT_LABELS, DEFAULT_PRESET, catalog as client_catalog,
-    client_links, client_groups, download_overrides, preset as get_preset, subscription_url as client_subscription_url)
+    client_links, client_groups, download_overrides, preset as get_preset, subscription_url as client_subscription_url,
+    CLIENT_FORMATS)
 from app.subscriptions import transports as transports
 from app.subscriptions import scope as node_scope
 from app.subscriptions import flags as sub_flags
@@ -35,8 +36,10 @@ from app.core.settings_store import store
 from app.core.security import SessionManager, LoginThrottle
 from app.core.clientip import client_ip as resolve_client_ip
 from app.cores import service as cores
+from app import autoconfig as auto_config
 from app.telegram import service as telegram_proxies
 from app.telegram import webapp as telegram_web
+from app.telegram import webrelay as telegram_webrelay
 from app.services.audit import AuditLog
 from app import xray
 import websockets
@@ -280,6 +283,12 @@ async def bootstrap_nodes_full():
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     init_db(); bootstrap(); ensure_nodes(); bootstrap_nodes()
+    # The one-time pass that switches on what carries no judgement (see
+    # app/autoconfig.py): Telegram Desktop's WEB proxy, whose carrier is this
+    # deployment's own HTTPS name and therefore needs no port and no TCP proxy.
+    # It runs before the Telegram reconcile below, so the relay starts with this
+    # boot rather than the next one.
+    auto_config.apply()
     await xray.start_or_reload(force=True)
     # The second engines (AnyTLS/TUIC) reconcile themselves, then keep doing so:
     # an admin switch is picked up without a restart.
@@ -325,13 +334,22 @@ app.include_router(extra_router)
 # its own router: the admin API lives in the extra router, this one is reached by
 # whoever opens the Telegram web app from a blocked network.
 app.include_router(telegram_web.router)
+# The WEB proxy's carrier socket (``/api/v1/socket``) is reached by Telegram
+# Desktop's own WebView, not by a panel session, so it owns its own router too.
+app.include_router(telegram_webrelay.router)
 @app.get('/health')
 def health():
     try:
         row('SELECT 1'); return {'ok':True,'service':'nexus-python','database':'ok','uptime_seconds':int(time.time()-_started),'time':int(time.time())}
     except Exception as exc: raise HTTPException(503,f'database unavailable: {type(exc).__name__}')
 @app.get('/',response_class=HTMLResponse)
-def home(request:Request,token:str=''):
+async def home(request:Request,token:str=''):
+    # Telegram Desktop's WEB proxy loads https://<this-domain>/?bridge=<capability>
+    # in a hidden WebView, and the relay that answers it lives on loopback. The
+    # bridge is requested by a client that has no panel session at all, so it is
+    # answered before the auth check: the capability in the query is what gates it
+    # (the relay verifies it), not a cookie.
+    if 'bridge' in request.query_params: return await telegram_webrelay.bridge(request)
     try: auth(request)
     except HTTPException:
         # Session bootstrap for clients whose browser refuses the session cookie
@@ -679,9 +697,16 @@ def subscription(request:Request,token:str,target:str='auto',node:str='',locatio
     try: text=render(u,public_base(request),target,nodes,_sub_prefix(),include_extras=not node)
     except ValueError as e: raise HTTPException(400,str(e))
     cap=transports.user_max_configs(u)
+    # What the body really is, told to the client rather than guessed: a Clash
+    # profile is YAML (so neither ``singbox`` nor ``lines`` describes it), and a
+    # client that resolves to the Clash family always gets one.
+    resolved_target=normalize_target(target)
+    if text.lstrip().startswith('{'): wire='singbox'
+    elif CLIENT_FORMATS.get(resolved_target,resolved_target)=='clash': wire='clash'
+    else: wire='lines'
     headers={'Cache-Control':'no-store, max-age=0','X-Content-Type-Options':'nosniff',
-             'X-NEXUS-Node-Count':str(len(nodes)),'X-NEXUS-Target':normalize_target(target),
-             'X-NEXUS-Format':'singbox' if text.lstrip().startswith('{') else 'lines',
+             'X-NEXUS-Node-Count':str(len(nodes)),'X-NEXUS-Target':resolved_target,
+             'X-NEXUS-Format':wire,
              'X-NEXUS-Max-Configs':str(cap),'X-NEXUS-Flags':'1' if _flags_on() else '0',
              'X-NEXUS-Transports':str(len(transports.available_profiles()))}
     if location: headers['X-NEXUS-Location']=str(location)

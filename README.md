@@ -7,6 +7,43 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **Telegram Desktop's WEB proxy — the one Telegram proxy that needs no raw port — and a panel
+  that hands a user exactly one kind of Telegram proxy by default.** Telegram Desktop 7.1 added
+  a fourth proxy type, `WEB`, and it is not a transport at all: a hidden WebView loads
+  `https://<this-deployment>/?bridge=<capability>` and shuttles multiplexed MTProto frames over
+  a same-origin WebSocket, so what a censor sees is a genuine browser TLS handshake followed by
+  HTTP. Because the carrier *is* this deployment's own 443, it is the only Telegram proxy that
+  works on a forwarder (Railway included, behind the Worker, on a CDN) with **no TCP proxy** —
+  which is why it is what a user gets by default: the new **نوع پروکسی تلگرام** picker defaults
+  to «فقط WEB» and the status window hands out the `tg://webproxy` link and nothing else. The
+  other three types stay maintained and are published again the moment an admin selects «همهٔ
+  انواع». `app/telegram/webrelay.py` owns both halves — mtproto.zig's `mtproto-proxy web-relay`
+  (the browser-facing WebSocket) and its loopback data plane, two processes of the same pinned
+  binary run under the same supervisor discipline as the engines — serves the bridge page on
+  *our* host (Telegram refuses a WEB link that names a port, so the link carries `server` and a
+  `dd…` secret and nothing else), and stores that secret in the database so a redeploy does not
+  reissue every link a user already added. Its tarball is checksum-pinned in the `Dockerfile` and
+  copied into the image's *runtime* stage, the binary itself has to accept the rendered config
+  before a process is replaced (`--check-config`, asserted by `tests/test_webrelay.py` against the
+  real binary), and `tests/test_runtime.py` asserts that every binary path the app looks for is
+  really in that image — the one gap a rendered-config test cannot see, which is exactly how this
+  relay's own binary was once installed in a build stage and never copied where a client runs.
+- **A fresh deployment configures itself, and on Railway the random TCP ports are created for
+  you.** Every card that needs a raw port used to say «on Railway add a TCP proxy» and leave the
+  number to the dashboard — but Railway allocates that public port **at random**, so the port a
+  link must carry is not the port the container binds, and a link built from the listen port is
+  a link that answers nothing. Two new modules close that gap. `app/ports.py` is the single place
+  that answers «which port is this capability really published on» (one stored mapping, falling
+  back to the listen port — which is why a VPS and a Railway deployment share exactly one code
+  path); `app/railway.py` drives Railway's own GraphQL API (`tcpProxyCreate`, `tcpProxies`,
+  `serviceInstanceRedeploy`) and `app/autoconfig.py` runs one pass at boot: it switches on what
+  needs no decision at all — today exactly the WEB proxy — and, when a `RAILWAY_API_TOKEN` is
+  present, creates one TCP proxy per enabled raw-port capability, records the forwarded
+  host/port, and performs the single redeploy the API itself says a new proxy needs. Nothing is
+  invented and no admin choice is overwritten: a switch the admin has ever touched is never
+  flipped, an API failure is reported verbatim, and each half runs once (its marker is a
+  setting). The new **پیشرفته → پیکربندی خودکار پس از استقرار** card shows the mapping, names
+  the missing variables and re-runs either half on demand.
 - **Telegram, three ways: an MTProto proxy, an HTTP/SOCKS5 web proxy, and `web.telegram.org`
   through your own domain.** Telegram is not a VPN and none of the three is a VPN transport,
   so each one gets the implementation it actually needs. **MTProto** is the `tg://proxy` link
@@ -108,6 +145,27 @@ a dedicated subscription per client.
   list, the admin's preferred family is marked recommended, and the window still carries the
   smart link, the banner, the support link and the config counter (`config_count` /
   `max_configs`).
+- **Clash/Mihomo is handed a real profile, not a JSON fragment.** `?target=clash` — and every
+  Clash-family client link, `?target=bettbox` included — used to answer with
+  `{"proxies": [...]}`: valid JSON that no Mihomo client can import, which is exactly what
+  made that sublink look broken. The body is now standard Clash YAML. `mixed-port`, `mode`,
+  `log-level`, `unified-delay` and the controller settings; a `dns` block (`fake-ip`, local
+  resolvers plus an Iran-aware `fallback-filter`); the `proxies` list; `proxy-groups` with one
+  `select` group on top whose members are the per-country `url-test` groups — named with the
+  same country, flag and Persian name the node labels carry, so the panel's «پرچم کشور روی نام
+  نودها» switch governs both — plus one automatic lowest-latency group over everything and
+  `DIRECT` for bypass; and `rules` that send LAN and Iranian traffic direct, reject the
+  ad/adult domains **only** when the user's own switches ask for it, and `MATCH` the selector.
+  `app/subscriptions/yamlout.py` is the small dependency-free writer behind it: block style,
+  indentless sequences (dashes at their key's indentation, the shape every working profile
+  uses), a scalar quoted only when YAML would otherwise read it as something else, and empty
+  mappings/sequences written `{}`/`[]` so they never become `null`. The document and its
+  serialisation are deliberately separate (`generator.clash_document` / `clash_profile`), so
+  the panel and the tests assert the structure instead of parsing the text back;
+  `X-NEXUS-Format: clash` names the wire format for clients that switch on it; and
+  `tests/test_clash_profile.py` round-trips the emitted YAML through a real parser (it skips
+  when none is installed), checks no proxy name repeats — Clash keeps the last one silently —
+  and proves every entry a group references really exists.
 - **How many configs a user gets is now a number you set.** The create/edit form has a
   **تعداد کانفیگ** field (and «شخصی‌سازی» holds the default quick-create uses). The cap is
   applied in exactly one place (`entry_pairs`), so the line formats, Base64, sing-box,
@@ -286,7 +344,8 @@ a dedicated subscription per client.
 | `app/core/clientip.py` | The real client address behind proxies — nginx's `real_ip` rule (trusted peers, `CF-Connecting-IP`, right-to-left chain) |
 | `app/services/audit.py` | `AuditLog` — append-only admin trail with Persian labels |
 | `app/nodes.py` | `NodeCatalog` (CRUD/sync/bootstrap) and `NodeProbe` (real latency) |
-| `app/subscriptions/generator.py` | Subscription rendering for every target/format |
+| `app/subscriptions/generator.py` | Subscription rendering for every target/format, and the Clash profile document (proxies + groups + rules) |
+| `app/subscriptions/yamlout.py` | The small block-style YAML writer the Clash/Mihomo profile is serialised with |
 | `app/subscriptions/flags.py` | Country → flag lookup for node names (slug, name, provider or emoji) |
 | `app/api_extra.py` | The newer admin APIs: customization, Hysteria2, location packs, network tools |
 | `app/edge/packs.py` | Multi-location packs + the subscription importer |
@@ -294,9 +353,13 @@ a dedicated subscription per client.
 | `app/subscriptions/clients.py` | Client catalog + the Iran-ready quick-create presets |
 | `app/xray.py` | Xray-core supervisor: config generation, reload, StatsService sync |
 | `app/telegram/mtproto.py` | The MTProto proxy: `mtg` config, secret lifecycle, real `mtg access` validation, supervisor |
+| `app/telegram/webrelay.py` | Telegram Desktop's WEB proxy: `mtproto-proxy web-relay` + its loopback data plane, the bridge page and its same-origin socket, the `dd…` secret |
 | `app/telegram/webproxy.py` | The HTTP/SOCKS5 web proxies: Xray inbounds, one account per user, port reachability |
 | `app/telegram/webapp.py` | `web.telegram.org` through this domain: host allowlist, HTML/redirect/cookie rewriting, runtime socket tunnel |
-| `app/telegram/service.py` | The three in one status/payload/reconcile loop, for the panel and the status window |
+| `app/telegram/service.py` | The four in one mode/status/payload/reconcile loop, for the panel and the status window |
+| `app/autoconfig.py` | The one-time deploy pass: switch on what needs no decision, create the Railway TCP proxies the raw ports need, and say what is left |
+| `app/ports.py` | Listen port vs *published* port: the stored mapping every link is built from (falling back to the listen port on a host that owns its ports) |
+| `app/railway.py` | Railway's TCP proxies from the panel: create/list/redeploy over the GraphQL API, with every failure returned as a readable reason |
 
 Xray is the protocol engine while FastAPI stays the public HTTPS/WebSocket edge on whatever
 host this runs on: the edge terminates TLS and bridges WebSocket streams to the loopback
@@ -443,18 +506,62 @@ is advertised.
 ## Telegram proxies
 
 Telegram is not a VPN and none of these is a VPN transport, so each one is built out of what
-actually implements it. All of them are **off by default** and each is published only when its
-listener is really running **and** its port is reachable from outside; the card names whichever
-half is missing instead of handing out a link that dead-ends. A VPS owns its ports as soon as
-they are open; on Railway every published port needs its own TCP proxy, and the panel reads
-Railway's own `RAILWAY_TCP_PROXY_DOMAIN`/`RAILWAY_TCP_PROXY_PORT` for the port it does expose.
+actually implements it. Each is published only when its listener is really running **and** its
+port is reachable from outside; the card names whichever half is missing instead of handing out
+a link that dead-ends. A VPS owns its ports as soon as they are open; on Railway every published
+port needs its own TCP proxy, whose public port is **random** — the panel creates those proxies
+itself (`app/railway.py`, `app/ports.py`) rather than asking an admin to copy numbers between
+two dashboards, and `RAILWAY_TCP_PROXY_*` is only the fallback it uses when no mapping exists.
+
+The three raw-port ways are **off by default** on purpose — a host that cannot forward their
+port would only show a card full of reasons. The WEB way needs nothing arranged, so it is the
+one a fresh deployment turns on by itself and the one a user is handed: the panel's **نوع پروکسی
+تلگرام** picker defaults to «فقط WEB» and the status window publishes `tg://webproxy` and
+nothing else until an admin selects «همهٔ انواع».
 
 | Way | What the user gets | Port | Needs |
 |---|---|---|---|
+| WEB (`tg://webproxy`) | `tg://webproxy?server=<this-deployment>&secret=dd…` — added inside Telegram Desktop 7.1+ as proxy type **WEB** | the panel's own 443 | nothing extra — no raw port, no TCP proxy, works behind a CDN |
 | MTProto | `tg://proxy?server=…&port=…&secret=…` — pasted into the Telegram app itself | 8446 | the `mtg` binary (shipped in the image) + a raw TCP port |
 | HTTP web proxy | `http://user:pass@host:8448` — «Custom proxy» in Telegram Desktop, and a browser | 8448 | a raw TCP port |
 | SOCKS5 web proxy | `socks5://user:pass@host:8449` | 8449 | a raw TCP port |
 | `web.telegram.org` | `https://<this-deployment>/tg/…` — the web app served from here | the panel's own port | nothing extra |
+
+### Telegram Desktop's WEB proxy (`tg://webproxy`)
+
+Telegram Desktop 7.1 added a proxy type that is not a transport at all: **WEB**. The client
+opens no MTProto socket, and a hidden native WebView loads a page **from this deployment** that
+shuttles multiplexed MTProto frames over a same-origin WebSocket. What a censor sees is a real
+browser TLS handshake with a CA-chained certificate and then ordinary HTTP — because it is one:
+
+```
+Telegram Desktop → hidden WebView → https://<this-deployment>/?bridge=<capability>
+                 → same-origin WebSocket (/api/v1/socket) → relay → its loopback data plane → Telegram
+```
+
+The carrier is this deployment's own HTTPS name, so the WEB proxy is the one Telegram proxy that
+needs no public raw port — Railway included, with no TCP proxy at all — which is why it is what a
+user is handed by default.
+
+`app/telegram/webrelay.py` owns both process halves, and they are the same pinned binary
+(mtproto.zig's `mtproto-proxy`, shipped in the image) in two modes: `mtproto-proxy <config>` is a
+data plane bound to `127.0.0.1` that only the relay dials, and `mtproto-proxy web-relay <config>`
+is the WebSocket half. The relay prefixes every backend connection with a PROXY-v2 header, so
+Telegram sees the real browser address and nothing untrusted can forge it. The config is
+validated by the binary itself (`--check-config`) before a process is replaced, both halves start
+and stop under the engines' supervisor discipline, and a change is picked up by the same
+`telegram_sync_interval` loop. The panel forwards the bridge on our own host — Telegram treats the
+page and its socket as one site, so the public Host is restored explicitly — and tunnels the
+carrier's `Sec-WebSocket-Protocol` (`tproxy-v1.<token>`) untouched, without which the page loads
+and then never connects.
+
+Two details are easy to get wrong and are asserted by `tests/test_webrelay.py`: the link carries
+**no port** (Telegram refuses a WEB link that names one) and its secret is a **`dd…`** secret,
+not the `ee` FakeTLS one — the relay is a raw byte pipe and adds no TLS-emulation record, and a
+client handed an `ee` secret reports the proxy as unsupported. The secret is stored in the
+database and rotated from the panel («چرخش secret»), which is what revokes every link already
+handed out; the domain field stays empty by default so the link follows whatever hostname the
+deployment is served on.
 
 ### MTProto (`mtg`)
 
@@ -503,13 +610,15 @@ Cloudflare Worker forwards the same prefix, so the web app also opens from a cle
 IP when the panel's own address is blocked. The «تست دسترسی سرور» button really fetches the app
 shell from here rather than trusting the configuration.
 
-The tab is **پروکسی تلگرام** in the panel, and the status window gives each user their own
-lines — the `tg://` link, both web-proxy links with their credentials and the web app URL —
-next to the VPN links they already had.
+The tab is **پروکسی تلگرام** in the panel: its first card is the WEB proxy (the one a fresh
+deployment switches on by itself), the **نوع پروکسی تلگرام** picker above it decides whether the
+other three are published at all, and the status window gives each user their own lines — the
+`tg://webproxy` link in the default mode, or the `tg://` link, both web-proxy links with their
+credentials and the web app URL in «همهٔ انواع» — next to the VPN links they already had.
 
 ## Public endpoints
 
-- Telegram: `tg://proxy` (MTProto) · `http://user:pass@host:8448` · `socks5://user:pass@host:8449` · `/tg/…` (Telegram Web), including its own `X-NEXUS-` headers
+- Telegram: `tg://webproxy` (Telegram Desktop's WEB type — the bridge page and its socket are `/?bridge=…` and `/api/v1/socket` on the panel's own port) · `tg://proxy` (MTProto) · `http://user:pass@host:8448` · `socks5://user:pass@host:8449` · `/tg/…` (Telegram Web), including its own `X-NEXUS-` headers
 - VLESS: `/ws/vless` · VMess: `/ws/vmess` · Trojan: `/ws/trojan` · WARP: `/ws/warp`
 - Shadowsocks: `/ws/ss-classic` (AES-256-GCM, every client) · `/ws/ss` (2022 · AES-128-GCM) · `/ws/ss-aes256` · `/ws/ss-chacha` · `/ws/ss-legacy`
 - CDN path shapes: `/cdn/vless`, `/cdn/vmess`, `/cdn/trojan`, `/cdn/ss-classic`, `/cdn/ss`, `/cdn/ss-aes256`, `/cdn/ss-chacha`, `/cdn/ss-legacy` · legacy `/ws`
@@ -527,9 +636,12 @@ next to the VPN links they already had.
   `/api/net/client-ip` (the resolver's verdict, and the trusted-proxy rule itself),
   `/api/cores` + `/api/cores/reload` (the second engines: the switch, public port and hosting engine
   of each hosted protocol, and the reconcile that starts or stops them),
-  `/api/telegram` + `/api/telegram/probe` (the three Telegram proxies: switches, ports, the
-  MTProto secret/link, the running listener's own parsed config, and the real fetch of
-  `web.telegram.org` from this host)
+  `/api/telegram` + `/api/telegram/probe` (the Telegram proxies: the published mode, switches, ports,
+  the MTProto and WEB secrets/links, the running listeners' own parsed config, and the real fetch of
+  `web.telegram.org` from this host),
+  `/api/system/autoconfig` (what the one-time deploy pass switched on, the listen→published port
+  mapping of every raw-TCP capability, which Railway variables are missing, and a re-run of either
+  half — `action=switches|railway|all`)
 - Cloudflare Worker: `/api/cloudflare/worker-code`, `/api/cloudflare/worker-download`, `/api/cloudflare/worker-test`
 - PWA: `/manifest.webmanifest`, `/sw.js`, `/static/icons/*`
 
@@ -572,7 +684,8 @@ the panel's «تست ورکر» button proves the Worker, the origin URL and the
 `app/subscriptions/clients.py` holds the client catalog (import format, platform, download
 link, notes) and the presets used by quick create. Client ids are accepted as subscription
 targets, so every client gets its own URL — `/sub/<uuid>?target=bettbox` returns the Clash
-YAML (Bettbox is a Mihomo client), `?target=v2rayng` returns the Base64 (V2Ray) list and
+profile (Bettbox is a Mihomo client, so it gets the whole YAML config), `?target=v2rayng`
+returns the Base64 (V2Ray) list and
 `?target=nekoboxplus` returns sing-box JSON — and `&node=<name>` narrows it to a single node.
 
 Quick create precedence is request values, then the panel defaults, then the preset. Each
@@ -638,6 +751,15 @@ detected):
   8448 (HTTP) and 8449 (SOCKS5) once the Telegram proxies are switched on, since each of them
   is a raw TCP listener and a closed port is exactly what "the card says published but nothing
   connects" looks like. `NET_ADMIN` is only needed by the optional WARP exit.
+* **Railway (the TCP proxies, created for you)** — Railway gives a service HTTPS/443 and nothing
+  else, so every raw TCP listener (Reality, AnyTLS, MTProto, the web proxies) needs a **TCP
+  proxy** whose public port Railway picks at random. Set `RAILWAY_API_TOKEN` — a workspace token
+  (`Authorization`) or a project token (`Project-Access-Token`); both headers are sent, so either
+  kind works — and the boot pass creates one proxy per enabled capability, stores the
+  listen→published mapping and redeploys the service once, which is what the API says a new proxy
+  needs. `RAILWAY_PROJECT_ID` / `RAILWAY_ENVIRONMENT_ID` / `RAILWAY_SERVICE_ID` are injected by
+  Railway itself; `NEXUS_RAILWAY_*` overrides them. With no token nothing is created and the
+  **پیشرفته → پیکربندی خودکار** card names the missing variable instead of guessing a port.
 * **Anywhere else** — set `NEXUS_PUBLIC_DOMAIN` (and `NEXUS_DIRECT_HOST`/`NEXUS_DIRECT_PORT` if
   a raw port is reachable) and run the image; nothing else is provider-specific.
 

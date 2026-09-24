@@ -16,7 +16,7 @@ import hashlib
 import json
 import os
 
-from app import runtime
+from app import ports, runtime
 from app.config import settings
 from app.cores import engines, profiles
 from app.db import execute, row, rows
@@ -89,8 +89,17 @@ def _transports():
     return transports
 
 
-def host():
-    """Where these listeners are reachable from outside, or ''."""
+def host(profile=None):
+    """Where these listeners are reachable from outside, or ''.
+
+    With a profile the TCP proxy created for that listener's own port wins: on
+    Railway every forwarded port has its own name and only that one forwards it
+    (app/ports.py). Without one the panel's general direct endpoint is used.
+    """
+    if profile is not None:
+        forwarded = ports.published_host(port(profile))
+        if forwarded:
+            return forwarded
     endpoint = _transports().direct_endpoint() or {}
     return str(endpoint.get('host') or '')
 
@@ -105,9 +114,9 @@ def reachable(profile):
     """
     if profile['needs'] == 'udp' and not runtime.has_udp():
         return False, 'این پلتفرم پورت UDP نمی‌دهد؛ برای این پروتکل یک VPS لازم است (یا NEXUS_UDP=1)'
-    if profile['needs'] == 'tcp' and not runtime.has_tcp():
+    if profile['needs'] == 'tcp' and not runtime.has_tcp() and not ports.proxied(port(profile)):
         return False, 'این پلتفرم پورت خام نمی‌دهد؛ روی Railway یک TCP Proxy بسازید'
-    if not host():
+    if not host(profile):
         return False, 'آدرس عمومی پیدا نشد (روی Railway یک TCP Proxy بسازید یا direct_host را ست کنید)'
     return True, ''
 

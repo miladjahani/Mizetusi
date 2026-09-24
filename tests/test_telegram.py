@@ -99,6 +99,21 @@ def a_host_that_owns_its_ports(monkeypatch):
     monkeypatch.setattr(runtime, 'has_tcp', lambda: True)
 
 
+@pytest.fixture(autouse=True)
+def every_proxy_type_is_published():
+    """This module describes the «همهٔ انواع» mode, not the deploy's default.
+
+    A fresh deployment hands a user *only* the WEB proxy (app/telegram/service.py),
+    because that is the one that needs no raw TCP port. Everything tested here is
+    about the three that do — the ``tg://`` MTProto link, the HTTP/SOCKS5 web
+    proxies and Telegram Web — so the mode is pinned rather than inherited from
+    whatever a previous run left in the shared database.
+    """
+    _set(tg_service.MODE, tg_service.ALL)
+    yield
+    execute('DELETE FROM settings WHERE key=?', (tg_service.MODE,))
+
+
 def a_user(username='tguser', uuid=USER_UUID):
     from app.core.models import UserCreate
     from app.users.service import create_user, list_users
@@ -714,11 +729,23 @@ def test_the_panel_ships_the_tab_that_drives_all_this():
         html = handle.read()
     for element in ('section-telegram', 'tgMtTag', 'tgMtEnabled', 'tgMtPort', 'tgMtLinks',
                     'tgSave', 'tgReload', 'tgMtRotate', 'tgWebProfiles', 'tgWebAccounts',
-                    'tgAppEnabled', 'tgAppProbe', 'tgAppInfo', 'tgNotes'):
+                    'tgAppEnabled', 'tgAppProbe', 'tgAppInfo', 'tgNotes',
+                    # The proxy-type mode and the WEB card: the default is «only the
+                    # WEB proxy», so both the picker and the card a deployment lands
+                    # on have to be in the template.
+                    'tgMode', 'tgModeSave', 'tgModeTag', 'tgOtherTypes', 'tgOtherWeb',
+                    'tgRelayEnabled', 'tgRelaySave', 'tgRelayRotate', 'tgRelayDomain',
+                    'tgRelayInfo', 'tgRelayLinks', 'tgRelayTag'):
         assert f'id="{element}"' in html, element
     with open(os.path.join(root, 'static', 'js', 'views', 'telegram.js'), encoding='utf-8') as handle:
         view = handle.read()
     assert '/api/telegram' in view and 'renderMtproto' in view
+    # The mode picker and the WEB card have to be wired in the view, not just
+    # present in the markup: a select nobody reads is a switch that does nothing.
+    assert 'renderMode' in view and 'tgModeSave' in view and 'renderWebRelay' in view
+    with open(os.path.join(root, 'templates', 'portal.html'), encoding='utf-8') as handle:
+        portal = handle.read()
+    assert 'p.telegram.webrel' in portal
     with open(os.path.join(root, 'templates', 'portal.html'), encoding='utf-8') as handle:
         portal = handle.read()
     assert 'p.telegram.mtproto' in portal and 'p.telegram.lines' in portal

@@ -639,6 +639,65 @@ try {
   failures.push(`the cores card threw: ${error.message}`);
 }
 
+// The automatic-configuration card. A deploy with no admin in the loop must leave
+// a working panel, so the card has to say what the boot pass switched on, which
+// Railway TCP proxies really exist — their public port is random and is the one a
+// link has to carry — and, for everything that stayed off, what is missing.
+try {
+  const view = window.nexus.advanced;
+  window.nexus.store.set('autoconfig', {
+    allowed: true, done: true, ran_at: Math.floor(Date.now() / 1000) - 120,
+    applied: ['webrelay', 'railway'], candidates: [],
+    railway: {
+      api: { configured: true, missing: [], endpoint: 'https://backboard.railway.com/graphql/v2' },
+      done: true, ran_at: 1, created: [8443, 8446],
+      proxies: { catalog: [
+        { id: 'reality', label: 'Reality (مسیر مستقیم)', port: 8443, enabled: true, proxied: true,
+          public_host: 'roundhouse.proxy.rlwy.net', public_port: 23177, switch: null },
+        { id: 'mtproto', label: 'MTProto', port: 8446, enabled: true, proxied: false,
+          public_host: '', public_port: 0, switch: 'tg_mtproto_enabled' },
+        { id: 'http', label: 'وب‌پروکسی HTTP', port: 8448, enabled: false, proxied: false,
+          public_host: '', public_port: 0, switch: 'tg_web_http_enabled' },
+      ], count: 1 },
+    },
+  });
+  view.renderAuto();
+  const rows = String(elements.get('adAutoCandidates')?.innerHTML || '');
+  // The forwarded port is the one a link carries, and it is not the listen port:
+  // Railway allocates it at random, so showing 8,443 here would be a wrong link.
+  const forwarded = loaded.core.Fmt.num(23177);
+  const listen = loaded.core.Fmt.num(8443);
+  if (!rows.includes(`roundhouse.proxy.rlwy.net:${forwarded}`)) {
+    failures.push('the automatic-configuration card must show the public port a link is built from');
+  }
+  if (forwarded === listen) failures.push('the forwarded port must be distinguishable from the listen port');
+  if (!rows.includes('بدون فوروارد') || !rows.includes('خاموش')) {
+    failures.push('a raw-port capability with no proxy must say so instead of looking published');
+  }
+  if (rows.includes('undefined')) failures.push('the automatic-configuration card rendered undefined');
+  const info = String(elements.get('adAutoInfo')?.innerHTML || '');
+  if (!info.includes('webrelay')) failures.push('the card must name what the boot pass switched on');
+  if (String(elements.get('adAutoTag')?.innerHTML || '').includes('اجرا نشده')) {
+    failures.push('a pass that ran must not read as «اجرا نشده»');
+  }
+  // A host without a Railway token: nothing can be created, and the card names
+  // the variables rather than pretending the ports exist.
+  window.nexus.store.set('autoconfig', {
+    allowed: true, done: false, ran_at: 0, applied: [], candidates: [],
+    railway: { api: { configured: false, missing: ['RAILWAY_API_TOKEN', 'RAILWAY_ENVIRONMENT_ID'] },
+      done: false, ran_at: 0, created: [], proxies: { catalog: [], count: 0 } },
+  });
+  view.renderAuto();
+  if (!String(elements.get('adAutoInfo')?.innerHTML || '').includes('RAILWAY_API_TOKEN')) {
+    failures.push('a host without a Railway token must name the missing variables');
+  }
+  if (!String(elements.get('adAutoCandidates')?.innerHTML || '').includes('empty')) {
+    failures.push('an empty port catalog must render an empty state');
+  }
+} catch (error) {
+  failures.push(`the automatic-configuration card threw: ${error.message}`);
+}
+
 await new Promise((resolve) => setTimeout(resolve, 50));
 
 if (failures.length) {

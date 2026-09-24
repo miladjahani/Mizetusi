@@ -579,7 +579,10 @@ def test_quick_create_applies_iran_preset_and_returns_links():
     # And the generated subscription really renders (YAML for bettbox).
     sub = client.get(f"/sub/{user['uuid']}?target=bettbox")
     assert sub.status_code == 200
-    assert sub.headers['x-nexus-target'] == 'clash' and 'proxies' in sub.text
+    assert sub.headers['x-nexus-target'] == 'clash' and sub.headers['x-nexus-format'] == 'clash'
+    # A Clash/Mihomo client is handed a whole YAML profile, not a JSON fragment.
+    assert 'proxies:' in sub.text and 'proxy-groups:' in sub.text and 'rules:' in sub.text
+    assert not sub.text.lstrip().startswith('{')
 
 
 def test_quick_create_precedence_and_validation():
@@ -609,8 +612,10 @@ def test_per_client_subscription_formats():
     # Bettbox is a Clash/Mihomo client: YAML only, never a Base64 container.
     bettbox = client.get(f'/sub/{uuid_value}?target=bettbox')
     assert bettbox.status_code == 200
-    assert 'proxies' in bettbox.text and 'vless://' not in bettbox.text
+    assert 'proxies:' in bettbox.text and 'proxy-groups:' in bettbox.text
+    assert 'vless://' not in bettbox.text
     assert bettbox.headers['x-nexus-target'] == 'clash'
+    assert bettbox.headers['x-nexus-format'] == 'clash'
 
     clash = client.get(f'/sub/{uuid_value}?target=clash')
     assert clash.headers['x-nexus-target'] == 'clash'
@@ -765,8 +770,8 @@ def test_shadowsocks_ships_every_cipher_family():
     assert {o['method'] for o in shadowsocks} == methods
     assert len({o['password'] for o in shadowsocks}) == len(tp.SS_CIPHERS)
     assert all(o['plugin'] == 'v2ray-plugin' and 'mode=websocket' in o['plugin_opts'] for o in shadowsocks)
-    clash = json.loads(client.get(f'/sub/{uuid_value}?target=clash').text)['proxies']
-    assert {p['cipher'] for p in clash if p['type'] == 'ss'} == methods
+    clash_text = client.get(f'/sub/{uuid_value}?target=clash').text
+    assert {method for method in methods if f'cipher: {method}' in clash_text} == methods
     xray_out = json.loads(client.get(f'/sub/{uuid_value}?target=xray').text)['outbounds']
     assert {o['settings']['servers'][0]['method'] for o in xray_out if o['protocol'] == 'shadowsocks'} == methods
 

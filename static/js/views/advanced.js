@@ -30,12 +30,14 @@ export class AdvancedView {
       this.api.get('/api/transports'),
       this.api.get('/api/edge'),
       this.api.get('/api/cores'),
+      this.api.get('/api/system/autoconfig'),
     ]);
-    const [hy2, packs, transports, edge, cores] = results.map((item) => (item.status === 'fulfilled' ? item.value : null));
+    const [hy2, packs, transports, edge, cores, autoconfig] = results.map((item) => (item.status === 'fulfilled' ? item.value : null));
     if (hy2) this.store.set('hysteria', hy2);
     if (packs) this.store.set('packs', packs);
     if (transports) this.store.set('transports', transports);
     if (cores) this.store.set('cores', cores);
+    if (autoconfig) this.store.set('autoconfig', autoconfig);
     if (edge) {
       this.store.set('edge', edge);
       const select = $('#adImportProvider');
@@ -50,10 +52,84 @@ export class AdvancedView {
   }
 
   render() {
+    this.renderAuto();
     this.renderHy2();
     this.renderPacks();
     this.renderProfiles();
     this.renderCores();
+  }
+
+  /* --------------------------------------- automatic configuration (boot) */
+  /* What a deploy with no admin in the loop left behind: the capability the boot
+     pass switches on by itself (Telegram Desktop's WEB proxy, whose carrier is
+     this deployment's own 443) and, on Railway, the TCP proxies it creates for
+     the raw-port capabilities — Railway allocates those public ports at random
+     and only an API call can create them, which is why the mapping, not the
+     environment, is what a link is built from (app/ports.py). Everything that
+     stayed off names the one thing it would need first, and either half can be
+     re-run from here. */
+  renderAuto() {
+    const data = this.store.get('autoconfig');
+    const tag = $('#adAutoTag');
+    if (!data) {
+      if (tag) { tag.className = 'pill'; tag.textContent = '—'; }
+      return;
+    }
+    const railway = data.railway || {};
+    const api = railway.api || {};
+    const catalog = (railway.proxies || {}).catalog || [];
+    const forwarded = catalog.filter((item) => item.proxied);
+    if (tag) {
+      tag.className = `pill ${data.done ? 'ok' : 'warn'}`;
+      tag.innerHTML = data.done
+        ? `<i class="dot"></i> اجرا شده${(data.applied || []).length ? ` · ${esc((data.applied || []).join(' + '))}` : ''}`
+        : 'اجرا نشده';
+    }
+    const info = $('#adAutoInfo');
+    if (info) {
+      info.innerHTML = `
+        <div class="kv-line"><span>پاس خودکار</span><b>${data.allowed ? 'روشن' : 'خاموش (فقط دستی)'}</b></div>
+        <div class="kv-line"><span>آخرین اجرا</span><b>${data.ran_at ? esc(Fmt.ago(data.ran_at)) : 'هنوز اجرا نشده'}</b></div>
+        <div class="kv-line"><span>خودکار روشن شده</span><b dir="ltr" style="white-space:normal">${esc((data.applied || []).join(' · ') || '—')}</b></div>
+        <div class="kv-line"><span>توکن API رِیلوی</span><b style="white-space:normal">${api.configured
+          ? 'ست شده' : `ست نشده — ${esc((api.missing || []).join(' · '))}`}</b></div>
+        <div class="kv-line"><span>پورت‌های عمومی فوروارد‌شده</span><b dir="ltr">${Fmt.num(forwarded.length)}</b></div>`;
+    }
+    const candidates = $('#adAutoCandidates');
+    if (candidates) {
+      candidates.innerHTML = catalog.length
+        ? `<div class="table-wrap"><table><thead><tr><th>قابلیت</th><th>پورت داخلی</th><th>پورت عمومی</th><th>وضعیت</th></tr></thead><tbody>
+            ${catalog.map((item) => `<tr>
+              <td>${esc(item.label)}</td>
+              <td class="mono" dir="ltr">${Fmt.num(item.port)}</td>
+              <td class="mono" dir="ltr">${item.proxied ? `${esc(item.public_host)}:${Fmt.num(item.public_port)}` : '—'}</td>
+              <td>${item.proxied ? '<span class="pill ok"><i class="dot"></i> فوروارد شده</span>'
+                : (item.enabled ? '<span class="pill warn">بدون فوروارد</span>' : '<span class="pill">خاموش</span>')}</td>
+            </tr>`).join('')}
+          </tbody></table></div>
+          <p class="muted">هر پورت خام TCP (Reality، AnyTLS، MTProto، وب‌پروکسی) روی Railway باید TCP Proxy داشته باشد و پورت عمومی‌اش تصادفی است؛ این جدول همان نگاشت را نشان می‌دهد و لینک‌های پنل از ستون «پورت عمومی» ساخته می‌شوند — نه از پورتی که داخل کانتینر باز می‌شود.</p>`
+        : '<div class="empty">قابلیتی برای فوروارد پیدا نشد.</div>';
+    }
+    const ports = $('#adAutoPortsInfo');
+    if (ports) {
+      ports.innerHTML = data.done
+        ? `<div class="kv-line"><span>پورت‌های ساخته‌شده در پاس</span><b dir="ltr" style="white-space:normal">${esc((railway.created || []).join(' · ') || '—')}</b></div>`
+        : '<div class="kv-line"><span>پورت‌های ساخته‌شده در پاس</span><b>هنوز اجرا نشده</b></div>';
+    }
+  }
+
+  async runAuto(action) {
+    const data = await this.api.post('/api/system/autoconfig', { action });
+    this.store.set('autoconfig', data);
+    this.renderAuto();
+    const railway = (data.outcome || {}).railway || {};
+    const created = railway.created || [];
+    if (railway.reason) this.toasts.err(railway.reason, 9000);
+    else if (created.length) this.toasts.ok(`${Fmt.num(created.length)} پروکسی TCP ساخته شد — پورت‌های عمومی به‌روز شد`, 8000);
+    else if ((data.outcome || {}).switches?.length) this.toasts.ok(`${Fmt.num(data.outcome.switches.length)} قابلیت روشن شد`);
+    else this.toasts.info('چیز جدیدی برای انجام نبود', 4000);
+    await this.load();
+    await this.app.reloadNodes();
   }
 
   /* --------------------------------------------------- second engines */
@@ -319,6 +395,10 @@ export class AdvancedView {
   }
 
   bindEvents() {
+    const autoRun = $('#adAutoRun');
+    if (autoRun) autoRun.onclick = () => this.app.safe(() => this.runAuto('all'));
+    const autoPorts = $('#adAutoPorts');
+    if (autoPorts) autoPorts.onclick = () => this.app.safe(() => this.runAuto('railway'));
     const toggle = $('#adHy2Enabled');
     if (toggle) toggle.onclick = () => toggle.classList.toggle('on');
     const save = $('#adHy2Save');

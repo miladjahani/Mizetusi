@@ -163,18 +163,39 @@ def rotate_secret():
 
 
 # ------------------------------------------------------------------ publishing
+def published_port():
+    """The port a client must dial.
+
+    ``port()`` is what ``mtg`` binds inside this container; on Railway a TCP
+    proxy forwards a *different* public port to it, and the link has to carry the
+    forwarded one or it points at a port nobody listens on (app/ports.py).
+    """
+    from app import ports
+    return ports.published_port(port(), port())
+
+
 def host():
-    """Where a client outside can dial this listener, or ``''``."""
+    """Where a client outside can dial this listener, or ``''``.
+
+    A TCP proxy made for *this* port wins, because its host is the one that really
+    forwards it; otherwise the panel's general direct endpoint is used (a VPS, or
+    Railway's own ``RAILWAY_TCP_PROXY_*``).
+    """
+    from app import ports
     from app.subscriptions import transports
+    forwarded = ports.published_host(port())
+    if forwarded:
+        return forwarded
     endpoint = transports.direct_endpoint() or {}
     return str(endpoint.get('host') or '')
 
 
 def reachable():
     """``(ok, reason)`` — could a Telegram client outside really connect here?"""
+    from app import ports
     if not available():
         return False, f'باینری mtg نصب نیست ({binary()})'
-    if not runtime.has_tcp():
+    if not runtime.has_tcp() and not ports.proxied(port()):
         return False, 'این پلتفرم پورت خام نمی‌دهد؛ برای پروکسی MTProto یک VPS لازم است (یا روی Railway یک TCP Proxy بسازید)'
     if not host():
         return False, 'آدرس عمومی پیدا نشد (روی Railway یک TCP Proxy بسازید یا direct_host را ست کنید)'
@@ -199,7 +220,7 @@ def links():
     """
     if not published():
         return None
-    server, number, value = host(), port(), secret()
+    server, number, value = host(), published_port(), secret()
     if not (server and number and value):
         return None
     query = urllib.parse.urlencode({'server': server, 'port': number, 'secret': value})
@@ -388,6 +409,8 @@ def status():
         'published': published(),
         'host': host(),
         'port': port(),
+        'listen_port': port(),
+        'published_port': published_port(),
         'secret': secret() or '',
         'domain': domain(),
         'dns': dns(),

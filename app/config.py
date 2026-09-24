@@ -116,6 +116,23 @@ class Settings(BaseSettings):
     # Public ports of the HTTP and SOCKS5 web proxies (Xray inbounds).
     telegram_http_port: int = 8448
     telegram_socks_port: int = 8449
+    # Telegram Desktop 7.1+'s **WEB** proxy (the ``tg://webproxy`` link). MTProto is
+    # carried inside an ordinary HTTPS page and a same-origin WebSocket, so the
+    # client never opens a raw TCP socket — which is what makes this the one
+    # Telegram proxy that works on a forwarder (Railway, a CDN, a Worker) with no
+    # TCP proxy of its own. The relay is mtproto.zig's ``mtproto-proxy web-relay``;
+    # its data plane listens on loopback only, because the relay — not a client —
+    # is what dials it.
+    webrelay_binary: str = '/usr/local/bin/mtproto-proxy'
+    webrelay_config: str = '/data/webrelay.toml'
+    webrelay_port: int = 8081
+    webrelay_backend_port: int = 8447
+    # Telegram Desktop multiplexes its sockets over one WebSocket, so a handful of
+    # clients is a crowd of streams: the data plane's ceiling is derived from these
+    # two (sessions x (streams + 1)) rather than guessed.
+    webrelay_sessions: int = 6
+    webrelay_streams: int = 32
+    webrelay_ws_path: str = '/api/v1/socket'
     # web.telegram.org through this deployment: one path prefix on the panel's own
     # domain (and the same prefix forwarded by the Cloudflare Worker).
     telegram_web_path: str = '/tg'

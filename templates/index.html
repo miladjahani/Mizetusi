@@ -463,8 +463,46 @@
 
     <!-- ================= TELEGRAM PROXIES ================= -->
     <section class="section" id="section-telegram">
-      <div class="grid-2b">
-        <div class="panel glass" data-acc="پروکسی MTProto (لینک tg://)|پروکسی خود تلگرام؛ کاربر فقط یک لینک اضافه می‌کند|link" data-acc-open="1">
+      <!-- One proxy type by default. A user is handed exactly one kind of
+           Telegram proxy unless an admin asks for the rest, because «one kind» is
+           one thing to explain, one thing to rotate and one thing to support. -->
+      <div class="panel glass">
+        <div class="panel-head">
+          <div><h2>نوع پروکسی تلگرام</h2><p class="sub">به کاربران کدام نوع پروکسی تلگرام داده شود — حالت پیش‌فرض فقط WEB است، چون بدون هیچ پورت خام TCP روی هر میزبانی کار می‌کند</p></div>
+          <span class="pill" id="tgModeTag">—</span>
+        </div>
+        <div class="field-grid">
+          <div><label>حالت انتشار</label><select id="tgMode">
+            <option value="web">فقط WEB (پیشنهادشده)</option>
+            <option value="all">همهٔ انواع (WEB + MTProto + وب‌پروکسی + وب تلگرام)</option>
+          </select></div>
+        </div>
+        <div class="actions"><button class="primary" id="tgModeSave">ذخیرهٔ حالت</button></div>
+        <p class="muted" id="tgModeInfo"></p>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px" data-acc="پروکسی WEB (tg://webproxy)|تلگرام دسکتاپ ۷.۱+؛ روی همین دامنه و پورت ۴۴۳، بدون هیچ TCP Proxy|globe" data-acc-open="1">
+        <div class="panel-head">
+          <div><h2>پروکسی WEB (تلگرام دسکتاپ ۷.۱+)</h2><p class="sub">MTProto داخل یک صفحهٔ HTTPS معمولی و یک WebSocket هم‌منبع حمل می‌شود؛ کلاینت هیچ سوکت خامی باز نمی‌کند، پس روی Railway بدون هیچ TCP Proxy و حتی از پشت Cloudflare کار می‌کند</p></div>
+          <span class="pill" id="tgRelayTag">—</span>
+        </div>
+        <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>تا وقتی relay و صفحه‌اش بالا نیامده باشد هیچ لینکی منتشر نمی‌شود</span></div>
+          <div class="switch" id="tgRelayEnabled"></div></div>
+        <div class="field-grid">
+          <div><label>دامنهٔ عمومی <span class="hint">خالی بگذارید تا دامنهٔ خود پنل استفاده شود</span></label><input id="tgRelayDomain" dir="ltr" placeholder="nexus.up.railway.app"></div>
+          <div><label>نشست هم‌زمان <span class="hint">۱ تا ۶۴</span></label><input id="tgRelaySessions" type="number" min="1" max="64" dir="ltr" value="6"></div>
+          <div><label>استریم هر نشست <span class="hint">۱ تا ۲۵۶</span></label><input id="tgRelayStreams" type="number" min="1" max="256" dir="ltr" value="32"></div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="tgRelaySave">ذخیره و انتشار</button>
+          <button class="secondary" id="tgRelayRotate">چرخش secret</button>
+        </div>
+        <div class="kv-list" id="tgRelayInfo"></div>
+        <div id="tgRelayLinks"></div>
+      </div>
+
+      <div class="grid-2b" id="tgOtherTypes" style="margin-top:13px">
+        <div class="panel glass" data-acc="پروکسی MTProto (لینک tg://)|پروکسی خود تلگرام؛ کاربر فقط یک لینک اضافه می‌کند|link">
           <div class="panel-head">
             <div><h2>پروکسی MTProto (لینک tg://)</h2><p class="sub">با mtg و حالت FakeTLS سرو می‌شود: کاربر لینک را در خود تلگرام اضافه می‌کند و نیازی به نصب کلاینت ندارد</p></div>
             <span class="pill" id="tgMtTag">—</span>
@@ -498,7 +536,7 @@
         </div>
       </div>
 
-      <div class="panel glass" style="margin-top:13px" data-acc="پروکسی وب تلگرام (web.telegram.org)|نسخهٔ وب تلگرام از همین دامنه باز می‌شود؛ پشت Cloudflare هم کار می‌کند|globe">
+      <div class="panel glass" id="tgOtherWeb" style="margin-top:13px" data-acc="پروکسی وب تلگرام (web.telegram.org)|نسخهٔ وب تلگرام از همین دامنه باز می‌شود؛ پشت Cloudflare هم کار می‌کند|globe">
         <div class="panel-head">
           <div><h2>پروکسی وب تلگرام (web.telegram.org)</h2><p class="sub">تلگرام وب از دامنهٔ خودتان سرو می‌شود (مسیر زیر)؛ همان مسیر از دامنهٔ Worker کلودفلر هم عبور می‌کند تا وقتی آی‌پی پنل بسته است</p></div>
           <span class="pill" id="tgAppTag">—</span>
@@ -521,6 +559,19 @@
 
     <!-- ================= ADVANCED ================= -->
     <section class="section" id="section-advanced">
+      <div class="panel glass" data-acc="پیکربندی خودکار پس از استقرار|آنچه یک استقرار تازه خودش روشن می‌کند و پورت‌های TCP که روی Railway خودکار ساخته می‌شوند|zap" data-acc-open="1">
+        <div class="panel-head">
+          <div><h2>پیکربندی خودکار پس از استقرار</h2><p class="sub">یک استقرار تازه بدون هیچ کاری از سمت شما روشن می‌شود: پروکسی WEB تلگرام که روی دامنه و پورت ۴۴۳ همین سرور کار می‌کند، و روی Railway یک TCP Proxy با پورت تصادفی برای هر قابلیت پورت‌خامی که روشن کرده‌اید</p></div>
+          <span class="pill" id="adAutoTag">—</span>
+        </div>
+        <div class="kv-list" id="adAutoInfo"></div>
+        <div id="adAutoCandidates"></div>
+        <div class="actions">
+          <button class="primary" id="adAutoRun">اجرای دوبارهٔ پیکربندی خودکار</button>
+          <button class="secondary" id="adAutoPorts">ساخت پورت‌های TCP روی Railway</button>
+        </div>
+        <div class="kv-list" id="adAutoPortsInfo"></div>
+      </div>
       <div class="grid-2b">
         <div class="panel glass" data-acc="نود Hysteria2|QUIC مستقل از Xray؛ تا فعال نشود منتشر نمی‌شود|zap">
           <div class="panel-head"><div><h2>نود Hysteria2</h2><p class="sub">Hysteria2 روی QUIC کار می‌کند و در Xray اینباند ندارد؛ آدرس سرور هاستریزیای خودتان را بدهید تا در سابلینک‌ها منتشر شود</p></div><span class="pill" id="adHy2Tag">—</span></div>

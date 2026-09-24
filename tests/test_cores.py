@@ -30,7 +30,7 @@ from app import runtime
 from app.db import execute, init_db
 from app.main import _setting, _set, app
 from app.subscriptions import transports as tp
-from app.subscriptions.generator import render
+from app.subscriptions.generator import clash_document, render
 
 init_db()
 client = TestClient(app)
@@ -339,10 +339,16 @@ def test_the_hosted_protocols_reach_every_client_format():
     assert anytls['password'] == user['uuid'] and anytls['tls']['insecure'] is True
     tuic = next(item for item in sing if item['type'] == 'tuic')
     assert tuic['uuid'] == user['uuid'] and tuic['congestion_control'] == 'bbr'
-    clash = json.loads(linked_subscription(user, 'clash'))['proxies']
+    # Mihomo is handed a whole YAML profile (proxies + groups + rules), and both
+    # hosted protocols are in it.
+    clash_text = linked_subscription(user, 'clash')
+    clash = clash_document(user)['proxies']
     types = {item['type'] for item in clash}
     assert {'anytls', 'tuic'} <= types
     assert all(item['skip-cert-verify'] is True for item in clash if item['type'] in ('anytls', 'tuic'))
+    assert 'type: anytls' in clash_text and 'type: tuic' in clash_text
+    assert 'proxy-groups:' in clash_text and 'rules:' in clash_text
+    assert 'outbounds' not in clash_text
     # Xray has no outbound for either, so that format simply omits them.
     xray_json = json.loads(linked_subscription(user, 'xray'))['outbounds']
     assert not {'anytls', 'tuic'} & {item['protocol'] for item in xray_json}
@@ -519,11 +525,18 @@ def test_the_panel_ships_the_card_that_drives_all_this():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, 'templates', 'index.html'), encoding='utf-8') as handle:
         html = handle.read()
-    for element in ('coStats', 'coProfiles', 'coSni', 'coSave', 'coReload', 'coEngines', 'coNotes'):
+    for element in ('coStats', 'coProfiles', 'coSni', 'coSave', 'coReload', 'coEngines', 'coNotes',
+                    # The automatic-configuration card lives in this tab too: what a
+                    # deploy switched on by itself, and the Railway TCP proxies it
+                    # created — their public ports are random and are what a link
+                    # has to be built from.
+                    'adAutoTag', 'adAutoInfo', 'adAutoCandidates', 'adAutoRun', 'adAutoPorts',
+                    'adAutoPortsInfo'):
         assert f'id="{element}"' in html, element
     with open(os.path.join(root, 'static', 'js', 'views', 'advanced.js'), encoding='utf-8') as handle:
         view = handle.read()
     assert 'renderCores' in view and '/api/cores' in view
+    assert 'renderAuto' in view and '/api/system/autoconfig' in view
 
 
 def test_the_image_ships_both_engines():

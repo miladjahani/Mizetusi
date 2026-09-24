@@ -37,10 +37,94 @@ export class TelegramView {
   render() {
     const data = this.store.get('telegram');
     if (!data) return;
+    this.renderMode(data);
     this.renderMtproto(data.mtproto || {});
+    this.renderWebRelay(data.webrelay || {});
     this.renderWeb(data.webproxy || {});
     this.renderApp(data.webapp || {});
     this.renderNotes(data);
+  }
+
+  /* -------------------------------------------------------------- the mode */
+  /* A user is handed exactly one kind of Telegram proxy unless an admin asks for
+     the rest: «one kind» is one thing to explain, one thing to rotate and one
+     thing to support. The cards the mode withholds are hidden rather than removed,
+     so switching back to «همهٔ انواع» loses nothing. */
+  renderMode(data) {
+    const only = (data.mode || 'web') !== 'all';
+    const select = $('#tgMode');
+    if (select && document.activeElement !== select) select.value = only ? 'web' : 'all';
+    const tag = $('#tgModeTag');
+    if (tag) {
+      tag.className = `pill ${only ? 'ok' : 'warn'}`;
+      tag.innerHTML = only ? '<i class="dot"></i> فقط WEB' : 'همهٔ انواع';
+    }
+    ['#tgOtherTypes', '#tgOtherWeb'].forEach((selector) => {
+      const el = $(selector);
+      if (el) el.style.display = only ? 'none' : '';
+    });
+    const info = $('#tgModeInfo');
+    if (info) {
+      info.textContent = only
+        ? 'به هر کاربر فقط لینک tg://webproxy داده می‌شود؛ خطوط MTProto، وب‌پروکسی HTTP/SOCKS5 و نسخهٔ وب تلگرام منتشر نمی‌شوند. روی Railway همین حالت درست است، چون هیچ پورت خام لازم ندارد.'
+        : 'هر سه نوع پروکسی منتشر می‌شود. برای MTProto و وب‌پروکسی، پورت خام باید واقعاً فوروارد شده باشد (روی Railway یک TCP Proxy، روی VPS خود پورت).';
+    }
+  }
+
+  /* -------------------------------------------------------------- WEB proxy */
+  /* Telegram Desktop 7.1+'s WEB type: MTProto inside an ordinary HTTPS page and
+     a same-origin WebSocket, so it rides the panel's own 443 and needs no raw
+     TCP port. The card is first because it is the one that works on a forwarder
+     (Railway, a CDN, the Worker) without any extra setup. */
+  renderWebRelay(data) {
+    const set = (selector, value) => {
+      const el = $(selector);
+      if (el && document.activeElement !== el) el.value = value ?? '';
+    };
+    set('#tgRelayDomain', data.domain || '');
+    set('#tgRelaySessions', data.sessions);
+    set('#tgRelayStreams', data.streams);
+    const toggle = $('#tgRelayEnabled');
+    if (toggle) toggle.classList.toggle('on', !!data.enabled);
+    const tag = $('#tgRelayTag');
+    if (tag) {
+      tag.className = `pill ${data.published ? 'ok' : (data.enabled ? 'warn' : '')}`;
+      tag.innerHTML = data.published
+        ? '<i class="dot"></i> منتشرشده'
+        : (data.enabled ? 'منتشر نشده' : 'خاموش');
+    }
+    const info = $('#tgRelayInfo');
+    if (!info) return;
+    const state = data.installed
+      ? (data.running ? `Running${data.relay_pid ? ` · relay PID ${Fmt.num(data.relay_pid)}` : ''}` : 'خاموش')
+      : `باینری نصب نیست (${esc(data.binary)})`;
+    info.innerHTML = `
+      <div class="kv-line"><span>وضعیت سرویس</span><b dir="ltr">${esc(state)}</b></div>
+      <div class="kv-line"><span>موتور</span><b dir="ltr">${esc(data.engine || '—')}</b></div>
+      <div class="kv-line"><span>دامنه و مسیر</span><b dir="ltr">${data.domain ? `${esc(data.domain)} · ${esc(data.url || '')}` : '—'}</b></div>
+      <div class="kv-line"><span>پورت‌های لوپ‌بک</span><b dir="ltr">relay ${Fmt.num(data.port)} → backend ${Fmt.num(data.backend_port)}</b></div>
+      <div class="kv-line"><span>سوکت حمل</span><b dir="ltr">${esc(data.ws_path || '')}</b></div>
+      <div class="kv-line"><span>سقف اتصال</span><b dir="ltr">${Fmt.num(data.max_connections)}</b></div>
+      <div class="kv-line"><span>secret</span><b dir="ltr" style="white-space:normal;word-break:break-all">${esc(data.link_secret || '—')}</b></div>
+      ${data.reason ? `<div class="kv-line"><span>دلیل منتشر نشدن</span><b style="white-space:normal">${esc(data.reason)}</b></div>` : ''}`;
+    const links = $('#tgRelayLinks');
+    if (!links) return;
+    if (!data.links) {
+      links.innerHTML = '<p class="muted">تا وقتی relay بالا نباشد لینکی ساخته نمی‌شود؛ دلیلش در ردیف‌های بالا نوشته شده است.</p>';
+      return;
+    }
+    links.innerHTML = `
+      <div class="link-box">
+        <div class="lb-main"><b>لینک WEB (tg://webproxy)</b><code>${esc(data.links.tg)}</code></div>
+        <button class="copy-btn" data-copy="${esc(data.links.tg)}" title="کپی لینک">${ico('copy', 14)}</button>
+      </div>
+      <div class="link-box">
+        <div class="lb-main"><b>لینک قابل اشتراک (t.me/webproxy)</b><code>${esc(data.links.tme)}</code></div>
+        <button class="copy-btn" data-copy="${esc(data.links.tme)}" title="کپی لینک">${ico('copy', 14)}</button>
+        <a class="tbtn" href="${esc(data.links.tme)}" target="_blank" rel="noopener">باز کردن در تلگرام</a>
+      </div>
+      <p class="muted">کاربر در تلگرام دسکتاپ ۷.۱ یا بالاتر: تنظیمات → پیشرفته → نوع اتصال → افزودن پروکسی → نوع <b>WEB</b>، بعد همین لینک را اضافه می‌کند. پیام و مدیا از این سرور رد می‌شوند؛ بقیهٔ ترافیک دست‌نخورده می‌ماند.</p>`;
+    bindCopyButtons(links, this.toasts);
   }
 
   /* ------------------------------------------------------------- MTProto */
@@ -195,6 +279,7 @@ export class TelegramView {
       };
     });
     return {
+      mode: $('#tgMode')?.value || data.mode || 'web',
       mtproto: {
         enabled: $('#tgMtEnabled')?.classList.contains('on') ? '1' : '0',
         port: Number($('#tgMtPort')?.value || data.mtproto?.port || 8446),
@@ -202,6 +287,12 @@ export class TelegramView {
         concurrency: Number($('#tgMtConcurrency')?.value || data.mtproto?.concurrency || 8192),
         dns: $('#tgMtDns')?.value.trim() || '',
         front_ip: $('#tgMtFrontIp')?.value.trim() || '',
+      },
+      webrelay: {
+        enabled: $('#tgRelayEnabled')?.classList.contains('on') ? '1' : '0',
+        domain: $('#tgRelayDomain')?.value.trim() || '',
+        sessions: Number($('#tgRelaySessions')?.value || data.webrelay?.sessions || 6),
+        streams: Number($('#tgRelayStreams')?.value || data.webrelay?.streams || 32),
       },
       webproxy: profiles,
       webapp: { enabled: $('#tgAppEnabled')?.classList.contains('on') ? '1' : '0' },
@@ -229,6 +320,13 @@ export class TelegramView {
     this.toasts.ok('secret تازه ساخته شد — لینک‌های قبلی از کار افتادند', 6000);
   }
 
+  async rotateRelay() {
+    const data = await this.api.post('/api/telegram', { action: 'rotate-webrelay' });
+    this.store.set('telegram', data);
+    this.render();
+    this.toasts.ok('secret پروکسی WEB تازه شد — لینک‌های قبلی از کار افتادند', 6000);
+  }
+
   async probe() {
     const button = $('#tgAppProbe');
     if (button) {
@@ -254,6 +352,14 @@ export class TelegramView {
   }
 
   bindEvents() {
+    const modeSave = $('#tgModeSave');
+    if (modeSave) modeSave.onclick = () => this.app.safe(() => this.save());
+    const relay = $('#tgRelayEnabled');
+    if (relay) relay.onclick = () => relay.classList.toggle('on');
+    const relaySave = $('#tgRelaySave');
+    if (relaySave) relaySave.onclick = () => this.app.safe(() => this.save());
+    const relayRotate = $('#tgRelayRotate');
+    if (relayRotate) relayRotate.onclick = () => this.app.safe(() => this.rotateRelay());
     const mtproto = $('#tgMtEnabled');
     if (mtproto) mtproto.onclick = () => mtproto.classList.toggle('on');
     const webapp = $('#tgAppEnabled');

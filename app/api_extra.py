@@ -17,6 +17,7 @@ self-contained capability an admin drives from one of the newer panel tabs:
 The router authenticates through the panel's own session, resolved lazily so this
 module can be imported by ``app.main`` without a circular import.
 """
+import asyncio
 import ipaddress
 import re
 import time
@@ -24,6 +25,8 @@ import urllib.parse
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app import autoconfig as auto_config
+from app import railway
 from app.core import clientip
 from app.cores import service as core_service
 from app.core.settings_store import store
@@ -35,6 +38,7 @@ from app.subscriptions import scope as node_scope
 from app.subscriptions import flags as sub_flags
 from app.telegram import mtproto as tg_mtproto
 from app.telegram import service as tg_service
+from app.telegram import webrelay as tg_webrelay
 
 router = APIRouter()
 
@@ -580,6 +584,14 @@ async def save_telegram(request: Request):
         sync = await tg_service.reconcile()
         _audit('telegram.rotate', 'mtproto secret reissued')
         return {'success': True, 'secret': secret, 'sync': sync, **_telegram_payload(request)}
+    if action == 'rotate-webrelay':
+        # The WEB proxy's own secret: it lives inside every ``tg://webproxy`` link
+        # handed out, so rotating it is what revokes them — the switch state and
+        # every other setting stay exactly as they were.
+        secret = tg_webrelay.rotate_secret()
+        sync = await tg_service.reconcile()
+        _audit('telegram.rotate', 'webrelay secret reissued')
+        return {'success': True, 'secret': secret, 'sync': sync, **_telegram_payload(request)}
     if action == 'reload':
         sync = await tg_service.reconcile()
         _audit('telegram.reload', ' '.join(f"{name}:{'up' if item.get('running') else 'down'}"
@@ -593,6 +605,47 @@ async def save_telegram(request: Request):
     if changed:
         _audit('telegram.update', ','.join(changed))
     return {'success': True, 'changed': changed, 'sync': sync, **_telegram_payload(request)}
+
+
+# --------------------------------------------------- automatic configuration
+@router.get('/api/system/autoconfig')
+def get_autoconfig(request: Request):
+    """What this deployment switched on by itself, and what is still missing.
+
+    The panel shows this instead of an instruction manual: after a deploy with no
+    admin in the loop it names the capabilities that came up on their own, the
+    Railway TCP proxies that were created for the raw-port ones, and — for every
+    capability that stayed off — the one thing that would have to exist first.
+    """
+    _auth(request)
+    return {'success': True, **auto_config.state()}
+
+
+@router.post('/api/system/autoconfig')
+async def run_autoconfig(request: Request):
+    """Run one half of the pass by hand.
+
+    ``action`` is ``switches`` (the zero-decision switches), ``railway`` (create
+    the TCP proxies Railway needs and learn their public ports) or ``all``. The
+    API calls block, so both run in a worker thread and the answer carries the
+    state the panel renders — the same shape the automatic boot pass leaves
+    behind, which is what makes a manual run auditable.
+    """
+    _auth(request)
+    body = await _json_body(request)
+    action = str(body.get('action') or 'all').strip().lower()
+    if action not in ('switches', 'railway', 'all'):
+        raise HTTPException(400, 'action باید switches، railway یا all باشد')
+    outcome = {}
+    if action in ('railway', 'all'):
+        if not railway.token():
+            raise HTTPException(400, 'برای این کار توکن API رِیلوی لازم است؛ RAILWAY_API_TOKEN را ست کنید')
+        outcome['railway'] = await asyncio.to_thread(auto_config.railway_ports, True)
+    if action in ('switches', 'all'):
+        switched = await asyncio.to_thread(auto_config.apply, True)
+        outcome['switches'] = switched
+    _audit('system.autoconfig', action)
+    return {'success': True, 'action': action, 'outcome': outcome, **auto_config.state()}
 
 
 @router.post('/api/telegram/probe')

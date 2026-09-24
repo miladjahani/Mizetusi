@@ -163,6 +163,17 @@
   <section>
     <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-link"/></svg> پروکسی تلگرام
       <span class="count">فقط برای تلگرام — بدون کلاینت اضافه</span></h2>
+    {% if p.telegram.webrel %}
+    <div class="link-box">
+      <div class="lb-main">
+        <b>پروکسی WEB · {{ p.telegram.webrel.label }}</b>
+        <code>{{ p.telegram.webrel.url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ p.telegram.webrel.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+      <a class="tbtn" href="{{ p.telegram.webrel.tme }}" target="_blank" rel="noopener">افزودن با یک کلیک</a>
+    </div>
+    <p class="fam-hint">در تلگرام دسکتاپ ۷.۱ یا بالاتر: تنظیمات → پیشرفته → نوع اتصال → افزودن پروکسی → نوع <b>WEB</b>، بعد همین لینک را اضافه کنید. تکرارش فقط یک بار لازم است.</p>
+    {% endif %}
     {% if p.telegram.mtproto %}
     <div class="link-box">
       <div class="lb-main">

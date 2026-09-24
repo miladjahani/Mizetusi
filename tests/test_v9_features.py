@@ -38,7 +38,7 @@ from app.main import _setting, app
 from app.nodes import catalog, ensure as ensure_nodes, upsert
 from app.subscriptions import flags as sub_flags
 from app.subscriptions import transports as tp
-from app.subscriptions.generator import node_links, render
+from app.subscriptions.generator import clash_document, node_links, render
 from app.users.service import create_user
 
 init_db()
@@ -228,8 +228,12 @@ def test_hysteria2_stays_out_until_it_is_configured_and_then_reaches_every_forma
     singbox = json.loads(render(user, 'https://panel.example.com', 'singbox'))
     assert any(item['type'] == 'hysteria2' and item['server'] == 'hy2.example.com'
                for item in singbox['outbounds'])
-    clash = json.loads(render(user, 'https://panel.example.com', 'clash'))
+    # Clash/Mihomo gets a whole YAML profile; the external endpoint is one of its
+    # proxies like it is one of the sing-box outbounds.
+    clash = clash_document(user)
     assert any(item['type'] == 'hysteria2' for item in clash['proxies'])
+    clash_text = render(user, 'https://panel.example.com', 'clash')
+    assert 'type: hysteria2' in clash_text and 'proxy-groups:' in clash_text
 
     # It is one shared external endpoint, so a per-node subscription leaves it out
     # and Xray (which has no hysteria2 outbound) never carries it.
@@ -259,7 +263,7 @@ def test_the_per_user_config_count_is_honoured_by_every_format():
     decoded = base64.b64decode(render(user, 'https://panel.example.com', 'base64')).decode()
     assert len([line for line in decoded.splitlines() if line]) == 5
     assert len(json.loads(render(user, 'https://panel.example.com', 'singbox'))['outbounds']) == 5
-    assert len(json.loads(render(user, 'https://panel.example.com', 'clash'))['proxies']) == 5
+    assert len(clash_document(user)['proxies']) == 5
     assert len(json.loads(render(user, 'https://panel.example.com', 'xray'))['outbounds']) == 5
 
     # Empty means every published combination, and the API round-trips the value.
