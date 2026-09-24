@@ -141,6 +141,7 @@ const checks = [
     'the grouped navigation must render five groups'],
   [(elements.get('navGroups')?.innerHTML.match(/data-section=/g) || []).length === 9,
     'the grouped navigation must offer every section'],
+  [typeof window.nexus?.updatePanel === 'function', 'guarded GitHub update action'],
   [typeof window.nexus?.handleSessionLost === 'function', 'session recovery hook'],
 ];
 for (const [ok, label] of checks) {

@@ -472,6 +472,59 @@ export class NexusApp {
     if (apple) apple.setAttribute('content', name);
   }
 
+  /* ------------------------------------------------------------ panel update */
+  async updatePanel() {
+    const button = $('#btnPanelUpdate');
+    const original = button?.innerHTML || 'نسخه جدید';
+    if (button) { button.disabled = true; button.innerHTML = '<span class="spin-inline"></span> بررسی GitHub'; }
+    try {
+      const info = await this.api.get('/api/system/update');
+      if (!info.safe) {
+        this.toasts.err(info.reason || 'این استقرار هنوز برای بروزرسانی امن آماده نیست', 10000);
+        return;
+      }
+      const current = String(info.current_commit || '').slice(0, 7) || 'نامشخص';
+      const latest = String(info.latest?.sha || '').slice(0, 7) || 'نامشخص';
+      const change = info.update_available
+        ? `نسخه فعلی ${current} و آخرین commit شاخه ${info.branch}: ${latest} است.`
+        : `آخرین commit شاخه ${info.branch} با نسخه فعلی (${current}) یکسان است؛ سرویس دوباره ساخته می‌شود.`;
+      const confirmed = await this.modals.ask('نصب آخرین نسخه از GitHub',
+        `${change}\n\nپیش از استقرار، از کاربران، UUID لینک‌ها، تنظیمات و کاتالوگ نود نسخه پشتیبان گرفته می‌شود. سرویس چند دقیقه ری‌استارت خواهد شد.`,
+        { confirmLabel: 'پشتیبان بگیر و بروزرسانی کن' });
+      if (!confirmed) return;
+      if (button) button.innerHTML = '<span class="spin-inline"></span> در حال استقرار';
+      const result = await this.api.post('/api/system/update', {});
+      const target = String(result.target_commit || '').slice(0, 7);
+      this.toasts.info(`نسخه ${target} درخواست شد؛ منتظر بازگشت سرویس…`, 7000);
+
+      // A redeploy briefly drops the edge. Once the new process answers, its
+      // database guard verifies every user UUID before the panel reloads.
+      const deadline = Date.now() + 5 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        try {
+          const health = await fetch('/health', { cache: 'no-store' });
+          if (!health.ok) continue;
+          const state = await this.api.get('/api/system/update?remote=false');
+          if (state.guard?.restarted) {
+            if (!state.guard.preserved) {
+              this.toasts.err('سرویس بالا آمد اما شناسه لینک‌ها با پشتیبان فرق دارد؛ بازگشت خودکار انجام نشد', 15000);
+              return;
+            }
+            this.toasts.ok('نسخه جدید نصب شد و همه شناسه‌های لینک حفظ شدند', 7000);
+            setTimeout(() => location.reload(), 900);
+            return;
+          }
+        } catch (error) {
+          // The expected offline window while Railway replaces the container.
+        }
+      }
+      this.toasts.info('استقرار هنوز در حال انجام است؛ چند لحظه بعد صفحه را تازه کنید', 10000);
+    } finally {
+      if (button) { button.disabled = false; button.innerHTML = original; }
+    }
+  }
+
   /* ------------------------------------------------------- session recovery */
   handleSessionLost() {
     this.polling = false;
@@ -543,6 +596,8 @@ export class NexusApp {
         this.toasts.ok('بروزرسانی انجام شد', 1600);
       });
     }
+    const panelUpdate = $('#btnPanelUpdate');
+    if (panelUpdate) panelUpdate.onclick = () => this.safe(() => this.updatePanel());
     const logout = $('#logout');
     if (logout) logout.onclick = () => this.safe(() => this.logout());
     $$('[data-pwa-install]').forEach((button) => {

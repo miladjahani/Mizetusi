@@ -533,6 +533,17 @@ def test_the_app_shell_is_served_with_the_shim_and_rewritten_urls(telegram_origi
     assert f"'{webapp.default_host()}'" in text and "'telegram.org'" in text
     assert '/__ws/' in text and '/__p/' in text
     assert 'WebSocket' in text and 'XMLHttpRequest' in text
+    # The sponsor is a row in the authenticated chat list, not an admin-panel
+    # link. It waits for Telegram's list, survives its re-renders, and opens the
+    # public channel through this proxy so a blocked direct t.me request is not
+    # what the user depends on.
+    assert f"const SPONSOR_URL = '{webapp.SPONSOR_URL}'" in text
+    assert f"const SPONSOR_HANDLE = '{webapp.SPONSOR_HANDLE}'" in text
+    assert "const SPONSOR_ID = 'nexus-sponsor-chat'" in text
+    assert "PREFIX + '/__p/t.me/' + SPONSOR_HANDLE" in text
+    assert "'#chat-list'" in text and 'findChatList' in text
+    assert 'new MutationObserver(schedule)' in text
+    assert "entry.target = '_blank'" in text and "entry.rel = 'noopener noreferrer'" in text
 
 
 def test_a_non_html_asset_streams_through_untouched(telegram_origin):

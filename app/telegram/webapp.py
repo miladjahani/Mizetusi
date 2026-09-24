@@ -39,6 +39,15 @@ from app.db import execute, row
 # flow; the WebSocket/API hosts are ``*.web.telegram.org``.
 EXTRA_HOSTS = ('telegram.org', 'www.telegram.org', 't.me')
 
+# A public Telegram channel shown as a real row at the top of Telegram Web's
+# chat list. It is deliberately injected by the proxy shim rather than added to
+# an account server-side: NEXUS never receives a Telegram API hash or a user's
+# MTProto credentials, so pretending the server could join a chat for them would
+# be both impossible and unsafe.
+SPONSOR_URL = 'https://t.me/milonfig'
+SPONSOR_HANDLE = 'milonfig'
+SPONSOR_TITLE = 'کانال اسپانسر'
+
 # Hop-by-hop headers are per-connection: passing them on corrupts the response.
 DROP_REQUEST = ('host', 'connection', 'content-length', 'transfer-encoding', 'accept-encoding',
                 'keep-alive', 'te', 'upgrade', 'proxy-connection', 'expect')
@@ -178,8 +187,8 @@ def shim():
 <script>
 /* NEXUS · Telegram Web proxy shim — see app/telegram/webapp.py */
 (() => {
-  const PREFIX = %s;
-  const HOSTS = %s;
+  const PREFIX = __NEXUS_PREFIX__;
+  const HOSTS = __NEXUS_HOSTS__;
   const allowed = (name) => HOSTS.some((host) => name === host || name.endsWith('.' + host));
   const rewrite = (value, socket) => {
     let url;
@@ -211,9 +220,134 @@ def shim():
     window.EventSource = function (url, config) { return new NativeEvents(rewrite(String(url), false), config); };
     window.EventSource.prototype = NativeEvents.prototype;
   }
+
+  // Telegram owns the account, so the proxy cannot join a channel with the
+  // user's credentials. It can still add a first-class-looking sponsor row to
+  // the left chat list after login. The observer waits for the authenticated
+  // list to exist and restores the row if Telegram re-renders that column.
+  if (!window.__nexusSponsorInstalled) {
+    window.__nexusSponsorInstalled = true;
+    const SPONSOR_URL = __NEXUS_SPONSOR_URL__;
+    const SPONSOR_TITLE = __NEXUS_SPONSOR_TITLE__;
+    const SPONSOR_HANDLE = __NEXUS_SPONSOR_HANDLE__;
+    const SPONSOR_ID = 'nexus-sponsor-chat';
+    const SPONSOR_STYLE_ID = 'nexus-sponsor-style';
+    const SPONSOR_PROXY = PREFIX + '/__p/t.me/' + SPONSOR_HANDLE;
+
+    const installStyle = () => {
+      if (document.getElementById(SPONSOR_STYLE_ID)) return;
+      const style = document.createElement('style');
+      style.id = SPONSOR_STYLE_ID;
+      style.textContent = `
+        #${SPONSOR_ID} {
+          box-sizing: border-box; display: flex; align-items: center; gap: 10px;
+          width: 100%; min-height: 64px; padding: 8px 12px; flex: 0 0 auto;
+          color: var(--tg-primary-text-color, #17212b); background: var(--tg-secondary-bg-color, #fff);
+          border-bottom: 1px solid var(--tg-border-color, rgba(0,0,0,.08));
+          text-decoration: none; cursor: pointer; direction: rtl; position: relative; z-index: 20;
+        }
+        #${SPONSOR_ID}:hover { background: var(--tg-hover-bg-color, #f2f6fa); }
+        #${SPONSOR_ID} .nexus-sponsor-icon {
+          width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center;
+          flex: 0 0 46px; color: #14200d; background: #7ed957; font-size: 22px; font-weight: 700;
+        }
+        #${SPONSOR_ID} .nexus-sponsor-copy { min-width: 0; flex: 1; }
+        #${SPONSOR_ID} .nexus-sponsor-title { display: block; font-size: 15px; font-weight: 600; line-height: 20px; }
+        #${SPONSOR_ID} .nexus-sponsor-link { display: block; color: var(--tg-secondary-text-color, #707579); font-size: 13px; line-height: 18px; direction: ltr; text-align: right; }
+        #${SPONSOR_ID} .nexus-sponsor-badge {
+          flex: 0 0 auto; border-radius: 999px; padding: 2px 7px; color: #285c21; background: #dff7d5; font-size: 11px;
+        }
+        #${SPONSOR_ID}:focus-visible { outline: 2px solid #53b439; outline-offset: -2px; }
+      `;
+      (document.head || document.documentElement).appendChild(style);
+    };
+
+    const findChatList = () => {
+      const preferred = ['#chat-list', '.chat-list-container', '.ChatList', '.chat-list', '[class*="ChatList"]'];
+      for (const selector of preferred) {
+        const element = document.querySelector(selector);
+        if (element && element.isConnected) return element;
+      }
+      // Telegram Web changes generated class names between releases. The search
+      // box is a stable landmark; when it exists, choose the large left-column
+      // element directly below it instead of betting on one build's CSS hash.
+      const search = document.querySelector('#search-input');
+      if (!search) return null;
+      const anchor = search.getBoundingClientRect();
+      const candidates = Array.from(document.querySelectorAll('div, section, aside')).filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width >= 220 && rect.width <= 430 && rect.height >= 260 &&
+          Math.abs(rect.left - anchor.left) <= 24 && rect.top >= anchor.bottom - 12;
+      });
+      candidates.sort((a, b) => {
+        const score = (element) => {
+          const marker = `${element.id || ''} ${element.className || ''}`.toLowerCase();
+          return (marker.includes('chatlist') ? 100 : 0) +
+            (element.querySelector('[data-peer-id], [data-dialog-id], [role="listitem"]') ? 30 : 0) +
+            Math.min(20, element.children.length);
+        };
+        return score(b) - score(a);
+      });
+      return candidates[0] || null;
+    };
+
+    const makeSponsor = () => {
+      const entry = document.createElement('a');
+      entry.id = SPONSOR_ID;
+      entry.href = SPONSOR_PROXY;
+      entry.target = '_blank';
+      entry.rel = 'noopener noreferrer';
+      entry.role = 'listitem';
+      entry.title = SPONSOR_URL;
+      entry.setAttribute('aria-label', `${SPONSOR_TITLE}: ${SPONSOR_URL}`);
+
+      const icon = document.createElement('span');
+      icon.className = 'nexus-sponsor-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = '✦';
+
+      const copy = document.createElement('span');
+      copy.className = 'nexus-sponsor-copy';
+      const title = document.createElement('span');
+      title.className = 'nexus-sponsor-title';
+      title.textContent = SPONSOR_TITLE;
+      const link = document.createElement('span');
+      link.className = 'nexus-sponsor-link';
+      link.textContent = 't.me/' + SPONSOR_HANDLE;
+      copy.append(title, link);
+
+      const badge = document.createElement('span');
+      badge.className = 'nexus-sponsor-badge';
+      badge.textContent = 'اسپانسر';
+      entry.append(icon, copy, badge);
+      return entry;
+    };
+
+    const ensureSponsor = () => {
+      installStyle();
+      if (document.getElementById(SPONSOR_ID)) return;
+      const list = findChatList();
+      if (!list || !list.parentElement) return;
+      list.parentElement.insertBefore(makeSponsor(), list);
+    };
+
+    let queued = false;
+    const schedule = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => { queued = false; ensureSponsor(); });
+    };
+    new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+    addEventListener('DOMContentLoaded', schedule, { once: true });
+    ensureSponsor();
+  }
 })();
 </script>
-""" % (repr(path_prefix()), repr(hosts))
+""".replace('__NEXUS_PREFIX__', repr(path_prefix())) \
+       .replace('__NEXUS_HOSTS__', repr(hosts)) \
+       .replace('__NEXUS_SPONSOR_URL__', repr(SPONSOR_URL)) \
+       .replace('__NEXUS_SPONSOR_TITLE__', repr(SPONSOR_TITLE)) \
+       .replace('__NEXUS_SPONSOR_HANDLE__', repr(SPONSOR_HANDLE))
 
 
 def rewrite_html(text):

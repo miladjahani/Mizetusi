@@ -27,6 +27,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app import autoconfig as auto_config
 from app import railway
+from app import self_update
 from app.core import clientip
 from app.cores import service as core_service
 from app.core.settings_store import store
@@ -867,3 +868,24 @@ def get_guide(request: Request, section: str = ''):
     state['section'] = wanted if wanted in SECTION_TIPS else 'dashboard'
     state['tip'] = SECTION_TIPS[state['section']]
     return state
+
+
+@router.get('/api/system/update')
+def get_update_status(request: Request, remote: bool = True):
+    """GitHub head, persistent-storage and deploy-provider preflight."""
+    _auth(request)
+    main = _main()
+    return {'success': True, **self_update.status(check_remote=remote),
+            'version': main.APP_VERSION, 'build': main.BUILD_TOKEN}
+
+
+@router.post('/api/system/update')
+def apply_update(request: Request):
+    """Back up first, then ask Railway/Render to deploy the latest GitHub commit."""
+    _auth(request)
+    result = self_update.apply()
+    if not result.get('ok'):
+        raise HTTPException(400, result.get('reason') or 'بروزرسانی انجام نشد')
+    _audit('system.update',
+           f"{result.get('provider', {}).get('id')} → {str(result.get('target_commit', ''))[:12]}")
+    return {'success': True, **result}
