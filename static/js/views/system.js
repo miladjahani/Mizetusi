@@ -539,7 +539,7 @@ export class SettingsView {
     if (!version) this.app.safe(() => this.loadVersion());
     const count = metrics ? `${Fmt.num(metrics.totals.users)} کل · ${Fmt.num(metrics.totals.active_users)} فعال` : '—';
     const rows = [
-      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 9.3.0'],
+      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 9.4.0'],
       ['آدرس پایه', settings.resolved_base_url || location.origin],
       ['کاربران', count],
       ['نودهای فعال', metrics ? `${Fmt.num(metrics.totals.nodes_enabled)} از ${Fmt.num(metrics.totals.nodes)}` : '—'],

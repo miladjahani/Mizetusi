@@ -493,6 +493,13 @@
           <div><label>دامنهٔ عمومی <span class="hint">خالی بگذارید تا دامنهٔ خود پنل استفاده شود</span></label><input id="tgRelayDomain" dir="ltr" placeholder="nexus.up.railway.app"></div>
           <div><label>نشست هم‌زمان <span class="hint">۱ تا ۶۴</span></label><input id="tgRelaySessions" type="number" min="1" max="64" dir="ltr" value="6"></div>
           <div><label>استریم هر نشست <span class="hint">۱ تا ۲۵۶</span></label><input id="tgRelayStreams" type="number" min="1" max="256" dir="ltr" value="32"></div>
+          <!-- The sponsored row Telegram puts at the top of a chat list is not something
+               this panel can draw: Telegram renders it from help.promoData for a proxy it
+               knows (a promotion tag from @MTProxybot). So the card asks for exactly the
+               two facts Telegram keys it on — the tag and the channel — and says plainly
+               when the row is not being advertised. -->
+          <div><label>تگ تبلیغاتی <span class="hint">۳۲ کاراکتر هگز از @MTProxybot؛ با آن کانال اسپانسر بالای چت‌لیست کاربران می‌آید</span></label><input id="tgRelaySponsorTag" dir="ltr" maxlength="32" placeholder="0123456789abcdef0123456789abcdef"></div>
+          <div><label>کانال اسپانسر <span class="hint">همان کانالی که در ربات ثبت می‌کنید؛ @ یا لینک هم قبول است</span></label><input id="tgRelaySponsorChannel" dir="ltr" placeholder="miliconfig"></div>
         </div>
         <div class="actions">
           <button class="primary" id="tgRelaySave">ذخیره و انتشار</button>
@@ -501,6 +508,7 @@
         </div>
         <div class="kv-list" id="tgRelayInfo"></div>
         <div id="tgRelayLinks"></div>
+        <div id="tgRelayBroadcast"></div>
       </div>
 
       <div class="grid-2b" id="tgOtherTypes" style="margin-top:13px">

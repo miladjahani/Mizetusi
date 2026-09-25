@@ -51,7 +51,8 @@ init_db()
 client = TestClient(app)
 
 DOMAIN = 'nexus-demo.up.railway.app'
-KEYS = (webrelay.ENABLED, webrelay.SECRET, webrelay.DOMAIN, webrelay.SESSIONS, webrelay.STREAMS)
+KEYS = (webrelay.ENABLED, webrelay.SECRET, webrelay.DOMAIN, webrelay.SESSIONS, webrelay.STREAMS,
+        webrelay.TAG, webrelay.SPONSOR)
 
 
 def h():
@@ -179,6 +180,57 @@ def test_saving_the_card_stores_the_domain_and_the_switch():
     assert webrelay.sessions() == 8 and webrelay.streams() == 64
 
 
+def test_the_promotion_tag_reaches_the_config_and_clears_again():
+    """The sponsored row is Telegram's; the tag is the only part this panel owns.
+
+    Telegram renders that row from ``help.promoData`` for a proxy it has been told
+    to advertise, and the tag @MTProxybot issues is that «told». So it has to
+    reach the rendered config — the one file both halves of the relay read — and
+    an empty tag has to leave a comment behind instead of ``tag = ""``, which is a
+    value the binary would have to interpret.
+    """
+    promo = 'ab' * 16
+    assert webrelay.tag() == '' and webrelay.promotion() is False
+    webrelay.save({'tag': promo.upper(), 'sponsor': 'https://t.me/miliconfig'})
+    assert webrelay.tag() == promo and webrelay.promotion() is True
+    text = webrelay.config_text()
+    assert 'tag = "%s"' % promo in text
+    assert 'use_middle_proxy = true' in text        # what carries the promo
+    assert webrelay.sponsor() == 'miliconfig'
+    assert webrelay.sponsor_url() == 'https://t.me/miliconfig'
+    webrelay.save({'tag': ''})
+    assert 'tag = "%s"' % promo not in webrelay.config_text()
+    assert webrelay.promotion() is False
+
+
+def test_a_tag_or_channel_telegram_would_refuse_is_rejected_before_anything_is_stored():
+    with pytest.raises(ValueError):
+        webrelay.save({'tag': 'not-a-tag'})
+    with pytest.raises(ValueError):
+        webrelay.save({'sponsor': 'not a handle!'})
+    assert webrelay._setting(webrelay.TAG) is None
+    assert webrelay._setting(webrelay.SPONSOR) is None
+    # …and an unset channel falls back to the support channel, never to nothing.
+    assert webrelay.sponsor() == webrelay.DEFAULT_SPONSOR
+
+
+def test_the_broadcast_text_quotes_the_link_this_deployment_serves(published):
+    """The channel is where a WEB link is handed out: a stale link there is worse
+    than none, so the post is derived from the link that is really published."""
+    item = webrelay.broadcast()
+    assert item['url'] == webrelay.links()['tme']
+    assert item['url'] in item['text'] and 'WEB' in item['text']
+    assert item['share'].startswith('https://t.me/share/url?')
+
+
+def test_the_card_says_whether_telegram_is_being_told_to_advertise(published):
+    assert webrelay.status()['promotion'] is False
+    assert webrelay.status()['sponsor'] == webrelay.DEFAULT_SPONSOR
+    webrelay.save({'tag': 'cd' * 16})
+    assert webrelay.status()['promotion'] is True
+    assert any('بالای چت‌لیست' in note for note in webrelay.notes())
+
+
 def test_the_panel_payload_carries_the_web_card(published):
     payload = client.get('/api/telegram', headers=h()).json()
     card = payload['webrelay']
@@ -212,6 +264,11 @@ def test_the_portal_hands_the_user_the_web_link(published):
     assert section['webrel']['url'].startswith('tg://webproxy?')
     assert section['webrel']['label'].startswith('WEB')
     assert section['webrel']['secret'].startswith('dd')
+    # The channel travels with the proxy: it is what a user joins to keep getting
+    # fresh WEB links, and what Telegram puts above their chats once the tag is in.
+    assert section['sponsor']['url'] == webrelay.sponsor_url()
+    assert section['sponsor']['handle'] == webrelay.sponsor()
+    assert section['sponsor']['handle'] in section['hint']
 
 
 # ------------------------------------------------------------- bridge + socket

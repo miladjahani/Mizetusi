@@ -84,6 +84,8 @@ export class TelegramView {
     set('#tgRelayDomain', data.domain || '');
     set('#tgRelaySessions', data.sessions);
     set('#tgRelayStreams', data.streams);
+    set('#tgRelaySponsorTag', data.tag || '');
+    set('#tgRelaySponsorChannel', data.sponsor || '');
     const toggle = $('#tgRelayEnabled');
     if (toggle) toggle.classList.toggle('on', !!data.enabled);
     const tag = $('#tgRelayTag');
@@ -106,15 +108,14 @@ export class TelegramView {
       <div class="kv-line"><span>سوکت حمل</span><b dir="ltr">${esc(data.ws_path || '')}</b></div>
       <div class="kv-line"><span>سقف اتصال</span><b dir="ltr">${Fmt.num(data.max_connections)}</b></div>
       <div class="kv-line"><span>secret</span><b dir="ltr" style="white-space:normal;word-break:break-all">${esc(data.link_secret || '—')}</b></div>
+      <div class="kv-line"><span>کانال اسپانسر</span><b dir="ltr">${data.sponsor ? `@${esc(data.sponsor)}` : '—'}</b></div>
+      <div class="kv-line"><span>ردیف اسپانسر بالای چت‌لیست</span><b style="white-space:normal">${data.promotion ? 'تلگرام آن را نشان می‌دهد (تگ ثبت شده)' : 'نمایش داده نمی‌شود — تگ تبلیغاتی از @MTProxybot لازم است'}</b></div>
       ${this.store.get('telegramRelayProbe') ? `<div class="kv-line"><span>آخرین تست</span><b style="white-space:normal">${esc(this.store.get('telegramRelayProbe'))}</b></div>` : ''}
       ${data.reason ? `<div class="kv-line"><span>دلیل منتشر نشدن</span><b style="white-space:normal">${esc(data.reason)}</b></div>` : ''}`;
     const links = $('#tgRelayLinks');
-    if (!links) return;
-    if (!data.links) {
-      links.innerHTML = '<p class="muted">تا وقتی relay بالا نباشد لینکی ساخته نمی‌شود؛ دلیلش در ردیف‌های بالا نوشته شده است.</p>';
-      return;
-    }
-    links.innerHTML = `
+    if (links) {
+      links.innerHTML = data.links
+        ? `
       <div class="link-box">
         <div class="lb-main"><b>لینک WEB (tg://webproxy)</b><code>${esc(data.links.tg)}</code></div>
         <button class="copy-btn" data-copy="${esc(data.links.tg)}" title="کپی لینک">${ico('copy', 14)}</button>
@@ -124,8 +125,27 @@ export class TelegramView {
         <button class="copy-btn" data-copy="${esc(data.links.tme)}" title="کپی لینک">${ico('copy', 14)}</button>
         <a class="tbtn" href="${esc(data.links.tme)}" target="_blank" rel="noopener">باز کردن در تلگرام</a>
       </div>
-      <p class="muted">کاربر در تلگرام دسکتاپ ۷.۱ یا بالاتر: تنظیمات → پیشرفته → نوع اتصال → افزودن پروکسی → نوع <b>WEB</b>، بعد همین لینک را اضافه می‌کند. پیام و مدیا از این سرور رد می‌شوند؛ بقیهٔ ترافیک دست‌نخورده می‌ماند.</p>`;
-    bindCopyButtons(links, this.toasts);
+      <p class="muted">کاربر در تلگرام دسکتاپ ۷.۱ یا بالاتر: تنظیمات → پیشرفته → نوع اتصال → افزودن پروکسی → نوع <b>WEB</b>، بعد همین لینک را اضافه می‌کند. پیام و مدیا از این سرور رد می‌شوند؛ بقیهٔ ترافیک دست‌نخورده می‌ماند.</p>`
+        : '<p class="muted">تا وقتی relay بالا نباشد لینکی ساخته نمی‌شود؛ دلیلش در ردیف‌های بالا نوشته شده است.</p>';
+      bindCopyButtons(links, this.toasts);
+    }
+    /* The channel is where the link is handed out, so the post is rendered here
+       from the link this deployment is actually serving: a channel that quotes a
+       rotated secret is worse than no channel at all. */
+    const broadcast = $('#tgRelayBroadcast');
+    if (broadcast) {
+      const item = data.broadcast || {};
+      broadcast.innerHTML = item.url
+        ? `
+      <div class="link-box">
+        <div class="lb-main"><b>متن آمادهٔ انتشار در کانال</b><code style="white-space:pre-wrap">${esc(item.text)}</code></div>
+        <button class="copy-btn" data-copy="${esc(item.text)}" title="کپی متن">${ico('copy', 14)}</button>
+        <a class="tbtn" href="${esc(item.share)}" target="_blank" rel="noopener">ارسال به کانال</a>
+      </div>
+      <p class="muted">این متن را در کانال اسپانسر @${esc(data.sponsor || '')} بگذارید؛ هر کسی که پروکسی WEB را اضافه کند و تگ تبلیغاتی ثبت شده باشد، همین کانال را بالای چت‌لیست خودش می‌بیند.</p>`
+        : '<p class="muted">تا وقتی لینک WEB منتشر نشده باشد، متن آمادهٔ انتشار هم ساخته نمی‌شود.</p>';
+      bindCopyButtons(broadcast, this.toasts);
+    }
   }
 
   /* ------------------------------------------------------------- MTProto */
@@ -289,15 +309,28 @@ export class TelegramView {
         dns: $('#tgMtDns')?.value.trim() || '',
         front_ip: $('#tgMtFrontIp')?.value.trim() || '',
       },
-      webrelay: {
-        enabled: $('#tgRelayEnabled')?.classList.contains('on') ? '1' : '0',
-        domain: $('#tgRelayDomain')?.value.trim() || '',
-        sessions: Number($('#tgRelaySessions')?.value || data.webrelay?.sessions || 6),
-        streams: Number($('#tgRelayStreams')?.value || data.webrelay?.streams || 32),
-      },
+      webrelay: this.relayPayload(),
       webproxy: profiles,
       webapp: { enabled: $('#tgAppEnabled')?.classList.contains('on') ? '1' : '0' },
     };
+  }
+
+  /* The sponsor half of the WEB card. Its two fields are only sent when the
+     inputs are really on the page, so a save from a tab that loaded before this
+     card grew them cannot clear a tag that is already advertised. */
+  relayPayload() {
+    const data = this.store.get('telegram') || {};
+    const body = {
+      enabled: $('#tgRelayEnabled')?.classList.contains('on') ? '1' : '0',
+      domain: $('#tgRelayDomain')?.value.trim() || '',
+      sessions: Number($('#tgRelaySessions')?.value || data.webrelay?.sessions || 6),
+      streams: Number($('#tgRelayStreams')?.value || data.webrelay?.streams || 32),
+    };
+    const tag = $('#tgRelaySponsorTag');
+    if (tag) body.tag = tag.value.trim();
+    const sponsor = $('#tgRelaySponsorChannel');
+    if (sponsor) body.sponsor = sponsor.value.trim();
+    return body;
   }
 
   async save(action = 'save') {

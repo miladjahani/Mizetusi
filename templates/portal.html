@@ -203,6 +203,16 @@
       <a class="tbtn" href="{{ p.telegram.web.url }}" target="_blank" rel="noopener">باز کردن</a>
     </div>
     {% endif %}
+    {% if p.telegram.sponsor %}
+    <div class="link-box">
+      <div class="lb-main">
+        <b>{{ p.telegram.sponsor.label }} <span class="muted" style="font-weight:400">@{{ p.telegram.sponsor.handle }}</span></b>
+        <code>{{ p.telegram.sponsor.url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ p.telegram.sponsor.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+      <a class="tbtn" href="tg://resolve?domain={{ p.telegram.sponsor.handle }}">عضویت در تلگرام</a>
+    </div>
+    {% endif %}
     <p class="fam-hint">{{ p.telegram.hint }}</p>
   </section>
   {% endif %}

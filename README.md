@@ -7,6 +7,22 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **Telegram's sponsored channel above the chat list — wired to the WEB proxy.** The row a
+  Telegram user sees at the very top of their chats, above every folder («اسپانسر پروکسی»), is not
+  a chat they joined: Telegram renders it from `help.promoData`, whose own description is «a set of
+  useful suggestions and a PSA/MTProxy sponsored peer», and it only does that for a proxy it has
+  been told to advertise. So the **پروکسی WEB** card now asks for exactly the two facts Telegram
+  keys it on — the **promotion tag** @MTProxybot issues for a registered proxy (32 hex characters,
+  validated before anything is written) and the **channel** the deployment points its users at.
+  The tag is rendered into the `mtproto-proxy` config as `[server].tag`, the one file both halves
+  of the relay read, and it covers a `tg://webproxy` user as well because their client reaches
+  Telegram through that same MTProto data plane, over the `use_middle_proxy = true` transport
+  Telegram hands sponsored peers over. No tag is no advertised peer, and the panel says which of
+  the two it is rather than leaving an admin to guess: `webrelay.notes()` names the bot, the card
+  marks the row as not being shown, and the status window hands out a tap-to-join `tg://resolve`
+  link until then. The same card renders the **post for the channel** (`broadcast()`) from the link
+  it is really serving, so spreading a WEB link cannot quote a secret that was rotated afterwards,
+  and a **کانال اسپانسر** button sits next to the WEB link in every user's status window.
 - **Telegram Desktop's WEB proxy — the one Telegram proxy that needs no raw port — and a panel
   that hands a user exactly one kind of Telegram proxy by default.** Telegram Desktop 7.1 added
   a fourth proxy type, `WEB`, and it is not a transport at all: a hidden WebView loads
