@@ -778,9 +778,21 @@ def test_the_image_ships_the_mtproto_binary():
 
 
 def test_the_worker_carries_the_telegram_path():
+    """The Telegram Web prefix rides the Worker's whole-panel proxy.
+
+    The Worker no longer special-cases ``/tg``: it fronts the panel itself, so
+    the prefix (and the WebSocket half of it) is forwarded by the same hop as
+    every other panel route, with the path, query, body and client address
+    intact, and the host the origin builds its links from.
+    """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, 'cloudflare-worker', 'worker.js'), encoding='utf-8') as handle:
         worker = handle.read()
-    assert "const TELEGRAM_PREFIX = '/tg'" in worker
-    assert 'isTelegramPath(url.pathname)' in worker
+    assert 'const forward = new Request(origin + url.pathname + url.search, request)' in worker
     assert "forward.headers.set('X-Forwarded-Proto', 'https')" in worker
+    assert "forward.headers.set('X-Forwarded-Host', edgeHost)" in worker
+    # The panel proxy must stay a panel proxy: the edge path table never claims
+    # the Telegram prefix, and a path shaped like an absolute URL is refused.
+    block = worker.split('const EDGE_PATHS = [', 1)[1].split('];', 1)[0]
+    assert "'/tg'" not in block and '/tg/' not in block
+    assert 'isRelayShaped(url.pathname)' in worker

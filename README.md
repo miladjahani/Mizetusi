@@ -416,8 +416,7 @@ a dedicated subscription per client.
   inbounds are the newest thing in that file, so they are the first rung dropped: a Telegram
   listener must never cost the VPN a transport.
 - **The Cloudflare Worker proxies the whole matrix.** It only knew `/ws`, `/ws/vless` and
-  `/ws/trojan`, so every VMess, Shadowsocks, CDN and WARP node 404'd behind Cloudflare while
-  working on the Railway origin. It also forwards the real client IP, keeps the handshake
+  `/ws/trojan`, so every VMess, Shadowsocks, CDN and WARP node 404'd behind Cloudflare whileworking on the Railway origin. It also forwards the real client IP, keeps the handshake
   headers the origin needs, and answers an unreachable origin with a JSON `502`.
 - **A local end-to-end proof.** `scripts/e2e_tunnel_check.py` boots the generated server
   config, the FastAPI edge and one client outbound per published transport, then pushes a real
@@ -425,6 +424,13 @@ a dedicated subscription per client.
 - **Freebuff-side hardening.** Edge routes and the Worker's path table are now generated from
   (and asserted against) the transport profile table, and two new headless probes cover them:
   `tests/worker_smoke.mjs` and the protocol/Shadowsocks cases in `tests/test_panel_api.py`.
+- **The Cloudflare Worker now fronts the panel, not only the relays.** Pages, the API,
+  subscription and portal links, uploads, redirects and the panel's own WebSockets are proxied
+  to the same origin, so a filtered network that can only reach Cloudflare keeps the whole panel
+  and its node links together on one clean address. Absolute redirects naming the origin are
+  rewritten to the Worker host, `X-Forwarded-Host` makes the origin build its links from that
+  host, and an unknown `/ws/…` or `/cdn/…` path still answers 404, so the panel route list can
+  never swallow a client's typo'd node path.
 
 ## What v7 changes
 

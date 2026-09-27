@@ -345,7 +345,7 @@
     <section class="section" id="section-cloudflare">
       <div class="grid-2">
         <div class="panel glass">
-          <div class="panel-head"><div><h2>Cloudflare Worker</h2><p class="sub">پل WebSocket برای ورودی‌های CF</p></div><span class="pill" id="cfTag">—</span></div>
+          <div class="panel-head"><div><h2>Cloudflare Worker</h2><p class="sub">پنل و ورودی‌های CF روی یک آدرس تمیز</p></div><span class="pill" id="cfTag">—</span></div>
           <label>Worker URL <span class="hint">— باید HTTPS باشد</span></label>
           <input id="workerUrl" placeholder="https://nexus-edge.workers.dev" dir="ltr">
           <label>API Key <span class="hint">— اختیاری</span></label>
@@ -354,7 +354,7 @@
             <button class="primary" id="saveWorker">ذخیره و Sync</button>
             <button class="secondary" id="clearWorker">حذف Worker</button>
           </div>
-          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ اگر لوکیشنی تعریف نکنید فقط نود مستقیم همین سرویس منتشر می‌شود.</p></div></div>
+          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ اگر لوکیشنی تعریف نکنید فقط نود مستقیم همین سرویس منتشر می‌شود. وقتی ذخیره شد، خودِ پنل هم از همان آدرس باز می‌شود و سابلینک‌ها روی دامنهٔ Worker ساخته می‌شوند.</p></div></div>
         </div>
         <div class="panel glass">
           <div class="panel-head">          <div><h2>Probe آی‌پی‌های لبه</h2><p class="sub">اسکن از سمت همین سرور</p></div></div>
