@@ -90,9 +90,9 @@ const checks = [
   [loaded.ui.Charts.bars !== undefined && loaded.ui.Charts.area !== undefined, 'Charts API'],
   [typeof loaded.session.SessionManager === 'function', 'SessionManager'],
   [typeof loaded.api.ApiClient === 'function', 'ApiClient'],
-  [loaded.store.SECTIONS.length === 9, 'SECTIONS'],
+  [loaded.store.SECTIONS.length === 10, 'SECTIONS'],
   [loaded.store.SECTIONS.map((item) => item.id).join(',') ===
-    'dashboard,users,nodes,cloudflare,tools,telegram,customize,advanced,settings', 'SECTIONS order'],
+    'dashboard,users,subs,nodes,cloudflare,tools,telegram,customize,advanced,settings', 'SECTIONS order'],
   // The sidebar is five collapsible groups, and every section belongs to one of
   // them — a section left out of a group would be unreachable in the UI.
   [loaded.store.NAV_GROUPS.length === 5, 'nav groups'],
@@ -139,8 +139,9 @@ const checks = [
   // bar — empty on every load.
   [(elements.get('navGroups')?.innerHTML.match(/class="nav-group[ "]/g) || []).length === 5,
     'the grouped navigation must render five groups'],
-  [(elements.get('navGroups')?.innerHTML.match(/data-section=/g) || []).length === 9,
+  [(elements.get('navGroups')?.innerHTML.match(/data-section=/g) || []).length === 10,
     'the grouped navigation must offer every section'],
+  [typeof window.nexus?.updatePanel === 'function', 'guarded GitHub update action'],
   [typeof window.nexus?.handleSessionLost === 'function', 'session recovery hook'],
 ];
 for (const [ok, label] of checks) {

@@ -34,6 +34,11 @@ services:
       # Set this to the domain clients should use; leave empty to fall back to
       # the machine's own public IP for the origin node.
       NEXUS_PUBLIC_DOMAIN: '${NEXUS_PUBLIC_DOMAIN:-}'
+      # The base every subscription URL is built from. Behind a domain (or a
+      # CDN) the request's own Host would be the container's, so this is what
+      # makes a link handed to a user point at the real address. scripts/install-vps.sh
+      # writes it when --domain is given.
+      PUBLIC_BASE_URL: '${PUBLIC_BASE_URL:-}'
       # Auto-detected when empty (public IP + 8443 via app.runtime).
       NEXUS_DIRECT_HOST: '${NEXUS_DIRECT_HOST:-}'
       NEXUS_DIRECT_PORT: '${NEXUS_DIRECT_PORT:-8443}'

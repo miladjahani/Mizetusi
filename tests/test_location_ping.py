@@ -69,7 +69,13 @@ def test_a_hand_added_location_publishes_addresses_without_a_scan(monkeypatch):
     nodes = [n for n in catalog.list() if n['kind'] == 'cloudflare']
     assert {n['server'] for n in nodes} == {'104.16.1.1', '104.16.1.2'}
     assert all(n['sni'] == 'worker.example.workers.dev' for n in nodes)
-    assert all(n['enabled'] for n in nodes)
+    # Strict manual: the pool is filled (the addresses exist) but nothing is
+    # published until an admin picks it — the nodes wait as candidates.
+    assert not any(n['enabled'] for n in nodes)
+    picked = client.post('/api/nodes/select', headers=h(),
+                         json={'names': [n['name'] for n in nodes]}).json()
+    assert picked['success'] and set(picked['names']) == {n['name'] for n in nodes}
+    assert all(catalog.get(n['name'])['enabled'] for n in nodes)
     _clean()
 
 

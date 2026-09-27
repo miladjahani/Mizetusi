@@ -49,7 +49,7 @@ from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import HTMLResponse
 
 from app import runtime
-from app.config import settings
+from app.config import SUPPORT_CHANNEL, settings
 from app.db import execute, row
 
 # Settings keys. The secret is stored, not regenerated: it lives *inside* every
@@ -59,6 +59,17 @@ SECRET = 'tg_web_relay_secret'
 DOMAIN = 'tg_web_relay_domain'
 SESSIONS = 'tg_web_relay_sessions'
 STREAMS = 'tg_web_relay_streams'
+# The promoted channel, and the promotion tag Telegram has to know about for the
+# channel to appear by itself (see :func:`tag`).
+SPONSOR = 'tg_web_relay_sponsor'
+TAG = 'tg_web_relay_tag'
+
+# Where the promoted channel comes from when nobody has set one: the same support
+# channel the panel shell and the status window already point at, so the feature
+# has exactly one place to change.
+DEFAULT_SPONSOR = urllib.parse.urlsplit(SUPPORT_CHANNEL).path.strip('/').split('/')[-1]
+# A channel username, not a URL and not a display name.
+HANDLE_RE = _re.compile(r'^[A-Za-z0-9_]{4,32}$')
 
 # Where the bridge page opens its socket. Kept in step with ``[web].ws_path`` in
 # the rendered config, so the page the relay serves and the route this module
@@ -158,6 +169,78 @@ def max_connections():
     return max(256, 2 * sessions() * (streams() + 1))
 
 
+# ------------------------------------------------------------------- sponsor
+# The row a Telegram user sees at the *top of their chat list* above everything
+# else is not a chat they joined: Telegram renders it from ``help.promoData``,
+# whose own description is «a set of useful suggestions and a PSA/MTProxy
+# sponsored peer». It is therefore always Telegram's server that decides to show
+# it, and the only thing this deployment can supply is the two facts Telegram
+# keys it on — the proxy's **promotion tag** (the adtag @MTProxybot issues for a
+# registered proxy) and, for everything the panel itself renders, the channel
+# those users should be pointed at.
+#
+# The tag is what makes the row appear by itself. It works because the data plane
+# is an MTProto proxy and the ``[general] use_middle_proxy`` above puts it on the
+# ME transport Telegram hands sponsored peers over — and it covers the WEB link
+# too, because a WEB client is carried to Telegram by that same proxy. Without a
+# tag nothing is advertised and this card says so instead of pretending.
+def tag():
+    """The 32-hex promotion tag from @MTProxybot (``''`` while unset)."""
+    raw = str(_setting(TAG) or '').strip().lower()
+    return raw if len(raw) == 32 and all(char in '0123456789abcdef' for char in raw) else ''
+
+
+def promotion():
+    """Whether Telegram is being told to advertise the promoted channel."""
+    return bool(tag())
+
+
+def _clean_handle(value):
+    """A channel username from a handle, an ``@name`` or a full ``t.me`` link."""
+    raw = str(value or '').strip()
+    if not raw:
+        return ''
+    raw = raw.split('://')[-1].split('?')[0].strip('/')
+    if '/' in raw:
+        raw = raw.split('/')[-1]
+    raw = raw.lstrip('@')
+    return raw if HANDLE_RE.match(raw) else ''
+
+
+def sponsor():
+    """The channel the promotion (and the status window) points at, as a handle.
+
+    Empty input falls back to the support channel rather than to «no sponsor»:
+    the channel a user is pointed at is the reason this feature exists, and an
+    empty field must not be able to silently withdraw it.
+    """
+    return _clean_handle(_setting(SPONSOR)) or DEFAULT_SPONSOR
+
+
+def sponsor_url():
+    """The ``t.me`` link a user can tap to join the promoted channel."""
+    name = sponsor()
+    return f'https://t.me/{name}' if name else ''
+
+
+def broadcast():
+    """A ready-to-post message for the channel — the spreading half.
+
+    The channel is where a WEB link is handed out, so the panel derives the post
+    from the link it is really serving instead of leaving an admin to paste one
+    from memory (which is how a channel ends up advertising a rotated secret).
+    """
+    link = links()
+    url = (link or {}).get('tme') or ''
+    if not url:
+        return {'url': '', 'text': '', 'share': ''}
+    text = ('پروکسی WEB تلگرام — بدون نصب کلاینت، بدون پورت خام و بدون فیلترشکن:\n'
+            'تنظیمات → پیشرفته → نوع اتصال → افزودن پروکسی → نوع WEB، بعد همین لینک:\n'
+            f'{url}')
+    query = urllib.parse.urlencode({'url': url, 'text': text})
+    return {'url': url, 'text': text, 'share': 'https://t.me/share/url?' + query}
+
+
 # --------------------------------------------------------------------- secret
 def secret(create=True):
     """The 32-hex MTProto secret this proxy authenticates with.
@@ -239,6 +322,10 @@ def config_text():
     single place a port, a secret or a domain can be wrong.
     """
     front = str(settings.telegram_mtproto_domain or '').strip() or 'www.cloudflare.com'
+    promo = tag()
+    promo_line = (f'tag = "{promo}"' if promo else
+                  '# tag = "0123456789abcdef0123456789abcdef"  '
+                  '# تگ تبلیغاتی @MTProxybot — با آن کانال اسپانسر بالای چت‌لیست کاربران می‌آید')
     lines = [
         '# NEXUS-generated mtproto-proxy config — see app/telegram/webrelay.py',
         '#',
@@ -265,6 +352,13 @@ def config_text():
         '# needs; halving it saves memory and breaks Stories and video downloads, so',
         '# the connection ceiling is traded instead (buffers are allocated lazily).',
         'middleproxy_buffer_kb = 2048',
+        '# Telegram only advertises a promoted channel to a proxy it knows about, so',
+        '# the promotion tag from @MTProxybot goes here. It is what puts the sponsor',
+        '# channel at the top of the chat list of every user of this proxy — the WEB',
+        '# link included, because that client reaches Telegram through this same',
+        '# proxy. No tag, no advertised peer: the panel then offers the channel as a',
+        '# tap-to-join link instead of claiming a row Telegram never sends.',
+        promo_line,
         'log_level = "warn"',
         '',
         '[censorship]',
@@ -441,6 +535,11 @@ def status():
         'secret': secret() or '',
         'link_secret': link_secret(),
         'links': links(),
+        'tag': tag(),
+        'promotion': promotion(),
+        'sponsor': sponsor(),
+        'sponsor_url': sponsor_url(),
+        'broadcast': broadcast(),
         'ws_path': WS_PATH,
         'url': f'https://{domain()}/' if domain() else '',
         'config': config_text(),
@@ -460,6 +559,18 @@ def notes():
         out.append('دامنهٔ عمومی پنل معلوم نیست؛ آدرس پایه را در تنظیمات ست کنید.')
     out.append('کاربر لینک tg://webproxy را در تلگرام دسکتاپ اضافه می‌کند (تنظیمات → پیشرفته → نوع اتصال → '
                'افزودن پروکسی → نوع WEB). بقیهٔ ترافیک دست‌نخورده می‌ماند.')
+    if promotion():
+        out.append('تگ تبلیغاتی ثبت شده است: تلگرام کانال اسپانسر را بالای چت‌لیست هر کسی که از این پروکسی '
+                   f'استفاده می‌کند نشان می‌دهد (@{sponsor()}). خبری از تبلیغ در خود پیام‌ها نیست؛ فقط همان '
+                   'ردیف بالای لیست گفتگوها.')
+        out.append('همین ردیف و مدیا از مسیر MiddleProxy تلگرام می‌آید (use_middle_proxy در کانفیگ). روی '
+                   'میزبانی که آدرس خروجی‌اش NAT می‌شود، اگر آن مسیر وصل نشود نه مدیا می‌آید و نه ردیف '
+                   'اسپانسر؛ اولین چیزی که باید بررسی شود همین است.')
+    else:
+        out.append('کانال اسپانسر بالای چت‌لیست: در @MTProxybot همین پروکسی را ثبت کنید، کانال اسپانسر را '
+                   'به آن بدهید و تگ تبلیغاتی‌ای که می‌دهد را در همین کارت بگذارید. تلگرام فقط پروکسی‌های '
+                   'ثبت‌شده را تبلیغ می‌کند، پس بدون تگ هیچ ردیفی ساخته نمی‌شود — تا آن موقع همان لینک '
+                   f'عضویت (@{sponsor()}) به کاربران داده می‌شود.')
     return out
 
 
@@ -495,6 +606,20 @@ def save(updates):
         if not 1 <= value <= 256:
             raise ValueError('تعداد استریم هر نشست باید بین ۱ و ۲۵۶ باشد')
         plan.append((STREAMS, str(value)))
+    # The promotion tag is the one value here that Telegram validates, so it is
+    # held to Telegram's own shape before anything is written: 32 hex characters,
+    # exactly as @MTProxybot prints it.
+    if 'tag' in updates:
+        raw = _re.sub(r'[^0-9a-fA-F]', '', str(updates['tag'] or '').strip())
+        if raw and len(raw) != 32:
+            raise ValueError('تگ تبلیغاتی باید ۳۲ کاراکتر هگز باشد (همان چیزی که @MTProxybot می‌دهد)')
+        plan.append((TAG, raw.lower()))
+    if 'sponsor' in updates:
+        entered = str(updates['sponsor'] or '').strip()
+        name = _clean_handle(entered)
+        if entered and not name:
+            raise ValueError('نام کانال اسپانسر معتبر نیست (مثال: miliconfig یا https://t.me/miliconfig)')
+        plan.append((SPONSOR, name))
     for key, value in plan:
         _store(key, value)
     return [key for key, _ in plan]

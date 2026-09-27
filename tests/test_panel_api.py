@@ -22,7 +22,7 @@ PANEL_MODULES = [
     'js/core.js', 'js/ui.js', 'js/session.js', 'js/api.js', 'js/store.js', 'js/pwa.js',
     'js/views/dashboard.js', 'js/views/nodes.js', 'js/views/users.js', 'js/views/system.js',
     'js/views/customize.js', 'js/views/tools.js', 'js/views/telegram.js',
-    'js/views/advanced.js', 'js/views/guide.js',
+    'js/views/advanced.js', 'js/views/subscriptions.js', 'js/views/guide.js',
     'js/app.js',
 ]
 LEGACY_MODULES = ['app.js', 'app-dashboard.js', 'app-nodes.js', 'app-users.js', 'app-panel.js']
@@ -143,6 +143,8 @@ def test_every_module_import_resolves():
 def test_dashboard_shell_references_assets():
     r = client.get('/', headers=h())
     assert r.status_code == 200
+    assert 'id="btnPanelUpdate"' in r.text
+    assert 'آخرین نسخه از GitHub' in r.text
     assert '/static/app.css' in r.text
     # One module entry point: the imports own the load order, not the template.
     assert '<script type="module" src="/static/js/app.js"></script>' in r.text

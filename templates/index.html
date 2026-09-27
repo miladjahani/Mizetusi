@@ -87,7 +87,8 @@
         <span class="pill ok" id="livePill"><i class="dot"></i> زنده</span>
         <button class="pill" id="guidePill" title="راهنمای زنده">راهنما</button>
         <button class="tbtn" id="btnInstallBar" data-pwa-install="compact" title="نصب NEXUS روی این دستگاه">نصب برنامه</button>
-        <button class="icon-btn" id="btnRefresh" title="بروزرسانی"><svg><use href="#i-refresh"/></svg></button>
+        <button class="tbtn" id="btnPanelUpdate" title="دریافت و نصب آخرین نسخه از GitHub"><svg width="14" height="14"><use href="#i-download"/></svg> نسخه جدید</button>
+        <button class="icon-btn" id="btnRefresh" title="بروزرسانی داده‌ها"><svg><use href="#i-refresh"/></svg></button>
       </div>
     </header>
 
@@ -158,6 +159,13 @@
           <div id="recentLogs"></div>
         </div>
       </div>
+
+      <div class="panel glass" id="feedbackPanel">
+        <div class="panel-head"><div><h3>بازخورد کاربران</h3>
+          <p class="sub">پیام‌هایی که کاربران از پنجره وضعیت خود فرستاده‌اند</p></div>
+          <span class="pill" id="feedbackPill">—</span></div>
+        <div class="rank-list" id="feedbackList"></div>
+      </div>
     </section>
 
     <!-- ================= NODES ================= -->
@@ -198,6 +206,29 @@
           <div id="exploreLinks" style="margin-top:12px"></div>
         </div>
       </div>
+
+      <!-- Scanned nodes wait here until an admin publishes them: a scan never
+           adds an address to the catalog on its own (see app/nodes.py). -->
+      <details class="acc" id="nodeCandidatesCard" style="margin-top:13px">
+        <summary>
+          <span class="acc-ico"><svg width="15" height="15"><use href="#i-nodes"/></svg></span>
+          <span class="acc-t"><b>نودهای اسکن‌شده — انتخاب دستی</b><span>نودهایی که اسکن پیدا کرده ولی هنوز منتشر نشده‌اند؛ هرکدام را خودتان تأیید کنید</span></span>
+          <span class="acc-meta" id="candidatePill">—</span>
+          <svg class="chev" width="15" height="15"><use href="#i-chevron"/></svg>
+        </summary>
+        <div class="acc-body">
+          <div class="setting-row" style="margin-bottom:10px">
+            <div class="txt"><b>افزودن خودکار نودهای اسکن‌شده</b><p>اگر روشن باشد هر اسکن نودهای تازه را بی‌درنگ منتشر می‌کند؛ پیش‌فرض «خاموش» است تا فقط نودهای تأییدشده منتشر شوند.</p></div>
+            <button class="switch" id="nodeAutoSwitch" type="button"></button>
+          </div>
+          <div class="actions" style="margin:0 0 10px">
+            <button class="secondary compact" id="candidateSelectAll">انتخاب همه</button>
+            <button class="secondary compact" id="candidateClear">پاک کردن انتخاب</button>
+            <button class="primary compact" id="candidatePublish"><svg width="14" height="14"><use href="#i-plus"/></svg> افزودن انتخاب‌شده‌ها</button>
+          </div>
+          <div id="candidateList" class="stagger"></div>
+        </div>
+      </details>
     </section>
 
     <!-- ================= USERS ================= -->
@@ -256,11 +287,65 @@
       </details>
     </section>
 
+    <!-- ================= ADVANCED SUBSCRIPTIONS ================= -->
+    <section class="section" id="section-subs">
+      <div class="panel glass">
+        <div class="panel-head">
+          <div><h2>سابلینک پیشرفته</h2><p class="sub">گزارش مصرف، هشدار انقضا و سهمیه، مدیریت لینک هر کاربر و تنظیم دقیق هر کلاینت</p></div>
+          <div class="actions" style="margin:0">
+            <button class="secondary compact" id="subsReload"><svg width="14" height="14"><use href="#i-sync"/></svg> بازخوانی</button>
+          </div>
+        </div>
+
+        <div id="subsAlerts"></div>
+
+        <div class="grid-2" style="margin-top:13px">
+          <div class="panel glass" data-acc="آستانهٔ هشدار|زمان‌بندی: چند روز قبل و از چند درصد هشدار بدهیم|activity">
+            <div class="panel-head"><div><h3>آستانهٔ هشدار</h3><p class="sub">چند روز قبل از انقضا و از چند درصد سهمیه هشدار داده شود</p></div><span class="pill" id="subsAlertPill">—</span></div>
+            <div class="grid-2">
+              <div><label>هشدار انقضا (روز)</label><input id="subsThresholdExpiry" type="number" min="0" max="365" dir="ltr"></div>
+              <div><label>هشدار سهمیه (٪)</label><input id="subsThresholdQuota" type="number" min="1" max="100" dir="ltr"></div>
+            </div>
+            <div class="actions" style="margin-top:10px"><button class="primary compact" id="subsSaveAlerts"><svg width="14" height="14"><use href="#i-check"/></svg> ذخیرهٔ آستانه‌ها</button></div>
+          </div>
+          <div class="panel glass" data-acc="گزارش مصرف|جمع مصرف و وضعیت کاربران|activity">
+            <div class="panel-head"><div><h3>گزارش مصرف</h3><p class="sub">جمع مصرف، کاربران فعال و وضعیت سهمیه</p></div></div>
+            <div id="subsTotals"></div>
+          </div>
+        </div>
+
+        <details class="acc" id="subsClientsCard" style="margin-top:14px">
+          <summary>
+            <span class="acc-ico"><svg width="15" height="15"><use href="#i-link"/></svg></span>
+            <span class="acc-t"><b>تنظیم دقیق هر کلاینت</b><span>برای هر کلاینت انتخاب کنید چه قالبی بگیرد و لینک همان را کپی کنید</span></span>
+            <span class="acc-meta" id="subsClientPill">—</span>
+            <svg class="chev" width="15" height="15"><use href="#i-chevron"/></svg>
+          </summary>
+          <div class="acc-body">
+            <label>کاربر مورد نظر برای ساخت لینک‌ها</label>
+            <select id="subsUser"></select>
+            <div id="subsClients" style="margin-top:12px"></div>
+            <div class="actions" style="margin-top:10px"><button class="primary compact" id="subsSaveClients">ذخیرهٔ تنظیم کلاینت‌ها</button></div>
+          </div>
+        </details>
+
+        <div class="panel glass" style="margin-top:14px">
+          <div class="panel-head"><div><h3>مدیریت لینک و مصرف هر کاربر</h3><p class="sub">گزارش مصرف، وضعیت سهمیه، انقضا و بازنشانی توکن سابلینک</p></div><div class="filters" id="subsSort"></div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>کاربر</th><th>مصرف</th><th>سهمیه</th><th>انقضا</th><th>وضعیت</th><th>لینک</th></tr></thead>
+              <tbody id="subsTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ================= CLOUDFLARE ================= -->
     <section class="section" id="section-cloudflare">
       <div class="grid-2">
         <div class="panel glass">
-          <div class="panel-head"><div><h2>Cloudflare Worker</h2><p class="sub">پل WebSocket برای ورودی‌های CF</p></div><span class="pill" id="cfTag">—</span></div>
+          <div class="panel-head"><div><h2>Cloudflare Worker</h2><p class="sub">پنل و ورودی‌های CF روی یک آدرس تمیز</p></div><span class="pill" id="cfTag">—</span></div>
           <label>Worker URL <span class="hint">— باید HTTPS باشد</span></label>
           <input id="workerUrl" placeholder="https://nexus-edge.workers.dev" dir="ltr">
           <label>API Key <span class="hint">— اختیاری</span></label>
@@ -269,7 +354,7 @@
             <button class="primary" id="saveWorker">ذخیره و Sync</button>
             <button class="secondary" id="clearWorker">حذف Worker</button>
           </div>
-          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ اگر لوکیشنی تعریف نکنید فقط نود مستقیم همین سرویس منتشر می‌شود.</p></div></div>
+          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ اگر لوکیشنی تعریف نکنید فقط نود مستقیم همین سرویس منتشر می‌شود. وقتی ذخیره شد، خودِ پنل هم از همان آدرس باز می‌شود و سابلینک‌ها روی دامنهٔ Worker ساخته می‌شوند.</p></div></div>
         </div>
         <div class="panel glass">
           <div class="panel-head">          <div><h2>Probe آی‌پی‌های لبه</h2><p class="sub">اسکن از سمت همین سرور</p></div></div>
@@ -492,6 +577,13 @@
           <div><label>دامنهٔ عمومی <span class="hint">خالی بگذارید تا دامنهٔ خود پنل استفاده شود</span></label><input id="tgRelayDomain" dir="ltr" placeholder="nexus.up.railway.app"></div>
           <div><label>نشست هم‌زمان <span class="hint">۱ تا ۶۴</span></label><input id="tgRelaySessions" type="number" min="1" max="64" dir="ltr" value="6"></div>
           <div><label>استریم هر نشست <span class="hint">۱ تا ۲۵۶</span></label><input id="tgRelayStreams" type="number" min="1" max="256" dir="ltr" value="32"></div>
+          <!-- The sponsored row Telegram puts at the top of a chat list is not something
+               this panel can draw: Telegram renders it from help.promoData for a proxy it
+               knows (a promotion tag from @MTProxybot). So the card asks for exactly the
+               two facts Telegram keys it on — the tag and the channel — and says plainly
+               when the row is not being advertised. -->
+          <div><label>تگ تبلیغاتی <span class="hint">۳۲ کاراکتر هگز از @MTProxybot؛ با آن کانال اسپانسر بالای چت‌لیست کاربران می‌آید</span></label><input id="tgRelaySponsorTag" dir="ltr" maxlength="32" placeholder="0123456789abcdef0123456789abcdef"></div>
+          <div><label>کانال اسپانسر <span class="hint">همان کانالی که در ربات ثبت می‌کنید؛ @ یا لینک هم قبول است</span></label><input id="tgRelaySponsorChannel" dir="ltr" placeholder="miliconfig"></div>
         </div>
         <div class="actions">
           <button class="primary" id="tgRelaySave">ذخیره و انتشار</button>
@@ -500,6 +592,7 @@
         </div>
         <div class="kv-list" id="tgRelayInfo"></div>
         <div id="tgRelayLinks"></div>
+        <div id="tgRelayBroadcast"></div>
       </div>
 
       <div class="grid-2b" id="tgOtherTypes" style="margin-top:13px">

@@ -81,6 +81,9 @@ def notes():
     if not webapp.enabled():
         out.append('پروکسی وب تلگرام خاموش است؛ با روشن کردنش، web.telegram.org از همین دامنه باز می‌شود.')
     out.extend(webrelay.notes())
+    if not webrelay.promotion():
+        out.append('کانال اسپانسر بالای چت‌لیست: تگ تبلیغاتی @MTProxybot را در کارت پروکسی WEB بگذارید؛ '
+                   'بدون آن تلگرام هیچ ردیف اسپانسری نمی‌سازد و فقط لینک عضویت به کاربران داده می‌شود.')
     if web_only():
         out.append('حالت فعلی «فقط پروکسی WEB» است: به کاربران فقط لینک tg://webproxy داده می‌شود '
                    'و خطوط MTProto و وب‌پروکسی منتشر نمی‌شوند. برای برگرداندن آن‌ها حالت را روی '
@@ -236,8 +239,20 @@ def portal_payload(base, user):
         hint = ('این بخش فقط برای تلگرام است؛ پروکسی WEB را در تلگرام دسکتاپ ۷.۱+ اضافه کنید '
                 '(نوع پروکسی: WEB)، لینک tg:// را روی MTProto برنامه بگذارید، و وب‌پروکسی را در '
                 'تنظیمات پروکسی تلگرام دسکتاپ یا مرورگر.')
+    # The sponsored row is Telegram's, not ours: it appears above every chat for
+    # anyone connecting through a proxy Telegram has been told to advertise. What
+    # the status window can add is the way in for everybody else — the channel
+    # itself, one tap away, and the honest note that joining is what makes it a
+    # chat rather than a sponsored row.
+    name = webrelay.sponsor()
+    if name:
+        hint += (' کانال اسپانسر «%s»: اگر تگ تبلیغاتی پروکسی در پنل ثبت شده باشد، تلگرام خودش این کانال را '
+                 'بالای چت‌لیست شما نشان می‌دهد؛ با دکمهٔ زیر هم می‌توانید عضو شوید تا لینک‌های تازهٔ پروکسی '
+                 'WEB را همان‌جا بگیرید.' % name)
     return {
         'host': host(),
+        'sponsor': ({'handle': name, 'url': webrelay.sponsor_url(), 'label': 'کانال اسپانسر'}
+                    if name else None),
         'mtproto': ({'url': link['tg'], 'tme': link['tme'], 'secret': link['secret'],
                      'label': f"{link['server']}:{link['port']}"} if link else None),
         'webrel': ({'url': relay['tg'], 'tme': relay['tme'], 'secret': relay['secret'],

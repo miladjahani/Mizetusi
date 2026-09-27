@@ -42,6 +42,11 @@ SCHEMA = [
 '''CREATE TABLE IF NOT EXISTS cf_ips (id BIGSERIAL PRIMARY KEY, ip TEXT UNIQUE NOT NULL, source TEXT, enabled INTEGER DEFAULT 1, latency_ms DOUBLE PRECISION, ok INTEGER DEFAULT 0, fail_count INTEGER DEFAULT 0, last_probe BIGINT, last_seen BIGINT)''',
 '''CREATE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)''',
 '''CREATE INDEX IF NOT EXISTS idx_traffic_user_time ON traffic_events(user_id,created_at)''',
+'''CREATE TABLE IF NOT EXISTS feedback (
+ id BIGSERIAL PRIMARY KEY, user_id BIGINT, username TEXT, token TEXT,
+ kind TEXT NOT NULL DEFAULT 'other', rating INTEGER, message TEXT NOT NULL,
+ contact TEXT DEFAULT '', ip TEXT, status TEXT NOT NULL DEFAULT 'new', created_at BIGINT NOT NULL)''',
+'''CREATE INDEX IF NOT EXISTS idx_feedback_status_time ON feedback(status,created_at)''',
 '''CREATE TABLE IF NOT EXISTS nodes (id BIGSERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, server TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 443, tls INTEGER NOT NULL DEFAULT 1, sni TEXT, host TEXT, enabled INTEGER NOT NULL DEFAULT 1, latency_ms DOUBLE PRECISION, source TEXT, metadata TEXT DEFAULT '{}', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)'''
 ]
 
