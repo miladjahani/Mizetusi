@@ -7,6 +7,84 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **A scan now proposes; the admin disposes.** The Node Catalog used to publish every address a scan
+  found, so a public deployment grew nodes nobody had chosen. Now the **automatic** clean-IP catalog
+  (`cloudflare-NN`) is parked as **candidates** — a new «نودهای اسکن‌شده» list in the Nodes tab — and
+  an admin ticks the ones to publish. Two rules keep that safe rather than annoying: the deployment's
+  own node is never a candidate (it is the guaranteed baseline of every subscription), and a node the
+  admin already published stays published across a re-scan. Selection is strictly manual: a location
+  the admin configured by hand (an edge source with a provider/host) is scanned exactly like the
+  automatic clean-IP catalog, so it waits for the same pick — which is why an explicit per-location
+  ping now measures **candidates** too: an admin has to see a scanned node answer before deciding to
+  publish it. The panel can hand the decision back to the scan with the **«افزودن خودکار»** switch
+  (`edge_auto_publish`), which publishes everything waiting the moment it is turned on. New endpoints
+  `POST /api/nodes/select` and `POST /api/nodes/selection` — see `app/nodes.py` and
+  `tests/test_panel_extras.py` for the two ways this could go wrong (publishing on its own, or
+  re-parking a chosen node).
+- **Every tab can reset itself to defaults.** One mapping (`SETTINGS_SECTIONS` in
+  `app/panel_extras.py`) says which settings keys belong to which tab, and a **«بازگردانی پیش‌فرض این
+  بخش»** bar injected by the shell (`GET /api/settings/sections`, `POST /api/settings/reset`) deletes
+  exactly those keys. Resetting «نودها» can never quietly drop the brand colours an admin spent time
+  on, because a tab only ever touches its own keys.
+- **The subscription tab grew the four things a fleet needs.** A new **سابلینک پیشرفته** section
+  combines: a **usage report** (per-user consumption, quota share and lifetime, ordered by usage,
+  expiry or name); **alerts** that fire *before* the ceiling does — a user within N days of expiry or
+  past a share of their quota, with the two thresholds stored as settings (`alert_expiry_days`,
+  `alert_quota_percent`) and validated on write; **per-user link management** — one call
+  (`POST /api/users/{username}/rotate`) mints a fresh token and makes every URL already shared
+  worthless without touching quota or expiry; and **per-client fine-tuning**, which lets an admin point
+  any client at a chosen subscription target and copy that link, stored as `client_target_overrides`.
+  The numbers are computed server-side in `app/subscriptions/reports.py` and recomputed on every panel
+  open, so an alert appears the moment it becomes true without a cron to maintain.
+- **A subscription URL now drives the client's own screen — auto-update, live traffic and a way
+  back to the status window.** A subscription is not only a body: the apps read three response
+  headers to build their «subscription» tab, and all three were missing, so a user had to remember
+  to press «update» and could not see their usage or reach their own status window from inside the
+  app. `GET /sub/{token}` (and every per-node/`/feed` shape built on it) now sends
+  **`profile-update-interval: 12`** (the client re-fetches every 12 hours on its own),
+  **`subscription-userinfo`** (`upload`/`download`/`total`/`expire` — we meter one combined counter,
+  so the whole usage is reported as `download` rather than inventing a split, `total=0` means
+  unlimited and `expire=0` means no expiry, which is exactly how clients render those two), and
+  **`profile-web-page-url`** pointing at this user's `/portal/<token>` — the «open web page» button
+  a client shows next to the profile. `tests/test_subscription_client.py` pins the *values*, not
+  just their presence: a wrong `total` is worse than none, because it paints a full bar and locks a
+  working user out of their own profile.
+- **Installing on a VPS is one command.** `scripts/install-vps.sh` is the deployment where every
+  transport is actually available. It installs Docker + the compose plugin (Debian/Ubuntu), uses
+  the checkout it is run from or clones the repo, writes a `.env` with a **generated admin password
+  and session secret** — so a fresh host never boots on the shipped guessable default — builds and
+  starts `docker compose`, prints the generated password once, and then either adds the ufw rules
+  for the published ports or prints exactly which to open. `--domain` sets the host clients use,
+  `--open-firewall` runs the ufw rules, `--no-build` reuses existing images. An existing `.env` is
+  never overwritten, so re-running it on a live host cannot rotate a password out from under you.
+- **Users can now talk back, and the panel can be handed to a crowd safely.** Sharing a
+  deployment used to be listen-only: the status window showed a user their traffic and links, and
+  there was no path back. The window now carries a **بازخورد و پیشنهاد** card (a category, an
+  optional 1–5 rating, the message and an optional contact), and the panel's own dashboard carries
+  the **بازخورد کاربران** inbox for it. That is one new capability split across the two trust
+  levels the panel already had: `POST /api/feedback` is *public* — an end user has no login, so the
+  subscription token in the body is what proves they are a real user of this deployment — while the
+  inbox (`GET`/`POST`/`DELETE /api/feedback…`) is behind the admin session like every other panel
+  route. The public write carries its own per-address limiter (`feedback_throttle`, 12/hour: a real
+  person sending a few notes is never blocked, a script filling the inbox is), the category falls
+  back to «دیگر» instead of rejecting a message that fits no bucket, a rating outside 1–5 is dropped
+  rather than stored as sent, and a message shorter than three characters is refused. Rows are
+  `new`/`read`/`done`, the inbox badges the new count, and `status`/`delete` are one tap each — see
+  `app/feedback.py` and `tests/test_feedback.py`.
+- **What «share it with many users» needs beyond the feature: the review.** Three things in this
+  repo are fine on a single-admin deployment and wrong the moment the panel is on a public URL, and
+  all three are now closed. The login/feedback limiter keyed its map by client address and never
+  shrank it, so a public host could grow it without bound; it is now capped (`LoginThrottle.MAX_KEYS`)
+  with a sweep on every write. Admin responses had no baseline headers; every response now carries
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and a `Permissions-Policy`
+  (deliberately *no* `X-Frame-Options` — the panel is legitimately embedded in a cross-origin preview
+  pane, and denying that breaks the admin's own login, not an attacker). And CORS now accepts the
+  `X-Nexus-Session` header it was already documented to use. The one item that is **yours, not the
+  code's** is the password: `app/config.py` ships `admin_password='admin'`, and bootstrap keeps it
+  when no `ADMIN_PASSWORD` is set — so **set `ADMIN_PASSWORD` (long, random) before publishing the
+  panel's URL**, which is exactly what `railway.json`/`render.yaml` ask for. Everything else about
+  scaling is in **Deploy anywhere** below: `DATABASE_URL` for Postgres (SQLite is one file and one
+  writer), and `audit_logs`/`traffic_events` as the two tables that grow without a retention pass.
 - **Telegram's sponsored channel above the chat list — wired to the WEB proxy.** The row a
   Telegram user sees at the very top of their chats, above every folder («اسپانسر پروکسی»), is not
   a chat they joined: Telegram renders it from `help.promoData`, whose own description is «a set of

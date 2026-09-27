@@ -22,7 +22,7 @@ PANEL_MODULES = [
     'js/core.js', 'js/ui.js', 'js/session.js', 'js/api.js', 'js/store.js', 'js/pwa.js',
     'js/views/dashboard.js', 'js/views/nodes.js', 'js/views/users.js', 'js/views/system.js',
     'js/views/customize.js', 'js/views/tools.js', 'js/views/telegram.js',
-    'js/views/advanced.js', 'js/views/guide.js',
+    'js/views/advanced.js', 'js/views/subscriptions.js', 'js/views/guide.js',
     'js/app.js',
 ]
 LEGACY_MODULES = ['app.js', 'app-dashboard.js', 'app-nodes.js', 'app-users.js', 'app-panel.js']
