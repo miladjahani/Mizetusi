@@ -108,8 +108,11 @@ a dedicated subscription per client.
   a same-origin WebSocket, so what a censor sees is a genuine browser TLS handshake followed by
   HTTP. Because the carrier *is* this deployment's own 443, it is the only Telegram proxy that
   works on a forwarder (Railway included, behind the Worker, on a CDN) with **no TCP proxy** —
-  which is why it is what a user gets by default: the new **نوع پروکسی تلگرام** picker defaults
-  to «فقط WEB» and the status window hands out the `tg://webproxy` link and nothing else. The
+  which is why the new **نوع پروکسی تلگرام** picker defaults to «فقط WEB» and the status window
+  hands out the `tg://webproxy` link and nothing else. The WEB proxy itself is **off until an
+  admin switches it on**: its carrier is the panel's own address, so a deployment that serves it
+  unasked is one a network that blocks Telegram can recognise — and a recognised address is a
+  panel that only opens through a VPN. The
   other three types stay maintained and are published again the moment an admin selects «همهٔ
   انواع». `app/telegram/webrelay.py` owns both halves — mtproto.zig's `mtproto-proxy web-relay`
   (the browser-facing WebSocket) and its loopback data plane, two processes of the same pinned
@@ -139,25 +142,26 @@ a dedicated subscription per client.
   asserts that end to end against the real binary, alongside the two shapes that broke it: a
   handshake carrying exactly one `Host` header, and a page whose socket is refused being
   reported as a failure instead of a success.
-- **A fresh deployment configures itself, and on Railway the random TCP ports are created for
-  you.** Every card that needs a raw port used to say «on Railway add a TCP proxy» and leave the
+- **On Railway the random TCP ports are created for you — and a fresh deployment switches nothing
+  on by itself.** Every card that needs a raw port used to say «on Railway add a TCP proxy» and leave the
   number to the dashboard — but Railway allocates that public port **at random**, so the port a
   link must carry is not the port the container binds, and a link built from the listen port is
   a link that answers nothing. Two new modules close that gap. `app/ports.py` is the single place
   that answers «which port is this capability really published on» (one stored mapping, falling
   back to the listen port — which is why a VPS and a Railway deployment share exactly one code
   path); `app/railway.py` drives Railway's own GraphQL API (`tcpProxyCreate`, `tcpProxies`,
-  `serviceInstanceRedeploy`) and `app/autoconfig.py` runs one pass at boot: it switches on what
-  needs no decision at all — today exactly the WEB proxy — and, when a `RAILWAY_API_TOKEN` is
+  `serviceInstanceRedeploy`) and `app/autoconfig.py` runs one pass at boot: it switches **nothing**
+  on by itself — the WEB proxy it used to enable is carried by the panel's own domain, and a domain
+  that serves Telegram-proxy traffic is the domain a network blocks, so a panel that switches it on
+  unasked is a panel that only opens through a VPN — and, when a `RAILWAY_API_TOKEN` is
   present, creates one TCP proxy per enabled raw-port capability, records the forwarded
   host/port, and performs the single redeploy the API itself says a new proxy needs. Nothing is
   invented and no admin choice is overwritten: a switch the admin has ever touched is never
   flipped, an API failure is reported verbatim, and each half runs once (its marker is a
-  setting). The marker is only written once the pass has **nothing left to do** — it
-  switched the WEB proxy on, or an admin has already had their say. A boot on an image
-  whose relay binary is missing leaves it unwritten, so the next boot still switches the
-  WEB proxy on by itself: marking a pass that did nothing as «done» would turn the one
-  capability that needs no decision into the one question an admin has to answer by hand.
+  setting). The marker means «the pass has **nothing left to do**», and that is true on the
+  first boot now: the pass flips no switch of its own, so the WEB proxy stays a candidate the
+  admin can turn on and a choice the admin has made — in either direction — is never touched
+  again.
   A TCP proxy turned out to move the HTTP edge with it, which is now the third thing the
   pass owns: on Railway, the moment one exists, the service is handed that proxy's
   *application* port as `PORT` — and that port is the one Xray already listens on for Reality,

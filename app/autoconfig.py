@@ -1,49 +1,43 @@
-"""What a fresh deployment switches on by itself.
+"""The half of a fresh deployment's setup that carries no judgement.
 
 Everywhere else the panel's rule is «off until an admin turns it on deliberately»,
-and that rule stays: a switch an admin has ever touched is never overwritten here.
-What this module adds is the one decision that carries no judgement — a capability
-that needs no port, no credential, no DNS record and no outside service, on a host
-that can really serve it, should not sit switched off in a deployment nobody has
-opened yet.
+and that rule is now the rule here too. This module used to carve out one exception:
+**Telegram Desktop's WEB proxy**, whose carrier is the deployment's own HTTPS name
+and a same-origin WebSocket (``app/telegram/webrelay.py``), so it needs no port and
+no credential and every fresh deploy switched it on.
 
-Exactly one capability qualifies today: **Telegram Desktop's WEB proxy**. Its
-carrier is HTTPS on the deployment's own domain plus a same-origin WebSocket
-(``app/telegram/webrelay.py``), so it works on every platform this image runs on —
-Railway included, with no TCP proxy — the moment the panel's own domain resolves.
+That exception is gone, and the reason is measured rather than theoretical: a domain
+that answers ``/?bridge=<capability>`` and serves a same-origin ``tproxy-v1`` socket
+is *recognisable* to a network that blocks Telegram, and an address that gets
+recognised that way stops answering for everyone — the panel included. A deployment
+whose own URL only opens through a VPN is a worse failure than one Telegram proxy
+staying off, and it is the failure this pass was quietly causing. So the WEB proxy is
+an admin decision like every other switch, and **the pass switches nothing on**.
 
-Everything else that *could* be switched on needs something first: a raw TCP port
-(AnyTLS, MTProto, the HTTP/SOCKS5 web proxies), a UDP port (TUIC), an external
-endpoint (Hysteria2), a Worker address (the Cloudflare locations) or an admin's own
-secret. The panel withholds those until the missing half is real and names it on
-the card, so enabling them here would only produce a page full of reasons.
+What is left is the pass's real, judgement-free half. On Railway a raw TCP port is a
+**TCP proxy**, its public port is random, and only an API call can create it (see
+:mod:`app.railway`). So when a Railway API token is present the pass creates one
+proxy per capability an admin has *already* switched on, records the forwarded host
+and port (:mod:`app.ports`), and redeploys the service once so those proxies are
+active — which is what turns «the link points at a port nothing forwards» into a link
+that works, with no dashboard visit at all. Nothing else is implied: a capability
+whose switch is off gets no proxy, because a public port in front of a listener
+nobody binds is a port that answers nothing. Without a token the pass creates nothing
+and says exactly which variable is missing.
 
-…with one exception, which is the second half of the pass. On Railway that raw TCP
-port is a **TCP proxy**, its public port is random, and only an API call can create
-it (see :mod:`app.railway`). So when a Railway API token is present the pass creates
-one proxy per capability an admin has already switched on, records the forwarded
-host and port (:mod:`app.ports`), and redeploys the service once so those proxies
-are active — which is what turns «the link points at a port nothing forwards» into
-a link that works, with no dashboard visit at all. Without a token the pass creates
-nothing and says exactly which variable is missing.
-
-Each half runs **once**: the markers are settings, so an admin who turns the WEB
-proxy off afterwards — or deletes a proxy — keeps that across every later boot.
-Both can also be re-run by hand from the panel.
+The pass runs **once**: the marker is a setting, so a proxy an admin deletes stays
+deleted across every later boot. It can also be re-run by hand from the panel.
 
 The TCP-proxy half has one Railway-specific hazard it closes by itself: creating a
-TCP proxy makes Railway hand the service that proxy's *application* port as
-``PORT``, and that port is one Xray already listens on — so the pass pins the port
-the HTTP edge is really on (``railway.pin_http_port``) before it redeploys, instead
-of leaving behind a panel that crash-loops on a port it does not own.
+TCP proxy makes Railway hand the service that proxy's *application* port as ``PORT``,
+and that port is one Xray already listens on — so the pass pins the port the HTTP
+edge is really on (``railway.pin_http_port``) before it redeploys, instead of leaving
+behind a panel that crash-loops on a port it does not own.
 
-A marker is written only once the pass has nothing left to do, though — that is,
-when it switched the WEB proxy on, or when there is no candidate left because an
-admin has already had their say. A boot on an image whose relay binary is not
-there yet leaves it **unwritten on purpose**, so the next boot (a redeploy onto
-an image that really has it) still switches the WEB proxy on by itself. Marking
-a pass that did nothing as «done» would make the one capability that needs no
-decision the one capability somebody has to be asked to turn on.
+A marker is written only once the pass has nothing left to do, and that is now true
+on the very first boot: the pass itself has no switch to flip. So the marker goes
+down at once, every switch an admin sets — in either direction — is never touched
+again, and the WEB proxy stays available as a candidate the admin can turn on.
 """
 import time
 
@@ -80,11 +74,16 @@ def allowed():
 
 
 def candidates():
-    """The capabilities that could be switched on here, with the reason they are not.
+    """The capabilities an admin could switch on here, with the reason they are not.
 
     A candidate is only ever «enable the WEB proxy and let it follow this
     deployment's own hostname»: the domain is left empty on purpose, so a redeploy
     that changes the Railway domain keeps publishing working links.
+
+    It is a **candidate** and not a step of the pass for one reason worth naming on
+    the card and in the code: the carrier *is* the panel's own address, so a network
+    that blocks Telegram can recognise this deployment by it. Turning it on is the
+    admin's call, and the reason to leave it off is real rather than theoretical.
     """
     out = []
     if _setting(webrelay.ENABLED) is None:
@@ -172,10 +171,14 @@ def railway_ports(force=False):
 
 
 def apply(force=False):
-    """Switch on what needs no decision, once. Returns the capability ids enabled.
+    """Retire the pass. Returns the capability ids it enabled — always empty now.
 
-    ``force`` is for tests and for an admin who wants the pass re-run: the normal
-    call skips the test environment so the suite never depends on it.
+    Nothing is switched on by itself. The one capability this pass used to enable is
+    carried by the panel's own domain, and a domain that carries Telegram-proxy
+    traffic is the domain a network blocks — so switching it on with no admin in the
+    loop is exactly how a deployment's own address stops answering and the panel
+    starts needing a VPN. ``force`` is kept for the panel's own button and for tests;
+    it only re-runs the Railway TCP-proxy half.
     """
     if not allowed():
         return []
@@ -183,22 +186,9 @@ def apply(force=False):
         return []
     changed = []
     if not _setting(DONE):
-        pending = candidates()
-        for item in pending:
-            if item['id'] == 'webrelay' and item['ready']:
-                # The switch only: the domain stays empty until an admin names one,
-                # so the link follows whatever hostname this deployment is served on.
-                webrelay.save({'enabled': '1'})
-                changed.append(item['id'])
-        # The marker means «the pass has nothing left to do», not «the pass ran»:
-        # it goes down when the WEB proxy is on, and also when there is no
-        # candidate at all because an admin has already had their say. It stays
-        # *down* after a boot on an image whose relay binary is missing, because
-        # that is the one thing a later boot can still fix on its own — and until
-        # it does, the one decision-free capability must not become a question
-        # for the admin to answer by hand.
-        if changed or not pending:
-            _store(DONE, str(int(time.time())))
+        # «Nothing left to do» is true immediately now: the pass flips no switch,
+        # and the WEB proxy below is the admin's decision rather than a step of ours.
+        _store(DONE, str(int(time.time())))
     try:
         outcome = railway_ports(force=force)
     except Exception as exc:

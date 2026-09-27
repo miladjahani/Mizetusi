@@ -659,10 +659,10 @@ async def save_telegram(request: Request):
 def get_autoconfig(request: Request):
     """What this deployment switched on by itself, and what is still missing.
 
-    The panel shows this instead of an instruction manual: after a deploy with no
-    admin in the loop it names the capabilities that came up on their own, the
-    Railway TCP proxies that were created for the raw-port ones, and — for every
-    capability that stayed off — the one thing that would have to exist first.
+    The panel shows this instead of an instruction manual: the Railway TCP proxies
+    that were created for the raw-port capabilities an admin enabled, and — for
+    every capability that is still off, the WEB proxy included — the one thing that
+    would have to exist first (or, for the WEB proxy, the reason it is a choice).
     """
     _auth(request)
     return {'success': True, **auto_config.state()}
@@ -672,8 +672,9 @@ def get_autoconfig(request: Request):
 async def run_autoconfig(request: Request):
     """Run one half of the pass by hand.
 
-    ``action`` is ``switches`` (the zero-decision switches), ``railway`` (create
-    the TCP proxies Railway needs and learn their public ports) or ``all``. The
+    ``action`` is ``switches`` (re-run the pass — it flips no switch of its own and
+    only writes its marker), ``railway`` (create the TCP proxies Railway needs and
+    learn their public ports) or ``all``. The
     API calls block, so both run in a worker thread and the answer carries the
     state the panel renders — the same shape the automatic boot pass leaves
     behind, which is what makes a manual run auditable.

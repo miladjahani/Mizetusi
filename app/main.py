@@ -295,11 +295,11 @@ async def bootstrap_nodes_full():
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     init_db(); bootstrap(); ensure_nodes(); bootstrap_nodes()
-    # The one-time pass that switches on what carries no judgement (see
-    # app/autoconfig.py): Telegram Desktop's WEB proxy, whose carrier is this
-    # deployment's own HTTPS name and therefore needs no port and no TCP proxy.
-    # It runs before the Telegram reconcile below, so the relay starts with this
-    # boot rather than the next one.
+    # The one-time pass (see app/autoconfig.py): it creates the Railway TCP proxies
+    # an admin's own switches need and flips no switch of its own — the panel's own
+    # domain is what carries the Telegram WEB proxy, and a domain that serves that
+    # traffic is the domain a network blocks. It still runs before the Telegram
+    # reconcile below, so a relay an admin turned on starts with this boot.
     auto_config.apply()
     await xray.start_or_reload(force=True)
     # The second engines (AnyTLS/TUIC) reconcile themselves, then keep doing so:

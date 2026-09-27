@@ -1,11 +1,15 @@
 """The one-time automatic configuration pass.
 
-The claim under test is narrow on purpose: after a deploy with no admin in the
-loop, the panel switches on exactly the capability that needs nothing arranged for
-it — Telegram Desktop's WEB proxy — and it never overrules a human.
+The claim under test is narrow on purpose, and it is now a *negative* one: a deploy
+with no admin in the loop switches **nothing** on by itself. The capability this pass
+used to enable — Telegram Desktop's WEB proxy — is carried by the deployment's own
+domain, and a domain that serves Telegram-proxy traffic is the domain a network
+blocks; enabling it unasked is how a deployment's own address stops opening without
+a VPN. So the WEB proxy is a candidate an admin turns on, not a step of the pass.
 
-So the tests are about the three ways this could go wrong: switching on something
-that cannot work, doing it twice, or doing it *again* after an admin said no.
+So the tests are about the three ways this could go wrong: switching something on
+that nobody asked for, switching it on a second time, or overriding an admin who has
+already had their say.
 """
 import os
 
@@ -52,26 +56,36 @@ def relay_installed(monkeypatch):
     monkeypatch.setattr(webrelay, 'available', lambda: True)
 
 
-def test_a_fresh_deployment_switches_the_web_proxy_on(relay_installed):
-    assert autoconfig.apply(force=True) == ['webrelay']
-    assert webrelay.enabled() is True
-    # The domain is deliberately left empty, so the link follows the deployment's
-    # own hostname (and a redeploy that gets a new one keeps working).
-    assert webrelay._setting(webrelay.DOMAIN) in (None, '')
-
-
-def test_the_pass_runs_once_and_does_not_fight_the_admin(relay_installed):
-    autoconfig.apply(force=True)
-    assert autoconfig.apply(force=True) == []          # the marker is the guard
-    webrelay.save({'enabled': '0'})                    # an admin says no
+def test_a_fresh_deployment_switches_nothing_on(relay_installed):
+    """The panel's own domain must not start carrying Telegram-proxy traffic by
+    itself. It is the carrier of the WEB proxy, so a network that blocks Telegram
+    can recognise the deployment by it — and an address that is recognised that way
+    is a panel that only opens through a VPN."""
     assert autoconfig.apply(force=True) == []
+    assert webrelay._setting(webrelay.ENABLED) is None
     assert webrelay.enabled() is False
+    # It is still *offered*: the WEB proxy is a candidate the admin can turn on,
+    # and a host that can really serve it says so.
+    candidates = autoconfig.candidates()
+    assert [item['id'] for item in candidates] == ['webrelay']
+    assert candidates[0]['ready'] is True
+
+
+def test_the_pass_runs_once(relay_installed):
+    assert autoconfig.apply(force=True) == []
+    assert autoconfig.apply(force=True) == []          # the marker is the guard
+    assert autoconfig._setting(autoconfig.DONE) is not None
 
 
 def test_an_admin_choice_is_never_overwritten(relay_installed):
+    """Whichever way an admin set it, a later boot cannot flip the switch: the pass
+    runs once, writes its marker, and touches no setting after that."""
     webrelay.save({'enabled': '0'})
     assert autoconfig.apply(force=True) == []
     assert webrelay.enabled() is False
+    webrelay.save({'enabled': '1'})                    # an admin says yes
+    assert autoconfig.apply(force=True) == []
+    assert webrelay.enabled() is True
 
 
 def test_a_host_that_cannot_serve_it_switches_nothing_on(monkeypatch):
@@ -84,26 +98,19 @@ def test_a_host_that_cannot_serve_it_switches_nothing_on(monkeypatch):
     assert 'mtproto-proxy' in candidates[0]['reason']
 
 
-def test_a_boot_without_the_relay_binary_does_not_retire_the_pass(monkeypatch):
-    """The marker means «the pass has nothing left to do», not «the pass ran».
-
-    A relay binary that is missing when the container boots is the one thing that
-    can change before the next boot (a redeploy onto a fixed image), so the WEB
-    proxy still has to be switched on by itself then — instead of becoming the one
-    thing an admin has to be asked to turn on by hand.
-    """
+def test_the_marker_goes_down_even_when_the_relay_binary_is_missing(monkeypatch):
+    """«Nothing left to do» is true on the first boot now: the pass flips no switch,
+    so a missing relay binary is not a step of *its own* — it is the admin's
+    decision, and the pass must not stay half-run forever because of it."""
     monkeypatch.setattr(webrelay, 'available', lambda: False)
     assert autoconfig.apply(force=True) == []
-    assert autoconfig._setting(autoconfig.DONE) is None      # not retired
-    monkeypatch.setattr(webrelay, 'available', lambda: True)
-    assert autoconfig.apply(force=True) == ['webrelay']      # done, unasked
-    assert webrelay.enabled() is True
     assert autoconfig._setting(autoconfig.DONE) is not None
+    assert webrelay._setting(webrelay.ENABLED) is None
 
 
 def test_an_admin_who_said_no_still_ends_the_pass(monkeypatch, relay_installed):
-    """The opposite case: once an admin has had their say, there is nothing left to
-    do, so the marker is correct and the pass does not raise the question again."""
+    """Once an admin has had their say, there is nothing left for the pass to do, so
+    the marker is correct and the pass does not raise the question again."""
     webrelay.save({'enabled': '0'})
     assert autoconfig.apply(force=True) == []
     assert autoconfig._setting(autoconfig.DONE) is not None
@@ -134,8 +141,9 @@ def test_the_panel_can_report_what_the_pass_did(relay_installed):
     autoconfig.apply(force=True)
     state = autoconfig.state()
     assert state['allowed'] is True and state['done'] is True
-    assert state['applied'] == ['webrelay'] and state['ran_at'] > 0
-    assert state['candidates'] == []
+    assert state['applied'] == [] and state['ran_at'] > 0
+    # The card has to show the WEB proxy as something the admin can still turn on.
+    assert [item['id'] for item in state['candidates']] == ['webrelay']
 
 
 # --------------------------------------------------------------- the panel API
