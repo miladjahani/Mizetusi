@@ -60,14 +60,14 @@ export class AdvancedView {
   }
 
   /* --------------------------------------- automatic configuration (boot) */
-  /* What a deploy with no admin in the loop left behind: the capability the boot
-     pass switches on by itself (Telegram Desktop's WEB proxy, whose carrier is
-     this deployment's own 443) and, on Railway, the TCP proxies it creates for
-     the raw-port capabilities — Railway allocates those public ports at random
-     and only an API call can create them, which is why the mapping, not the
-     environment, is what a link is built from (app/ports.py). Everything that
-     stayed off names the one thing it would need first, and either half can be
-     re-run from here. */
+  /* What a deploy with no admin in the loop left behind: no switch of its own —
+     the one capability that would carry a Telegram signature on this deployment's
+     own 443 (Telegram Desktop's WEB proxy) is the admin's decision, not a step of
+     the pass — plus, on Railway, the TCP proxies it creates for the raw-port
+     capabilities. Railway allocates those public ports at random and only an API
+     call can create them, which is why the mapping, not the environment, is what a
+     link is built from (app/ports.py). Everything that stayed off names the one
+     thing it would need first, and either half can be re-run from here. */
   renderAuto() {
     const data = this.store.get('autoconfig');
     const tag = $('#adAutoTag');

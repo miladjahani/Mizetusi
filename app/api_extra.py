@@ -657,7 +657,7 @@ async def save_telegram(request: Request):
 # --------------------------------------------------- automatic configuration
 @router.get('/api/system/autoconfig')
 def get_autoconfig(request: Request):
-    """What this deployment switched on by itself, and what is still missing.
+    """What the boot pass did, and what is left for an admin to decide.
 
     The panel shows this instead of an instruction manual: the Railway TCP proxies
     that were created for the raw-port capabilities an admin enabled, and — for

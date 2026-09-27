@@ -646,11 +646,13 @@ port needs its own TCP proxy, whose public port is **random** — the panel crea
 itself (`app/railway.py`, `app/ports.py`) rather than asking an admin to copy numbers between
 two dashboards, and `RAILWAY_TCP_PROXY_*` is only the fallback it uses when no mapping exists.
 
-The three raw-port ways are **off by default** on purpose — a host that cannot forward their
-port would only show a card full of reasons. The WEB way needs nothing arranged, so it is the
-one a fresh deployment turns on by itself and the one a user is handed: the panel's **نوع پروکسی
-تلگرام** picker defaults to «فقط WEB» and the status window publishes `tg://webproxy` and
-nothing else until an admin selects «همهٔ انواع».
+All four ways are **off by default** on purpose — a host that cannot forward a raw port would only
+show a card full of reasons, and the WEB way is carried by the deployment's own address, so a
+deployment that serves it unasked is one a network that blocks Telegram can recognise and block in
+turn. Switch it on from its own card and the WEB proxy becomes the one a user is handed: the
+panel's **نوع پروکسی تلگرام** picker defaults to «فقط WEB» and the status window publishes
+`tg://webproxy` and nothing else until an admin selects «همهٔ انواع» (with the WEB proxy off, the
+status window grows no Telegram section at all rather than handing out a link that cannot work).
 
 | Way | What the user gets | Port | Needs |
 |---|---|---|---|
