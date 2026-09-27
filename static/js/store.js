@@ -12,7 +12,6 @@
 export const SECTIONS = [
   { id: 'dashboard', label: 'داشبورد', icon: 'dash', crumb: 'NEXUS CONTROL CENTER', title: 'داشبورد', group: 'overview' },
   { id: 'users', label: 'کاربران', icon: 'users', crumb: 'USER MANAGEMENT', title: 'کاربران', group: 'access' },
-  { id: 'subs', label: 'سابلینک پیشرفته', icon: 'link', crumb: 'ADVANCED SUBSCRIPTIONS', title: 'سابلینک', group: 'access' },
   { id: 'nodes', label: 'نودها', icon: 'nodes', crumb: 'NODE CATALOG', title: 'نودها', group: 'access' },
   { id: 'cloudflare', label: 'Cloudflare', icon: 'cloud', crumb: 'EDGE NETWORK', title: 'Cloudflare', group: 'network' },
   { id: 'tools', label: 'ابزار شبکه', icon: 'globe', crumb: 'NETWORK TOOLS', title: 'ابزار شبکه', group: 'network' },
@@ -26,7 +25,7 @@ export const SECTIONS = [
 // admin lands on from that group most of the time (used by the phone bar).
 export const NAV_GROUPS = [
   { id: 'overview', label: 'نمای کلی', icon: 'dash', items: ['dashboard'] },
-  { id: 'access', label: 'کاربران و نودها', icon: 'users', items: ['users', 'subs', 'nodes'] },
+  { id: 'access', label: 'کاربران و نودها', icon: 'users', items: ['users', 'nodes'] },
   { id: 'network', label: 'شبکه و لبه', icon: 'cloud', items: ['cloudflare', 'tools', 'telegram'] },
   { id: 'look', label: 'پنل و ظاهر', icon: 'edit', items: ['customize', 'advanced'] },
   { id: 'system', label: 'سیستم', icon: 'cog', items: ['settings'] },
@@ -50,7 +49,6 @@ export class PanelStore {
       hysteria: null,
       telegram: null,
       telegramProbe: '',
-      subscriptionReport: null,
       packs: null,
       transports: null,
       locations: [],

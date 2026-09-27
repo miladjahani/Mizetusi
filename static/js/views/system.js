@@ -50,7 +50,7 @@ export class CloudflareView {
     const stateBox = $('#workerState');
     if (stateBox) {
       const copy = {
-        worker: ['Worker فعال است', 'Node Catalog از آی‌پی‌های سالم لوکیشن کلودفلر و از طریق Worker منتشر می‌شود؛ خودِ پنل و سابلینک‌ها هم از همان آدرس منتشر می‌شوند، پس دامنهٔ فیلترشده لازم نیست.'],
+        worker: ['Worker فعال است', 'Node Catalog از آی‌پی‌های سالم لوکیشن کلودفلر و از طریق Worker منتشر می‌شود.'],
         edge: ['حالت خودکار — بدون Worker', `دامنه پنل از طریق Cloudflare جلوه‌گذاری شده است؛ ${Fmt.num(cfNodes)} نود تمیز به‌صورت خودکار ساخته و پینگ شدند. اگر Worker هم مستقر کنید، همان آدرس اینجا ذخیره می‌شود.`],
         origin: ['لوکیشنی تنظیم نشده', `فقط نود مستقیم همین سرویس (${native}) منتشر می‌شود؛ از «منابع لبه و لوکیشن‌ها» می‌توانید آی‌پی تمیز یا دامنهٔ تمیز اضافه کنید.`],
       }[mode];
@@ -326,9 +326,7 @@ export class CloudflareView {
         if (guide) {
           guide.innerHTML = (data.steps || []).map((step, index) => `<div class="kv-line"><span>مرحله ${Fmt.num(index + 1)}</span>
             <b style="font-family:Vazirmatn;direction:rtl;max-width:78%;white-space:normal">${esc(step)}</b></div>`).join('')
-            + `<div class="kv-line"><span>آدرس سرویس داخل کد</span><b>${esc(data.origin)}</b></div>`
-            + '<div class="kv-line"><span>آدرس Worker = پنل</span><b style="font-family:Vazirmatn;direction:rtl;max-width:78%;white-space:normal">'
-            + 'آدرس Worker خودِ پنل را هم سرو می‌کند؛ همان آدرس را باز کنید و وارد شوید. از آن به بعد لینک‌های سابلینک و پنجرهٔ وضعیت از همین دامنه ساخته می‌شوند، پس دامنهٔ فیلترشده لازم نیست.</b></div>';
+            + `<div class="kv-line"><span>آدرس سرویس داخل کد</span><b>${esc(data.origin)}</b></div>`;
         }
       } catch (error) {
         this.store.set('workerCode', '');
@@ -541,7 +539,7 @@ export class SettingsView {
     if (!version) this.app.safe(() => this.loadVersion());
     const count = metrics ? `${Fmt.num(metrics.totals.users)} کل · ${Fmt.num(metrics.totals.active_users)} فعال` : '—';
     const rows = [
-      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 9.8.0'],
+      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 9.2.0'],
       ['آدرس پایه', settings.resolved_base_url || location.origin],
       ['کاربران', count],
       ['نودهای فعال', metrics ? `${Fmt.num(metrics.totals.nodes_enabled)} از ${Fmt.num(metrics.totals.nodes)}` : '—'],

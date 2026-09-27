@@ -31,9 +31,7 @@ from app.edge import sources as edge_sources
 from app.edge import samples as edge_samples
 from app.edge import packs as edge_packs
 from app.api_extra import router as extra_router
-from app.panel_extras import router as panel_extras_router
 from app import runtime
-from app import feedback as feedback_service
 from app.core.settings_store import store
 from app.core.security import SessionManager, LoginThrottle
 from app.core.clientip import client_ip as resolve_client_ip
@@ -56,10 +54,6 @@ sessions=SessionManager(secret_provider=lambda: store.get('jwt_secret') or setti
                         ttl_provider=lambda: _session_days()*86400,
                         default_ttl=settings.session_ttl)
 throttle=LoginThrottle(limit=10,window=300)
-# Feedback is written from the public status window, so it carries its own
-# limiter: a generous hourly ceiling per address (a real user sending a few
-# notes is never blocked) that still stops a script from filling the inbox.
-feedback_throttle=LoginThrottle(limit=12,window=3600)  # public feedback limiter
 audit=AuditLog(actor='admin')
 BASE_DIR=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERAL_SETTING_KEYS=('public_base_url','sub_prefix','default_protocol','default_limit_gb','default_expiry_days','default_ip_limit','session_days','ping_interval','accent','accent_secondary','app_name',
@@ -76,13 +70,7 @@ GENERAL_SETTING_KEYS=('public_base_url','sub_prefix','default_protocol','default
                      'hy2_enabled','hy2_host','hy2_port','hy2_sni','hy2_obfs','hy2_insecure','hy2_label',
                      # Which address the panel believes a request came from — see
                      # app/core/clientip.py and «شبکه و لبه → IP واقعی کاربر».
-                     'trust_client_ip','trusted_proxy_cidrs',
-                     # Whether a scanned edge node is published on its own (auto) or
-                     # waits as a candidate an admin selects by hand (the default).
-                     'edge_auto_publish',
-                     # Advanced-subscription alert thresholds (app/subscriptions/reports.py):
-                     # warn this many days before expiry, and at this share of quota.
-                     'alert_expiry_days','alert_quota_percent')
+                     'trust_client_ip','trusted_proxy_cidrs')
 # Subscription shapes the status window offers as its four main buttons. The
 # matching validation lives next to the endpoints that own them
 # (``app/api_extra.py``), so nothing is declared twice here.
@@ -90,7 +78,7 @@ PWA_ICONS={'192':'/static/icons/icon-192.png','512':'/static/icons/icon-512.png'
 # One label per accepted target: subscription formats plus client ids.
 SUB_LABELS={**FORMAT_LABELS, **{c['id']:f"{c['name']} · {c['platform']}" for c in CLIENTS}}
 WORKER_PATH=os.path.join(BASE_DIR,'cloudflare-worker','worker.js')
-APP_VERSION='9.8.0'  # nexus
+APP_VERSION='9.2.0'
 
 def _asset_fingerprint():
     """Content hash of the shipped front-end.
@@ -336,29 +324,12 @@ async def lifespan(app:FastAPI):
         try: await xray._stop()
         except Exception: pass
 app=FastAPI(title=settings.app_name,version=APP_VERSION,lifespan=lifespan)
-app.add_middleware(CORSMiddleware,allow_origins=[],allow_methods=['GET','POST','PUT','DELETE','OPTIONS'],allow_headers=['Content-Type','X-Admin-Password','X-Nexus-Session'])
-@app.middleware('http')
-async def security_headers(request:Request,call_next):
-    """Baseline response headers for a panel served on a public URL.
-
-    Deliberately no ``X-Frame-Options``: the panel is legitimately opened inside
-    an embedded preview pane on another origin, and denying that would break the
-    admin's own login instead of an attacker. The three below cost nothing and
-    stop MIME sniffing, referrer leakage and device-API probing from any page.
-    """
-    response=await call_next(request)
-    response.headers.setdefault('X-Content-Type-Options','nosniff')
-    response.headers.setdefault('Referrer-Policy','no-referrer')
-    response.headers.setdefault('Permissions-Policy','geolocation=(), microphone=(), camera=()')
-    return response
+app.add_middleware(CORSMiddleware,allow_origins=[],allow_methods=['GET','POST','PUT','DELETE','OPTIONS'],allow_headers=['Content-Type','X-Admin-Password'])
 templates=Jinja2Templates(directory=os.path.join(BASE_DIR,'templates'))
 app.mount('/static',StaticFiles(directory=os.path.join(BASE_DIR,'static')),name='static')
 # The newer capability endpoints (customization, Hysteria2, location packs, the
 # network tools) live in their own router so this module keeps owning the core.
 app.include_router(extra_router)
-# Manual node selection, per-tab settings reset and the advanced subscription
-# surface are self-contained too — see ``app/panel_extras.py``.
-app.include_router(panel_extras_router)
 # The Telegram Web proxy is a public path on this domain (``/tg/…``), so it owns
 # its own router: the admin API lives in the extra router, this one is reached by
 # whoever opens the Telegram web app from a blocked network.
@@ -723,8 +694,7 @@ def subscription(request:Request,token:str,target:str='auto',node:str='',locatio
     # The Hysteria2 endpoint and the hosted protocols belong to the whole
     # subscription, not to one node, so a per-node address (``?node=``) leaves
     # them out.
-    base=public_base(request)
-    try: text=render(u,base,target,nodes,_sub_prefix(),include_extras=not node)
+    try: text=render(u,public_base(request),target,nodes,_sub_prefix(),include_extras=not node)
     except ValueError as e: raise HTTPException(400,str(e))
     cap=transports.user_max_configs(u)
     # What the body really is, told to the client rather than guessed: a Clash
@@ -741,26 +711,6 @@ def subscription(request:Request,token:str,target:str='auto',node:str='',locatio
              'X-NEXUS-Transports':str(len(transports.available_profiles()))}
     if location: headers['X-NEXUS-Location']=str(location)
     headers['X-NEXUS-Scope']=wanted_scope
-    # ---------------------------------------------------- the client's own screen
-    # These three are read by the *client app*, not by us, and they are what
-    # turns a plain link into a manageable subscription:
-    #
-    # * ``profile-update-interval`` — how many hours until the client re-fetches
-    #   this URL on its own. Without it a user has to remember to press
-    #   «update» after every change; with it, «update» happens for them.
-    # * ``subscription-userinfo`` — the traffic line a client paints under the
-    #   profile (upload/download/total/expiry). We meter one combined counter, so
-    #   the whole usage is reported as ``download`` and ``upload`` stays 0 rather
-    #   than inventing a split; ``total=0`` means unlimited and ``expire=0`` means
-    #   «no expiry», which is exactly how clients render those two.
-    # * ``profile-web-page-url`` — the «open web page» button that takes the user
-    #   to this deployment's own status window from inside the client.
-    used_bytes=int(round(float(u.get('used_gb') or 0)*1024**3))
-    limit_bytes=int(round(float(u['limit_gb'])*1024**3)) if u.get('limit_gb') else 0
-    headers['profile-update-interval']='12'
-    headers['subscription-userinfo']=(f'upload=0; download={used_bytes}; '
-                                      f'total={limit_bytes}; expire={int(u.get("expires_at") or 0)}')
-    headers['profile-web-page-url']=_portal_url(base,u['uuid'])
     return PlainTextResponse(text,headers=headers)
 @app.get('/sub/{token}/{node_name}')
 def subscription_node(request:Request,token:str,node_name:str,target:str='auto'):
@@ -1022,27 +972,6 @@ def portal_json(request:Request,token:str):
     u=get_by_token(urllib.parse.unquote(token))
     if not u: raise HTTPException(404,'subscription not found')
     return _portal_data(request,u)
-
-@app.post('/api/feedback')
-async def submit_feedback(request:Request):
-    """Public: an end user sends a note from their own status window.
-
-    No login, because the caller is an end user rather than the admin — the
-    subscription token in the body is what proves they are a real user of this
-    deployment, and the per-IP limiter (``feedback_throttle``) is what keeps the
-    inbox from being filled by a script.
-    """
-    ip=_client_ip(request)
-    if feedback_throttle.blocked(ip): raise HTTPException(429,'بازخورد زیادی از این نشانی ثبت شد؛ کمی بعد دوباره تلاش کنید')
-    b=await _optional_json(request)
-    u=get_by_token(urllib.parse.unquote(str(b.get('token') or '').strip()))
-    if not u: raise HTTPException(404,'subscription not found')
-    try: item=feedback_service.submit(u,b.get('kind'),b.get('message'),b.get('rating'),b.get('contact'),ip)
-    except ValueError as e:
-        feedback_throttle.fail(ip); raise HTTPException(400,str(e))
-    feedback_throttle.fail(ip)
-    _audit('feedback.submit',f"{u['username']} · {item['kind']}")
-    return {'success':True,'kind':item['kind'],'kind_label':item['kind_label']}
 
 @app.get('/status/{username}',response_class=HTMLResponse)
 def status(request:Request,username:str):

@@ -27,12 +27,10 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app import autoconfig as auto_config
 from app import railway
-from app import self_update
 from app.core import clientip
 from app.cores import service as core_service
 from app.core.settings_store import store
 from app.db import execute
-from app import feedback as feedback_service
 from app.edge import packs as edge_packs
 from app.edge import sources as edge_sources
 from app.subscriptions import transports
@@ -72,43 +70,6 @@ def _audit(action, detail=''):
 
 def _flags_on():
     return (_setting('flags_enabled') or '1') != '0'
-
-
-# --------------------------------------------------------------- user feedback
-# The public half of this feature lives in ``app/main.py`` (the status window
-# posts to it). These are the admin's own three actions: read the inbox, mark a
-# note as read/done, and delete one. The count is also what a dashboard card
-# badges, so ``summary`` is returned on every list.
-@router.get('/api/feedback')
-def get_feedback(request: Request, status: str = '', limit: int = 200):
-    _auth(request)
-    return {'success': True, **feedback_service.summary(),
-            'kinds': [{'id': key, 'label': feedback_service.KIND_LABELS[key]}
-                      for key in feedback_service.KINDS],
-            'items': feedback_service.list_all(status=status, limit=limit)}
-
-
-@router.post('/api/feedback/{feedback_id}')
-async def update_feedback(request: Request, feedback_id: int):
-    _auth(request)
-    body = await _json_body(request)
-    try:
-        result = feedback_service.set_status(feedback_id, body.get('status'))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    _audit('feedback.status', f"#{feedback_id} → {result['status']}")
-    return {'success': True, **result, **feedback_service.summary()}
-
-
-@router.delete('/api/feedback/{feedback_id}')
-def delete_feedback(request: Request, feedback_id: int):
-    _auth(request)
-    try:
-        result = feedback_service.remove(feedback_id)
-    except ValueError as exc:
-        raise HTTPException(404, str(exc))
-    _audit('feedback.delete', f'#{feedback_id}')
-    return {'success': True, **result, **feedback_service.summary()}
 
 
 async def _measure(request, source_ids):
@@ -907,24 +868,3 @@ def get_guide(request: Request, section: str = ''):
     state['section'] = wanted if wanted in SECTION_TIPS else 'dashboard'
     state['tip'] = SECTION_TIPS[state['section']]
     return state
-
-
-@router.get('/api/system/update')
-def get_update_status(request: Request, remote: bool = True):
-    """GitHub head, persistent-storage and deploy-provider preflight."""
-    _auth(request)
-    main = _main()
-    return {'success': True, **self_update.status(check_remote=remote),
-            'version': main.APP_VERSION, 'build': main.BUILD_TOKEN}
-
-
-@router.post('/api/system/update')
-def apply_update(request: Request):
-    """Back up first, then ask Railway/Render to deploy the latest GitHub commit."""
-    _auth(request)
-    result = self_update.apply()
-    if not result.get('ok'):
-        raise HTTPException(400, result.get('reason') or 'بروزرسانی انجام نشد')
-    _audit('system.update',
-           f"{result.get('provider', {}).get('id')} → {str(result.get('target_commit', ''))[:12]}")
-    return {'success': True, **result}

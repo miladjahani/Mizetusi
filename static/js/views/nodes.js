@@ -21,8 +21,6 @@ const PAGE = 24;
 export class NodesView {
   constructor(app) {
     this.app = app;
-    // Names a scan produced but has not published, ticked in «نودهای اسکن‌شده».
-    this.candidateSelection = new Set();
   }
 
   get store() { return this.app.store; }
@@ -101,89 +99,9 @@ export class NodesView {
     return `<span class="pill warn" style="padding:2px 8px;font-size:9.5px" dir="ltr" title="کشور این آدرس از خود آدرس پرسیده شده: ${esc(info.country.toUpperCase())} — با برچسب لوکیشن (${esc((node.location || '').toUpperCase())}) نمی‌خواند">IP: ${esc(info.country.toUpperCase())}</span>`;
   }
 
-  /* ------------------------------------------------- scanned-node candidates
-     A scan never publishes an address by itself: every freshly discovered edge
-     node waits in this list until an admin ticks it. The kept selection survives
-     a re-render so ticking a dozen nodes and then syncing does not lose the
-     ticks. */
-  renderCandidates() {
-    const host = $('#candidateList');
-    if (!host) return;
-    const auto = this.store.get('settings')?.edge_auto_publish === '1';
-    const toggle = $('#nodeAutoSwitch');
-    if (toggle) toggle.classList.toggle('on', auto);
-    const candidates = this.candidateList();
-    const pill = $('#candidatePill');
-    if (pill) {
-      pill.className = candidates.length ? 'pill warn' : 'pill ok';
-      pill.textContent = candidates.length ? `${Fmt.num(candidates.length)} نود تازه` : 'بدون نود تازه';
-    }
-    if (!candidates.length) {
-      host.innerHTML = `<div class="empty">${ico('check', 26)}<div>نود اسکن‌شدهٔ تأییدنشده‌ای نیست</div>
-        <div class="muted" style="margin-top:6px">هر اسکن، نودهای تازه را همین‌جا نگه می‌دارد تا خودتان انتخاب کنید.</div></div>`;
-      return;
-    }
-    host.innerHTML = candidates.map((node, index) => `
-      <label class="node-row" style="--i:${index};cursor:pointer">
-        <input type="checkbox" data-candidate="${esc(node.name)}" ${this.candidateSelection.has(node.name) ? 'checked' : ''} style="width:auto;margin:0 6px 0 0">
-        <span class="node-icon ${node.kind === 'cloudflare' ? 'cf' : ''}">${node.kind === 'cloudflare' ? '☁' : 'R'}</span>
-        <div class="node-main">
-          <b>${esc(node.name)}${node.location ? ` <span class="pill info" style="padding:2px 8px;font-size:9.5px">${esc(node.location.toUpperCase())}</span>` : ''}${node.provider ? ` <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(node.provider)}</span>` : ''}</b>
-          <span>${esc(node.kind)} · ${esc(node.server)}:${esc(node.port)}${node.sni ? ` · SNI ${esc(node.sni)}` : ''}</span>
-        </div>
-        <span class="lat ${StatusKit.latencyTone(node.latency_ms)}" title="${esc(this.probeTitle(node))}">${StatusKit.latencyText(node.latency_ms)}</span>
-      </label>`).join('');
-    $$('[data-candidate]', host).forEach((box) => {
-      box.onchange = () => {
-        if (box.checked) this.candidateSelection.add(box.dataset.candidate);
-        else this.candidateSelection.delete(box.dataset.candidate);
-      };
-    });
-  }
-
-  candidateList() {
-    return (this.store.get('nodes') || []).filter((node) => !node.enabled
-      && (node.kind === 'cloudflare' || node.kind === 'edge'));
-  }
-
-  async publishCandidates(button) {
-    const names = [...this.candidateSelection];
-    if (!names.length) {
-      this.toasts.err('هیچ نودی انتخاب نشده');
-      return;
-    }
-    const original = button.innerHTML;
-    button.disabled = true;
-    button.innerHTML = '<span class="spin-inline"></span> در حال افزودن…';
-    try {
-      await this.api.post('/api/nodes/select', { names, enabled: true });
-      this.candidateSelection.clear();
-      this.toasts.ok(`${Fmt.num(names.length)} نود به کاتالوگ منتشر شد`);
-      await this.app.reloadNodes();
-      await this.app.loadMetrics();
-    } finally {
-      button.disabled = false;
-      button.innerHTML = original;
-    }
-  }
-
-  async toggleAuto(button) {
-    const next = !button.classList.contains('on');
-    const result = await this.api.post('/api/nodes/selection', { auto: next });
-    button.classList.toggle('on', !!result.auto);
-    const settings = this.store.get('settings');
-    if (settings) settings.edge_auto_publish = result.auto ? '1' : '0';
-    this.toasts.ok(result.auto ? 'نودهای اسکن‌شده خودکار منتشر می‌شوند' : 'انتخاب دستی فعال شد');
-    if (result.auto) {
-      this.candidateSelection.clear();
-      await this.app.reloadNodes();
-    }
-  }
-
   render() {
     const host = $('#nodeList');
     if (!host) return;
-    this.renderCandidates();
     const list = this.visible();
     if (!list.length) {
       host.innerHTML = `<div class="empty">${ico('server', 34)}<div>نودی با این فیلتر پیدا نشد</div>
@@ -618,16 +536,5 @@ export class NodesView {
     if (add) add.onclick = () => this.modal(null);
     const sync = $('#btnSync');
     if (sync) sync.onclick = () => this.app.safe(() => this.sync(sync));
-    const selectAll = $('#candidateSelectAll');
-    if (selectAll) selectAll.onclick = () => {
-      this.candidateList().forEach((node) => this.candidateSelection.add(node.name));
-      this.renderCandidates();
-    };
-    const clear = $('#candidateClear');
-    if (clear) clear.onclick = () => { this.candidateSelection.clear(); this.renderCandidates(); };
-    const publish = $('#candidatePublish');
-    if (publish) publish.onclick = () => this.app.safe(() => this.publishCandidates(publish));
-    const auto = $('#nodeAutoSwitch');
-    if (auto) auto.onclick = () => this.app.safe(() => this.toggleAuto(auto));
   }
 }
