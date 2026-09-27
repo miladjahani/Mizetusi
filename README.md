@@ -53,17 +53,18 @@ a dedicated subscription per client.
   that answers «which port is this capability really published on» (one stored mapping, falling
   back to the listen port — which is why a VPS and a Railway deployment share exactly one code
   path); `app/railway.py` drives Railway's own GraphQL API (`tcpProxyCreate`, `tcpProxies`,
-  `serviceInstanceRedeploy`) and `app/autoconfig.py` runs one pass at boot: it switches on what
-  needs no decision at all — today exactly the WEB proxy — and, when a `RAILWAY_API_TOKEN` is
+  `serviceInstanceRedeploy`) and `app/autoconfig.py` runs one pass at boot: it flips no switch
+  of its own — Telegram Desktop's WEB proxy is an admin's choice, not a step of the pass — and,
+  when a `RAILWAY_API_TOKEN` is
   present, creates one TCP proxy per enabled raw-port capability, records the forwarded
   host/port, and performs the single redeploy the API itself says a new proxy needs. Nothing is
   invented and no admin choice is overwritten: a switch the admin has ever touched is never
   flipped, an API failure is reported verbatim, and each half runs once (its marker is a
-  setting). The marker is only written once the pass has **nothing left to do** — it
-  switched the WEB proxy on, or an admin has already had their say. A boot on an image
-  whose relay binary is missing leaves it unwritten, so the next boot still switches the
-  WEB proxy on by itself: marking a pass that did nothing as «done» would turn the one
-  capability that needs no decision into the one question an admin has to answer by hand.
+  setting). The marker is only written once the pass has **nothing left to do** — the Railway
+  proxies an admin's own switches need are in place, or an admin has already had their say.
+  A boot with no `RAILWAY_API_TOKEN`, or on an image whose relay binary is missing, leaves the
+  marker unwritten so the next boot finishes the job — a pass that never ran must not be
+  recorded as done, or the port an admin's own switch was promised would never be created.
   A TCP proxy turned out to move the HTTP edge with it, which is now the third thing the
   pass owns: on Railway, the moment one exists, the service is handed that proxy's
   *application* port as `PORT` — and that port is the one Xray already listens on for Reality,
@@ -550,7 +551,7 @@ two dashboards, and `RAILWAY_TCP_PROXY_*` is only the fallback it uses when no m
 
 The three raw-port ways are **off by default** on purpose — a host that cannot forward their
 port would only show a card full of reasons. The WEB way needs nothing arranged, so it is the
-one a fresh deployment turns on by itself and the one a user is handed: the panel's **نوع پروکسی
+one a user is handed once an admin switches it on (a deployment no longer enables it): the panel's **نوع پروکسی
 تلگرام** picker defaults to «فقط WEB» and the status window publishes `tg://webproxy` and
 nothing else until an admin selects «همهٔ انواع».
 
@@ -655,7 +656,7 @@ IP when the panel's own address is blocked. The «تست دسترسی سرور»
 shell from here rather than trusting the configuration.
 
 The tab is **پروکسی تلگرام** in the panel: its first card is the WEB proxy (the one a fresh
-deployment switches on by itself), the **نوع پروکسی تلگرام** picker above it decides whether the
+deployment leaves off until an admin turns it on), the **نوع پروکسی تلگرام** picker above it decides whether the
 other three are published at all, and the status window gives each user their own lines — the
 `tg://webproxy` link in the default mode, or the `tg://` link, both web-proxy links with their
 credentials and the web app URL in «همهٔ انواع» — next to the VPN links they already had.
