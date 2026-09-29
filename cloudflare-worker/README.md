@@ -18,9 +18,37 @@ gives the client an anycast IP it can reach.
 2. Settings → Variables:
    - `NEXUS_ORIGIN` — your Railway HTTPS origin, e.g. `https://nexus-production.up.railway.app` (the legacy `ZEUS_ORIGIN` name is still accepted).
    - `ALLOWED_HOSTS` — optional comma-separated Host allow-list for the WebSocket edge, so the relay is never reachable under an unexpected name.
-3. Enter the Worker URL in NEXUS → Cloudflare → Cloudflare Worker and press «ذخیره و Sync».
+3. Settings → Domains & Routes → **Add custom domain**: attach a subdomain of a domain this
+   Cloudflare account owns (e.g. `panel.example.com`). See the next section for why this is
+   the step that decides reachability.
+4. Enter the Worker URL — the **custom domain**, not the `workers.dev` one — in
+   NEXUS → Cloudflare → Cloudflare Worker and press «ذخیره و Sync».
    From then on the Worker URL is also a working panel address: open it, log in, and every
-   subscription link the panel builds points at that host.
+   subscription link the panel builds points at that host. Saving a `workers.dev` address is
+   accepted but answered with a warning, because that hostname is not reachable from a
+   filtered network either.
+
+## The hostname is what decides reachability
+
+A Worker answers on `https://<name>.<subdomain>.workers.dev` until it is given a custom domain,
+and the whole `workers.dev` suffix is filtered in Iran. So a Worker left on its default hostname
+is a **second** address that only opens through a VPN — the same trap as the Railway domain,
+just with a different name. The fix is a hostname the filter does not already know:
+
+1. Keep a domain in the same Cloudflare account (any cheap one; it does not have to be the
+   domain the panel "should" live on).
+2. Worker → Settings → Domains & Routes → **Add custom domain** → `panel.example.com`.
+   Cloudflare issues the certificate and serves the Worker from its anycast IPs on that name.
+3. Put **that** hostname in the panel, then press «پینگ همه نودها» so the node links are rebuilt
+   on it too.
+
+A Cloudflare-proxied record in front of the Railway origin can work as well, but it only carries
+HTTP: the WebSocket transports are not proxied to Railway's edge that way, and the panel's own
+link hosts are not rewritten. The Worker is the shape that does both.
+
+Two habits keep the new domain alive: leave the Telegram **WEB proxy off** (its carrier is the
+panel's own address, so serving it is a signature a network can block the whole domain on), and
+keep `ADMIN_PASSWORD` set.
 
 You rarely need to edit the file by hand: the panel serves the same source with your Railway
 origin already written into `ORIGIN_FALLBACK`, one click to copy or download (NEXUS →
@@ -65,7 +93,9 @@ Cloudflare → «کد ورکر Cloudflare (بهینه)»).
 - **Keeps the panel's links on the reachable host.** Every forwarded request carries
   `X-Forwarded-Proto: https` and `X-Forwarded-Host: <worker host>`, which is what the origin
   builds its absolute subscription and status-window URLs from — otherwise a link a user
-  copies would point back at the blocked address.
+  copies would point back at the blocked address. The saved Worker URL itself is authoritative
+  too (`public_url`), so a link copied while the admin is on the Railway domain still names the
+  Worker, and even `PUBLIC_BASE_URL` does not pull the links back to a filtered host.
 - **Rewrites origin redirects to the Worker host.** A redirect that names the origin
   (`Location: https://<origin>/login`) is rewritten so a browser is never bounced back to the
   address that is filtered; relative redirects are handed to the browser untouched instead of

@@ -837,6 +837,12 @@ def test_worker_code_is_prefilled_and_downloadable():
     data = client.get('/api/cloudflare/worker-code', headers=h()).json()
     assert data['filename'] == 'nexus-worker.js'
     assert data['steps']
+    # The custom-domain step is the one that decides reachability from a filtered
+    # network: `*.workers.dev` is filtered in Iran as a *suffix*, so a guide that
+    # stops at the default hostname sends the admin straight back to a panel that
+    # only opens through a VPN — the exact failure this section exists to fix.
+    guide = ' '.join(data['steps'])
+    assert 'workers.dev' in guide and 'Add custom domain' in guide
     assert 'NEXUS_ORIGIN' in data['code']
     assert 'const ORIGIN_FALLBACK = "";' not in data['code']  # prefilled, paste-ready
     assert data['origin'] in data['code']
@@ -847,6 +853,59 @@ def test_worker_code_is_prefilled_and_downloadable():
     assert 'nexus-worker.js' in download.headers['content-disposition']
     # Credentials come from the cookie session, so only a fresh client is anonymous.
     assert TestClient(app).get('/api/cloudflare/worker-code').status_code == 401
+
+
+def test_a_workers_dev_address_is_saved_with_a_warning():
+    """The saved address is where the panel, its subscriptions and its node links
+    live, so a hostname a filtered network cannot reach is a dead end — and the
+    warning is the only thing between that and an admin who finds it out from a
+    user in Iran. A custom domain is the supported answer, so it warns about
+    nothing."""
+    saved = client.post('/api/settings/cloudflare-worker', headers=h(),
+                        json={'url': 'https://nexus-edge.example.workers.dev'}).json()
+    assert saved['success'] is True
+    assert saved['host'] == 'nexus-edge.example.workers.dev'
+    assert 'workers.dev' in saved['warning']
+    clean = client.post('/api/settings/cloudflare-worker', headers=h(),
+                        json={'url': 'https://panel.example.com'}).json()
+    assert clean['success'] is True and clean['warning'] == ''
+    # Leave no Worker URL behind for a later test on the shared database.
+    assert client.post('/api/settings/cloudflare-worker', headers=h(),
+                       json={'url': '', 'api_key': ''}).status_code == 200
+
+
+def test_the_panel_moves_to_the_worker_host_while_the_app_stays_on_railway():
+    """The split the Cloudflare section promises: «پنل روی Worker، اصل روی Railway».
+
+    Every link handed to a user has to name the Worker — the Railway address is
+    exactly the one a filtered network cannot open — while the origin the Worker
+    itself dials stays the platform address. Pointing the served copy at the
+    Worker host would make the Worker call itself.
+    """
+    import re
+    _seed_nodes()
+    execute('DELETE FROM users')
+    client.post('/api/users', headers=h(), json={'username': 'workerhost'})
+    # Before a Worker exists, every subscription URL names this deployment.
+    before = client.get('/api/users/workerhost/links', headers=h()).json()
+    assert set(re.findall(r'https?://[^"\s]+/sub/', json.dumps(before))) == {'https://testserver/sub/'}
+    saved = client.post('/api/settings/cloudflare-worker', headers=h(),
+                        json={'url': 'https://edge.example.org'}).json()
+    assert saved['configured'] is True
+    links = client.get('/api/users/workerhost/links', headers=h()).json()
+    body = json.dumps(links)
+    # Every subscription URL a user is handed names the Worker host...
+    assert set(re.findall(r'https?://[^"\s]+/sub/', body)) == {'https://edge.example.org/sub/'}
+    # ...while the origin node still points at the deployment itself, which is
+    # the address the Worker has to dial.
+    assert '"server": "testserver"' in body
+    config = client.get('/api/client-config/workerhost', headers=h()).json()
+    assert config['subscription'].startswith('https://edge.example.org/sub/')
+    # ...while the copy the Worker is deployed from still names the origin.
+    code = client.get('/api/cloudflare/worker-code', headers=h()).json()
+    assert code['origin'] in code['code']
+    assert 'edge.example.org' not in code['code']
+    client.post('/api/settings/cloudflare-worker', headers=h(), json={'url': ''})
 
 
 def test_client_download_links_can_be_overridden_from_the_panel():

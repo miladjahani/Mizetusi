@@ -215,11 +215,32 @@ def set_session(request:Request,response,token=None):
     """
     return sessions.apply(request,response,token)
 def public_base(request:Request):
+    """Where this deployment really runs — the origin, not the public address.
+
+    It is what the origin node, the clean-IP catalog and the Worker's own
+    ``ORIGIN_FALLBACK`` are built from, so it must keep naming the platform this
+    process is on. Links a user is handed are built from ``public_url`` instead.
+    """
     override=(_setting('public_base_url') or settings.public_base_url or '').strip()
     if override: return override.rstrip('/')
     proto=request.headers.get('x-forwarded-proto','https').split(',')[0].strip()
     host=request.headers.get('x-forwarded-host') or request.headers.get('host')
     return f'{proto}://{host}' if host else 'https://example.invalid'
+
+def public_url(request:Request):
+    """The address every user-facing link is built from.
+
+    «The panel on the Worker, the app really on Railway» is one address split in
+    two: a saved Worker URL is the edge a client actually reaches, so it is the
+    host a subscription, a status window or a download link must name — the
+    Railway origin is precisely the address a filtered network cannot open. It
+    therefore outranks ``public_base_url``, which describes where the app runs
+    (and stays in charge of the origin node, the clean-IP catalog and the
+    Worker's own prefilled ``ORIGIN_FALLBACK``, or the Worker would be pointed
+    at itself).
+    """
+    worker=(_setting('cloudflare_worker_url') or '').strip()
+    return worker.rstrip('/') if worker else public_base(request)
 async def maintenance():
     while True:
         try: reset_due()
@@ -506,7 +527,7 @@ def _protocol_catalog():
 
 def _share_payload(request:Request,u,node=''):
     """Everything an end user needs: status window, per-client subs, formats."""
-    base=public_base(request); token=urllib.parse.quote(u['uuid'],safe='')
+    base=public_url(request); token=urllib.parse.quote(u['uuid'],safe='')
     transport_protocols=transports.user_protocols(u)
     return {
         'base_url':base,
@@ -723,7 +744,7 @@ def subscription(request:Request,token:str,target:str='auto',node:str='',locatio
     # The Hysteria2 endpoint and the hosted protocols belong to the whole
     # subscription, not to one node, so a per-node address (``?node=``) leaves
     # them out.
-    base=public_base(request)
+    base=public_url(request)
     try: text=render(u,base,target,nodes,_sub_prefix(),include_extras=not node)
     except ValueError as e: raise HTTPException(400,str(e))
     cap=transports.user_max_configs(u)
@@ -932,7 +953,7 @@ def _core_subs(base,token,node=''):
 
 def _portal_data(request:Request,u):
     """Public payload behind the subscription status window (no admin auth)."""
-    base=public_base(request); token=urllib.parse.quote(u['uuid'],safe='')
+    base=public_url(request); token=urllib.parse.quote(u['uuid'],safe='')
     ok,reason=allowed(u)
     now=int(time.time()); used=float(u.get('used_gb') or 0); limit=u.get('limit_gb')
     protocols=transports.user_protocols(u)
@@ -1114,7 +1135,19 @@ async def save_worker_settings(request:Request):
     if key: execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',('cloudflare_worker_key',key))
     sync_from_sources(public_base(request), url or None)
     _audit('cloudflare.worker',url or 'disabled')
-    return {'success':True,'configured':bool(url),'nodes':[_node_payload(n) for n in list_nodes()]}
+    # A saved address is the address the panel, its subscriptions and its node
+    # links are rebuilt around, so a hostname that a filtered network cannot
+    # reach is a dead end the admin only discovers by testing from inside that
+    # network. ``workers.dev`` is filtered in Iran as a *suffix* (any name under
+    # it), so the warning is about the suffix, not one particular Worker.
+    host=(urllib.parse.urlparse(url).hostname or '') if url else ''
+    warning=''
+    if host.endswith('.workers.dev'):
+        warning=('آدرس workers.dev در ایران فیلتر است و پنل با آن فقط با فیلترشکن باز می‌شود؛ '
+                 'به Worker یک دامنهٔ سفارشی وصل کنید (Settings → Domains & Routes → Add custom domain) '
+                 'و همان را ذخیره کنید تا پنل بدون VPN بالا بیاید.')
+    return {'success':True,'configured':bool(url),'host':host,'warning':warning,
+            'nodes':[_node_payload(n) for n in list_nodes()]}
 
 def _node_payload(node):  # noqa: D401
     """A node row plus the edge-source view (its location, provider, last probe)."""
@@ -1496,13 +1529,24 @@ async def edge_toggle_source(request:Request,source_id:str):
             'nodes':[_node_payload(n) for n in list_nodes()]}
 
 def _worker_steps():
-    """The Worker deployment guide, worded for the platform this runs on."""
+    """The Worker deployment guide, worded for the platform this runs on.
+
+    Step 4 is the one that decides whether the panel opens at all in a filtered
+    network. A Worker answers on ``*.workers.dev`` until it is given a custom
+    domain, and that whole suffix is filtered in Iran — so a Worker left on its
+    default hostname is a *second* address that only opens through a VPN, which
+    is the exact failure this section exists to fix. The guide therefore asks
+    for the custom domain before it asks for the URL, and ``save_worker_settings``
+    warns when a ``workers.dev`` one is saved anyway.
+    """
     where=runtime.label()
     return [
         f'کد زیر را کپی یا دانلود کنید؛ آدرس همین سرویس ({where}) از قبل داخلش قرار گرفته است.',
         'در Cloudflare → Workers & Pages → Create Worker کد را جایگزین و Deploy کنید.',
         f'اختیاری: در Settings → Variables متغیری با نام NEXUS_ORIGIN و مقدار آدرس {where} بسازید.',
-        'آدرس Worker را در فیلد همین بخش ذخیره کنید تا لوکیشن کلودفلر ساخته و پینگ شود.',
+        'در همان Worker به Settings → Domains & Routes بروید و «Add custom domain» را بزنید و یک زیردامنه از دامنه‌ای که در کلودفلر دارید وصل کنید (مثلاً panel.example.com)؛ کلودفلر گواهی‌اش را خودش می‌سازد.',
+        'آدرس workers.dev را ذخیره نکنید: خودِ workers.dev هم در ایران فیلتر است و پنل با آن فقط با فیلترشکن باز می‌شود. همان دامنهٔ سفارشی مرحلهٔ قبل تنها آدرسی است که بدون VPN بالا می‌آید.',
+        'آدرس Worker را در فیلد همین بخش ذخیره کنید تا لوکیشن کلودفلر ساخته و پینگ شود؛ از آن به بعد پنل و همهٔ لینک‌های کاربر (سابلینک، پنجرهٔ وضعیت، دانلود) روی همین آدرس ساخته می‌شوند نه روی آدرس رِیلوی.',
         'روی «پینگ همه نودها» بزنید؛ نودها به ترتیب کمترین پینگ در سابلینک‌ها می‌آیند.',
         'برای لوکیشن‌های بیشتر (Fastly، آروان، دامنهٔ تمیز و…) از بخش «منابع لبه و لوکیشن‌ها» استفاده کنید.',
     ]
@@ -1581,7 +1625,7 @@ def client_config(request:Request,username:str,target:str='singbox'):
     if not u: raise HTTPException(404,'user not found')
     ok,reason=allowed(u)
     if not ok: raise HTTPException(403,reason)
-    return {'username':username,'target':target,'subscription':public_base(request)+'/sub/'+urllib.parse.quote(u['uuid'],safe='')+'?target='+urllib.parse.quote(target),'nodes':active_nodes()}
+    return {'username':username,'target':target,'subscription':public_url(request)+'/sub/'+urllib.parse.quote(u['uuid'],safe='')+'?target='+urllib.parse.quote(target),'nodes':active_nodes()}
 
 @app.get('/api/metrics')
 def metrics(request:Request,hours:int=24):
@@ -1644,7 +1688,7 @@ def user_links(request:Request,username:str,node:str=''):
     auth(request); u=get_user(username)
     if not u: raise HTTPException(404,'user not found')
     ok,reason=allowed(u)
-    base=public_base(request); prefix=_sub_prefix()
+    base=public_url(request); prefix=_sub_prefix()
     token=urllib.parse.quote(u['uuid'],safe='')
     nodes=_sub_nodes(node) or active_nodes()
     def sub(target,name='',location=''):

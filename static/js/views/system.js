@@ -368,10 +368,14 @@ export class CloudflareView {
         save.disabled = true;
         save.innerHTML = '<span class="spin-inline"></span> ذخیره…';
         try {
-          await this.api.post('/api/settings/cloudflare-worker', {
+          const saved = await this.api.post('/api/settings/cloudflare-worker', {
             url: $('#workerUrl').value.trim(), api_key: $('#workerKey')?.value.trim() || '',
           });
-          this.toasts.ok('تنظیمات Worker ذخیره و نودها Sync شد');
+          // A workers.dev host is saved but is not reachable from a filtered
+          // network, so the honest answer is a warning next to the success —
+          // otherwise the admin only finds out by testing from Iran.
+          if (saved.warning) this.toasts.err(saved.warning, 14000);
+          else this.toasts.ok('تنظیمات Worker ذخیره و نودها Sync شد');
           await this.app.loadCloudflare();
           await this.app.reloadNodes();
           await this.app.loadMetrics();

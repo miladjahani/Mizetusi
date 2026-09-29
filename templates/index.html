@@ -346,15 +346,15 @@
       <div class="grid-2">
         <div class="panel glass">
           <div class="panel-head"><div><h2>Cloudflare Worker</h2><p class="sub">پنل و ورودی‌های CF روی یک آدرس تمیز</p></div><span class="pill" id="cfTag">—</span></div>
-          <label>Worker URL <span class="hint">— باید HTTPS باشد</span></label>
-          <input id="workerUrl" placeholder="https://nexus-edge.workers.dev" dir="ltr">
+          <label>Worker URL <span class="hint">— باید HTTPS باشد و دامنهٔ سفارشی Worker؛ خودِ workers.dev در ایران فیلتر است</span></label>
+          <input id="workerUrl" placeholder="https://panel.example.com" dir="ltr">
           <label>API Key <span class="hint">— اختیاری</span></label>
           <input id="workerKey" type="password" placeholder="کلید اختیاری Worker" dir="ltr">
           <div class="actions">
             <button class="primary" id="saveWorker">ذخیره و Sync</button>
             <button class="secondary" id="clearWorker">حذف Worker</button>
           </div>
-          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ اگر لوکیشنی تعریف نکنید فقط نود مستقیم همین سرویس منتشر می‌شود. وقتی ذخیره شد، خودِ پنل هم از همان آدرس باز می‌شود و سابلینک‌ها روی دامنهٔ Worker ساخته می‌شوند.</p></div></div>
+          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ اگر لوکیشنی تعریف نکنید فقط نود مستقیم همین سرویس منتشر می‌شود. وقتی ذخیره شد، خودِ پنل هم از همان آدرس باز می‌شود و سابلینک‌ها روی دامنهٔ Worker ساخته می‌شوند. برای باز شدن پنل در ایران بدون فیلترشکن، به Worker یک دامنهٔ سفارشی وصل کنید و همان را اینجا بگذارید؛ آدرس workers.dev خودش فیلتر است.</p></div></div>
         </div>
         <div class="panel glass">
           <div class="panel-head">          <div><h2>Probe آی‌پی‌های لبه</h2><p class="sub">اسکن از سمت همین سرور</p></div></div>
@@ -655,7 +655,7 @@
     <section class="section" id="section-advanced">
       <div class="panel glass" data-acc="پیکربندی خودکار پس از استقرار|آنچه یک استقرار تازه خودش روشن می‌کند و پورت‌های TCP که روی Railway خودکار ساخته می‌شوند|zap" data-acc-open="1">
         <div class="panel-head">
-          <div><h2>پیکربندی خودکار پس از استقرار</h2><p class="sub">یک استقرار تازه بدون هیچ کاری از سمت شما روشن می‌شود: پروکسی WEB تلگرام که روی دامنه و پورت ۴۴۳ همین سرور کار می‌کند، و روی Railway یک TCP Proxy با پورت تصادفی برای هر قابلیت پورت‌خامی که روشن کرده‌اید</p></div>
+          <div><h2>پیکربندی خودکار پس از استقرار</h2><p class="sub">این پاس هیچ سوییچی را خودش روشن نمی‌کند؛ تنها کاری که خودش انجام می‌دهد ساختن یک TCP Proxy روی Railway است (با پورت تصادفی) برای هر قابلیت پورت‌خامی که خودتان روشن کرده‌اید. پروکسی WEB تلگرام فقط یک پیشنهاد است و تا خودتان روشنش نکنید روی دامنهٔ این سرویس سرو نمی‌شود — دامنه‌ای که ترافیک پروکسی تلگرام را حمل کند، همان دامنه‌ای است که شبکه‌ها می‌بندند</p></div>
           <span class="pill" id="adAutoTag">—</span>
         </div>
         <div class="kv-list" id="adAutoInfo"></div>

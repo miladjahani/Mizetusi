@@ -159,6 +159,13 @@ def test_the_admin_api_reports_the_pass_and_refuses_an_unknown_action(relay_inst
     assert {'allowed', 'done', 'ran_at', 'applied', 'candidates', 'railway'} <= set(body)
     assert {'api', 'candidates', 'proxies', 'created', 'done'} <= set(body['railway'])
     assert {'configured', 'missing', 'endpoint'} <= set(body['railway']['api'])
+    # An admin holding one value (the project id off the dashboard URL) has to be
+    # told where the other three come from, and that a token is what unblocks the
+    # call — otherwise the card is a list of variable names with no way to satisfy
+    # them, which is exactly how a project id ends up looking like a fix.
+    guide = ' '.join(body['railway']['api']['guide'])
+    assert 'RAILWAY_API_TOKEN' in guide and 'RAILWAY_PROJECT_ID' in guide
+    assert 'Account Settings' in guide
     assert {'catalog', 'count'} <= set(body['railway']['proxies'])
     for item in body['railway']['proxies']['catalog']:
         assert {'id', 'label', 'port', 'enabled', 'proxied', 'public_host', 'public_port'} <= set(item)

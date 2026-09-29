@@ -7,6 +7,17 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **«The panel on the Cloudflare Worker, the app really on Railway» — now true for the links too,
+  and the guide says the one thing that decides whether it opens at all.** A saved Worker URL is
+  the address a filtered client can actually reach, so every link a user is handed — subscription,
+  status window, download — is now built from the Worker host (`public_url`), and it outranks
+  `PUBLIC_BASE_URL`; that setting keeps describing where the app runs, which is what the origin
+  node, the clean-IP catalog and the Worker's own prefilled `ORIGIN_FALLBACK` are built from
+  (pointing those at the Worker host would make the Worker call itself). The deployment guide in
+  the Cloudflare tab — and `cloudflare-worker/README.md` — now puts the step that matters first:
+  a Worker answers on `*.workers.dev` until it is given a **custom domain**, and that whole suffix
+  is filtered in Iran, so a Worker left on its default hostname is just a second address that only
+  opens through a VPN. Saving one is answered with a warning instead of a silent success.
 - **A scan now proposes; the admin disposes.** The Node Catalog used to publish every address a scan
   found, so a public deployment grew nodes nobody had chosen. Now the **automatic** clean-IP catalog
   (`cloudflare-NN`) is parked as **candidates** — a new «نودهای اسکن‌شده» list in the Nodes tab — and

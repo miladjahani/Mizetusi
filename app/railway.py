@@ -45,6 +45,23 @@ ENVIRONMENT_KEYS = ('NEXUS_RAILWAY_ENVIRONMENT_ID', 'RAILWAY_ENVIRONMENT_ID')
 SERVICE_KEYS = ('NEXUS_RAILWAY_SERVICE_ID', 'RAILWAY_SERVICE_ID')
 TIMEOUT = httpx.Timeout(20.0, connect=8.0)
 
+# Where each half of a call comes from, in the order an admin has to set them.
+# The card used to print the variable names and nothing else, which leaves an
+# admin holding one value (the project id off the dashboard URL) with no way to
+# tell that it does nothing on its own — without a token every call is refused
+# before the id is ever read.
+GUIDE = (
+    '۱) توکن: Railway → Account Settings → Tokens (یا Project Settings → Tokens) یک توکن با نقش '
+    'Workspace/Project Admin بسازید و در Railway → سرویس → Variables با نام RAILWAY_API_TOKEN ذخیره کنید. '
+    'بدون توکن، شناسهٔ پروژه تنها هیچ کاری نمی‌کند — API پیش از خواندن شناسه رد می‌کند.',
+    '۲) شناسهٔ پروژه: همان شناسه‌ای که در آدرس داشبورد می‌بینید (railway.app/project/<شناسه>) → RAILWAY_PROJECT_ID',
+    '۳) شناسهٔ محیط و سرویس: Railway خودش RAILWAY_ENVIRONMENT_ID و RAILWAY_SERVICE_ID را به هر دیپلوی '
+    'تزریق می‌کند؛ فقط اگر کارت آن دو را «ست نشده» نشان داد، از Project Settings → Environments و '
+    'Service → Settings کپی و همان‌جا به Variables اضافه کنید.',
+    '۴) پس از ذخیرهٔ متغیرها Railway خودش یک‌بار ری‌استارت می‌کند؛ بعد از آن دکمهٔ «ساخت پورت‌های TCP روی '
+    'Railway» را بزنید تا پروکسی هر پورت خام ساخته و در جدول همین کارت فوروارد شود.',
+)
+
 # One query and two mutations — spelled out rather than built from strings so the
 # exact fields a card needs are visible here, and a schema field that disappears
 # fails loudly in a test instead of silently emptying a card.
@@ -266,6 +283,7 @@ def info(**extra):
     return {
         'configured': configured(),
         'missing': missing(),
+        'guide': list(GUIDE),
         'endpoint': ENDPOINT,
         'http_port': http_port(),
         'project_id': project(),

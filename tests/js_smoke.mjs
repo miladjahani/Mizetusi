@@ -685,12 +685,18 @@ try {
   // the variables rather than pretending the ports exist.
   window.nexus.store.set('autoconfig', {
     allowed: true, done: false, ran_at: 0, applied: [], candidates: [],
-    railway: { api: { configured: false, missing: ['RAILWAY_API_TOKEN', 'RAILWAY_ENVIRONMENT_ID'] },
+    railway: { api: { configured: false, missing: ['RAILWAY_API_TOKEN', 'RAILWAY_ENVIRONMENT_ID'],
+      guide: ['توکن را با نام RAILWAY_API_TOKEN در Variables ذخیره کنید'] },
       done: false, ran_at: 0, created: [], proxies: { catalog: [], count: 0 } },
   });
   view.renderAuto();
   if (!String(elements.get('adAutoInfo')?.innerHTML || '').includes('RAILWAY_API_TOKEN')) {
     failures.push('a host without a Railway token must name the missing variables');
+  }
+  // Naming a variable is not the same as saying where its value comes from: an
+  // admin with only the project id has to be told the token is what unblocks it.
+  if (!String(elements.get('adAutoInfo')?.innerHTML || '').includes('مقدارها از کجا')) {
+    failures.push('the card must say where each Railway value comes from, not only its name');
   }
   if (!String(elements.get('adAutoCandidates')?.innerHTML || '').includes('empty')) {
     failures.push('an empty port catalog must render an empty state');

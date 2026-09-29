@@ -25,14 +25,20 @@
  * it, so a link a user copies points at the clean Cloudflare address rather than
  * the blocked Railway one.
  *
- * Deploy in 3 steps
+ * Deploy in 4 steps
  * -----------------
  *   1. Workers & Pages → Create Worker → paste this file → Deploy.
- *   2. Settings → Variables: NEXUS_ORIGIN = https://<your-app>.up.railway.app
+ *   2. Settings → Domains & Routes → Add custom domain: attach a subdomain of a
+ *      domain the Cloudflare account owns (e.g. panel.example.com). This step is
+ *      not cosmetic — the default `*.workers.dev` hostname is filtered in Iran
+ *      too, so a Worker left on it is just another address that only opens
+ *      through a VPN. Cloudflare issues the certificate itself.
+ *   3. Settings → Variables: NEXUS_ORIGIN = https://<your-app>.up.railway.app
  *      (the copy served by the NEXUS panel already has this value inline, so the
  *      paste-as-is version works too), optionally ALLOWED_HOSTS.
- *   3. Copy the Worker URL into the panel's Cloudflare section and run
- *      "پینگ همه نودها" — the healthy IPs become your Cloudflare nodes.
+ *   4. Copy the **custom-domain** URL into the panel's Cloudflare section and run
+ *      "پینگ همه نودها" — the healthy IPs become your Cloudflare nodes, and the
+ *      panel's own links are rebuilt on that reachable host.
  *
  * Every WebSocket path below is mirrored by the FastAPI edge and by
  * `app/subscriptions/transports.py`; `tests/worker_smoke.mjs` drives each one

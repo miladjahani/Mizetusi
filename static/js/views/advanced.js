@@ -93,7 +93,8 @@ export class AdvancedView {
         <div class="kv-line"><span>خودکار روشن شده</span><b dir="ltr" style="white-space:normal">${esc((data.applied || []).join(' · ') || '—')}</b></div>
         <div class="kv-line"><span>توکن API رِیلوی</span><b style="white-space:normal">${api.configured
           ? 'ست شده' : `ست نشده — ${esc((api.missing || []).join(' · '))}`}</b></div>
-        <div class="kv-line"><span>پورت‌های عمومی فوروارد‌شده</span><b dir="ltr">${Fmt.num(forwarded.length)}</b></div>`;
+        <div class="kv-line"><span>پورت‌های عمومی فوروارد‌شده</span><b dir="ltr">${Fmt.num(forwarded.length)}</b></div>
+        ${(api.guide || []).length ? `<div class="kv-line"><span>مقدارها از کجا</span><b style="font-family:Vazirmatn;direction:rtl;max-width:78%;white-space:normal;line-height:1.9">${(api.guide || []).map((line) => esc(line)).join('<br>')}</b></div>` : ''}`;
     }
     const candidates = $('#adAutoCandidates');
     if (candidates) {
