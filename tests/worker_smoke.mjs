@@ -3,9 +3,7 @@
    It loads the real cloudflare-worker/worker.js as an ES module with a stubbed
    fetch() and drives every published edge path through it, so a path the panel
    publishes but the Worker refuses to proxy (the classic "Worker gives an
-   error" report) fails here instead of in a user's client. The Worker also
-   fronts the whole panel, so the same run checks that pages, the API, uploads,
-   redirects and the panel's own WebSockets survive the hop.
+   error" report) fails here instead of in a user's client.
 
    Run:  node tests/worker_smoke.mjs                                      */
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
@@ -48,17 +46,12 @@ globalThis.fetch = async (input) => {
   if (upstreamFails) throw new TypeError('network unreachable');
   const upgrade = (request.headers.get('upgrade') || '').toLowerCase() === 'websocket';
   if (upgrade) return { status: 101, webSocket: { fake: true }, headers: new Headers() };
-  // The panel redirects / → /login; an absolute form of that redirect must not
-  // send a browser back to the (blocked) origin address.
-  if (new URL(request.url).pathname === '/moved') {
-    return new Response(null, { status: 303, headers: { location: ORIGIN + '/login?next=%2F' } });
-  }
   return new Response('{"ok":true,"service":"nexus-python"}', { status: 200 });
 };
 
-const call = (path, { env = { NEXUS_ORIGIN: ORIGIN }, headers = {}, origin, method, body } = {}) => {
+const call = (path, { env = { NEXUS_ORIGIN: ORIGIN }, headers = {}, origin } = {}) => {
   seen.length = 0;
-  const request = new Request((origin || EDGE) + path, { method, body, headers });
+  const request = new Request((origin || EDGE) + path, { headers });
   return worker.fetch(request, env, {});
 };
 
@@ -133,7 +126,6 @@ for (const path of ADVERTISED) {
   check(unknown.status === 404, 'an unknown path should be 404');
   const openProxy = await call('/https://example.com', { headers: ws });
   check(openProxy.status === 404, 'the Worker must never act as an open relay');
-  check(seen.length === 0, 'a refused request must never reach the origin');
 }
 
 // ---------------------------------------------------------- host allow-list
@@ -167,56 +159,6 @@ for (const path of ADVERTISED) {
 {
   const legacy = await call('/health', { env: { ZEUS_ORIGIN: ORIGIN } });
   check(legacy.status === 200, 'the legacy ZEUS_ORIGIN name must still work');
-}
-
-// ------------------------------------------------------------------- the panel
-// The Worker is what a filtered client can actually reach, so the panel has to
-// live behind it too: pages, the API, subscription and portal links, uploads,
-// redirects and the panel's own WebSockets all ride the same hop.
-{
-  const home = await call('/');
-  const forwarded = seen[0];
-  check(home.status === 200, 'the panel root should be proxied');
-  check(Boolean(forwarded) && forwarded.url === ORIGIN + '/', 'the panel root must reach the origin root');
-  check(forwarded && forwarded.headers.get('x-forwarded-host') === 'nexus-edge.example.workers.dev',
-    'x-forwarded-host must name the Worker, or the panel builds blocked subscription links');
-  check(forwarded && forwarded.headers.get('x-forwarded-proto') === 'https', 'the panel hop must be https');
-  check(forwarded && !forwarded.headers.get('cf-connecting-ip'), 'Cloudflare internals must not leak to the origin');
-
-  const api = await call('/api/system/state?limit=5');
-  const apiRequest = seen[0];
-  check(Boolean(apiRequest) && apiRequest.url === ORIGIN + '/api/system/state?limit=5',
-    'panel API calls must keep their path and query');
-  check(apiRequest && apiRequest.redirect === 'manual',
-    'origin redirects must be handed to the browser, not followed here');
-
-  // A POST body is what the panel uses for every save and upload.
-  const post = await call('/api/settings', {
-    method: 'POST',
-    body: 'key=value',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', 'cf-connecting-ip': '203.0.113.7' },
-  });
-  const postRequest = seen[0];
-  check(post.status === 200, 'a panel POST should be proxied');
-  check(Boolean(postRequest) && postRequest.method === 'POST', 'a panel POST must stay a POST');
-  check(postRequest && postRequest.headers.get('x-forwarded-for') === '203.0.113.7',
-    'the client address must reach the origin on panel requests');
-  check(Boolean(postRequest) && (postRequest.headers.get('content-type') || '').includes('form-urlencoded'),
-    'the panel POST body must survive the hop');
-
-  // The panel's own WebSockets (WEB proxy socket, live status).
-  const socket = await call('/api/v1/socket', { headers: ws });
-  check(socket.status === 101, 'a same-origin panel WebSocket should be proxied');
-
-  // A redirect that names the origin must be rewritten to the Worker host.
-  const moved = await call('/moved');
-  check(moved.status === 303, 'a panel redirect must stay a redirect');
-  check(moved.headers.get('location') === 'https://nexus-edge.example.workers.dev/login?next=%2F',
-    'an absolute redirect to the origin must be rewritten to the Worker host');
-
-  // A relative redirect is already correct: the browser resolves it here.
-  const missingOrigin = await call('/', { env: {} });
-  check(missingOrigin.status === 503, 'the panel without an origin must be 503');
 }
 
 // ------------------------------------------------------- Telegram Web prefix
@@ -255,4 +197,4 @@ if (failures.length) {
   failures.forEach((line) => console.error(' -', line));
   process.exit(1);
 }
-console.log(`OK — worker proxied the panel plus ${ADVERTISED.length} edge paths, ${failures.length} failures`);
+console.log(`OK — worker routed ${ADVERTISED.length} edge paths, ${failures.length} failures`);

@@ -226,9 +226,6 @@ def test_a_subscription_can_be_limited_to_one_location():
     edge.save_source({'kind': 'ip', 'provider': 'cloudflare', 'location': 'de', 'host': 'de.example.com'}, '')
     edge.save_source({'kind': 'domain', 'host': 'nl.example.com', 'location': 'nl'}, '')
     catalog.sync('https://panel.example.com', None)
-    # Strict manual selection: publish what the scan found before rendering, the
-    # way an admin ticking «افزودن انتخاب‌شدهها» would.
-    catalog.select([n['name'] for n in catalog.list() if n['kind'] in ('cloudflare', 'edge')])
     upsert('panel-direct', 'railway', 'panel.example.com', 443, True, 'panel.example.com', 'panel.example.com', 'local', {})
     user = create_user(UserCreate(username='geo', protocol='all'))
     everywhere = render(user, 'https://panel.example.com', 'all')
