@@ -224,13 +224,18 @@ def test_guide_reports_real_state_and_a_next_step():
     store.set('cloudflare_worker_url', '')
     state = client.get('/api/guide', headers=h()).json()
     steps = {item['id']: item for item in state['steps']}
-    assert set(steps) == {'worker', 'locations', 'nodes', 'ping', 'users', 'scope', 'share', 'brand'}
+    assert set(steps) == {'worker', 'locations', 'nodes', 'ping', 'users', 'scope', 'share',
+                          'telegram', 'brand'}
     assert steps['nodes']['done'] is True          # nodes were seeded
     assert steps['ping']['done'] is True           # and all three carry a latency
     assert steps['users']['done'] is False         # no user exists yet
     assert steps['worker']['done'] is False        # nor a Worker URL
     assert state['next'] == 'worker'               # the first thing still missing
     assert state['tips']['users']['items']
+    # The Telegram proxies are a step of their own: every one of the three is a
+    # switch, and the step turns itself off again when none of them is on.
+    assert steps['telegram']['done'] is False
+    assert state['tips']['telegram']['items']
     assert state['catalog_total'] == 3
 
     # The guide advances by itself as the deployment changes: no checklist state

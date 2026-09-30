@@ -7,6 +7,7 @@ the generic detector and of the auto-detected raw TCP endpoint that turns Realit
 on for a VPS with no configuration at all.
 """
 import os
+from pathlib import Path
 
 import pytest
 
@@ -117,6 +118,34 @@ def test_unknown_host_falls_back_to_the_local_platform(clean_env):
     assert runtime.host() is None
     assert runtime.public_base() is None
     assert runtime.info()['host'] is None
+
+
+def test_the_image_ships_every_binary_the_panel_looks_for():
+    """A binary the build stage installs but never copies into the runtime stage.
+
+    The build still succeeds, every test that renders a config still passes, and
+    the feature that needs that binary quietly switches itself off at boot —
+    which is precisely how the WEB relay's own binary was missed once. The image
+    is the only place it matters, so the Dockerfile is what is checked: each
+    engine is installed into ``/usr/local/bin`` in the ``engines`` stage and must
+    be copied into the runtime stage and made executable there.
+    """
+    from app.config import settings
+
+    text = (Path(__file__).resolve().parents[1] / 'Dockerfile').read_text(encoding='utf-8')
+    # The stages are what make this subtle: a path can appear anywhere in the
+    # file and still be absent from the image a client runs.
+    runtime_stage = text.split('FROM python:3.12-slim', 1)[1]
+    # The line that makes the engines executable in the image, which is separate
+    # from the COPY that brings them in (a copied file keeps the build stage's
+    # mode only by accident).
+    chmod = [line for line in text.splitlines() if 'chmod 0755' in line]
+    assert chmod, 'the image must make its engines executable'
+    for name in (settings.xray_binary, settings.singbox_binary, settings.mihomo_binary,
+                 settings.mtg_binary, settings.webrelay_binary):
+        assert name.startswith('/usr/local/bin/'), name
+        assert f' {name} {name}' in runtime_stage, f'the runtime stage never copies {name}'
+        assert f' {name}' in chmod[-1], f'{name} must be executable in the image'
 
 
 def test_data_dir_is_always_writable(clean_env, tmp_path):

@@ -74,7 +74,7 @@ process.on('unhandledRejection', (error) => failures.push(`unhandled: ${error.me
 // ES-module syntax in .js files), so this needs no build step and no copy.
 const BASE = new URL('../static/js/', import.meta.url);
 const mods = ['core', 'ui', 'session', 'api', 'store', 'pwa', 'views/dashboard', 'views/nodes', 'views/users',
-  'views/system', 'views/customize', 'views/tools', 'views/advanced', 'views/guide'];
+  'views/system', 'views/customize', 'views/tools', 'views/telegram', 'views/advanced', 'views/guide'];
 const loaded = {};
 for (const name of mods) {
   loaded[name] = await import(new URL(`${name}.js`, BASE));
@@ -90,9 +90,9 @@ const checks = [
   [loaded.ui.Charts.bars !== undefined && loaded.ui.Charts.area !== undefined, 'Charts API'],
   [typeof loaded.session.SessionManager === 'function', 'SessionManager'],
   [typeof loaded.api.ApiClient === 'function', 'ApiClient'],
-  [loaded.store.SECTIONS.length === 8, 'SECTIONS'],
+  [loaded.store.SECTIONS.length === 10, 'SECTIONS'],
   [loaded.store.SECTIONS.map((item) => item.id).join(',') ===
-    'dashboard,users,nodes,cloudflare,tools,customize,advanced,settings', 'SECTIONS order'],
+    'dashboard,users,subs,nodes,cloudflare,tools,telegram,customize,advanced,settings', 'SECTIONS order'],
   // The sidebar is five collapsible groups, and every section belongs to one of
   // them — a section left out of a group would be unreachable in the UI.
   [loaded.store.NAV_GROUPS.length === 5, 'nav groups'],
@@ -110,11 +110,21 @@ const checks = [
   [typeof loaded['views/users'].UsersView === 'function', 'UsersView'],
   [typeof loaded['views/system'].CloudflareView === 'function', 'CloudflareView'],
   [typeof loaded['views/system'].CloudflareView.prototype.pingCell === 'function', 'location ping verdict'],
+  [typeof loaded['views/system'].CloudflareView.prototype.geoCell === 'function', 'measured-country column'],
+  [typeof loaded['views/system'].CloudflareView.prototype.detectGeo === 'function', 'country detection action'],
+  [typeof loaded['views/nodes'].NodesView.prototype.geoBadge === 'function', 'node country badge'],
   [typeof loaded['views/system'].SettingsView === 'function', 'SettingsView'],
   [typeof loaded['views/customize'].CustomizeView === 'function', 'CustomizeView'],
   [typeof loaded['views/customize'].CustomizeView.prototype.load === 'function', 'customization loader'],
   [typeof loaded['views/tools'].ToolsView === 'function', 'ToolsView'],
   [typeof loaded['views/tools'].ToolsView.prototype.scan === 'function', 'CDN scanner action'],
+  [typeof loaded['views/tools'].ToolsView.prototype.renderClientIp === 'function', 'real client-ip card'],
+  [typeof loaded['views/tools'].ToolsView.prototype.saveClientIp === 'function', 'trusted-proxy save'],
+  [typeof loaded['views/telegram'].TelegramView === 'function', 'TelegramView'],
+  [typeof loaded['views/telegram'].TelegramView.prototype.load === 'function', 'telegram loader'],
+  [typeof loaded['views/telegram'].TelegramView.prototype.rotate === 'function', 'mtproto secret rotation'],
+  [typeof loaded['views/telegram'].TelegramView.prototype.probe === 'function', 'telegram web probe'],
+  [typeof loaded['views/telegram'].TelegramView.prototype.payload === 'function', 'telegram form payload'],
   [typeof loaded['views/advanced'].AdvancedView === 'function', 'AdvancedView'],
   [typeof loaded['views/advanced'].AdvancedView.prototype.saveHysteria === 'function', 'hysteria2 form'],
   [typeof loaded['views/guide'].GuideView === 'function', 'GuideView'],
@@ -129,8 +139,9 @@ const checks = [
   // bar — empty on every load.
   [(elements.get('navGroups')?.innerHTML.match(/class="nav-group[ "]/g) || []).length === 5,
     'the grouped navigation must render five groups'],
-  [(elements.get('navGroups')?.innerHTML.match(/data-section=/g) || []).length === 8,
+  [(elements.get('navGroups')?.innerHTML.match(/data-section=/g) || []).length === 10,
     'the grouped navigation must offer every section'],
+  [typeof window.nexus?.updatePanel === 'function', 'guarded GitHub update action'],
   [typeof window.nexus?.handleSessionLost === 'function', 'session recovery hook'],
 ];
 for (const [ok, label] of checks) {
@@ -153,6 +164,146 @@ try {
   window.nexus.applyBrand();
 } catch (error) {
   failures.push(`render path threw: ${error.message}`);
+}
+
+// The country a location really is: a Cloudflare range used to be labelled from
+// the range it came from, so a client showed a Canadian flag on an American
+// address. The panel must show the measured country next to the label, flag the
+// disagreement and offer to align it — never hide it.
+try {
+  const view = window.nexus.cloudflare;
+  window.nexus.store.set('edge', {
+    sources: [
+      { id: 'us', location: 'us', label: '🇺🇸 · آمریکا', kind: 'ip', provider: 'cloudflare',
+        host: 'worker.example.workers.dev', port: 443, enabled: 1, addresses: 2, nodes: 2,
+        healthy: 2, failed: 0, pending: 0, fastest_ms: 40, reason: '',
+        geo: { country: 'us', counts: { us: 2 }, measured: 2, total: 2, agree: true, flag: '🇺🇸', name: 'آمریکا' } },
+      { id: 'ca', location: 'ca', label: '🇨🇦 · کانادا', kind: 'ip', provider: 'cloudflare',
+        host: 'worker.example.workers.dev', port: 443, enabled: 1, addresses: 2, nodes: 2,
+        healthy: 2, failed: 0, pending: 0, fastest_ms: 55, reason: '',
+        geo: { country: 'us', counts: { us: 2 }, measured: 2, total: 2, agree: true, flag: '🇺🇸', name: 'آمریکا' } },
+      { id: 'unmeasured', location: 'nl', label: '🇳🇱 · هلند', kind: 'ip', provider: 'cloudflare',
+        host: 'worker.example.workers.dev', port: 443, enabled: 1, addresses: 1, nodes: 1,
+        healthy: 1, failed: 0, pending: 0, fastest_ms: 60, reason: '',
+        geo: { country: '', counts: {}, measured: 0, total: 1, agree: false, flag: '', name: '' } },
+      { id: 'split', location: 'au', label: '🇦🇺 · اقیانوسیه', kind: 'ip', provider: 'cloudflare',
+        host: 'worker.example.workers.dev', port: 443, enabled: 1, addresses: 2, nodes: 2,
+        healthy: 2, failed: 0, pending: 0, fastest_ms: 65, reason: '',
+        geo: { country: '', counts: { au: 1, gt: 1 }, measured: 2, total: 2, agree: false, flag: '', name: '' } },
+      { id: 'tunnel', location: 'de', label: '🇩🇪 · تانل آلمان', kind: 'domain', provider: 'domain',
+        host: 'cdn16.qemitra.ir', port: 30524, enabled: 1, addresses: 1, nodes: 1,
+        healthy: 1, failed: 0, pending: 0, fastest_ms: 70, reason: '',
+        geo: { country: '', counts: {}, measured: 0, total: 0, agree: false, flag: '', name: '' } },
+    ],
+    nodes: [{ name: 'us-cloudflare-01', enabled: 1, source_id: 'us' }],
+    locations: ['us', 'ca', 'nl', 'de'],
+    geo: { enabled: true, known: 4, answered: 4, countries: ['us'], updated_at: 0, setting_on: true },
+    runtime: {}, providers: [], probing: {},
+  });
+  const host = elementFor('edgeSources');
+  host.innerHTML = '';
+  view.renderEdge();
+  const html = host.innerHTML;
+  if (!html.includes('🇺🇸')) failures.push('the measured country must be shown in the locations table');
+  if (!html.includes('اندازه‌گیری نشده')) failures.push('an unmeasured location must say so instead of guessing');
+  // A range whose addresses really are in different countries has no country:
+  // the label stays and the split is shown instead of a flag half of them would
+  // contradict.
+  if (!html.includes('بدون اکثریت') || !html.includes('AU×')) {
+    failures.push('a split location must show «بدون اکثریت» with the countries it measured');
+  }
+  // Only the location whose label the data contradicts gets the align action.
+  if ((html.match(/data-edge="align"/g) || []).length !== 1) failures.push('exactly the mismatched location must offer «هم‌تراز»');
+  if (!html.includes('data-country="us"')) failures.push('the align action must carry the measured country');
+  if (html.includes('undefined')) failures.push('the locations table rendered undefined');
+  // And the tidy case (measured == label) offers no action at all.
+  if ((html.match(/data-id="us"/g) || []).length !== 3) failures.push('a matching location keeps only ping/toggle/delete');
+} catch (error) {
+  failures.push(`the measured-country column threw: ${error.message}`);
+}
+
+// «شخصی‌سازی» carries the switch that decides whether a location's country is
+// measured from its addresses or kept as typed.
+try {
+  const view = window.nexus.customize;
+  window.nexus.store.set('customization', {
+    portal_banner: '', support_url: 'https://t.me/miliconfig', app_name: 'NEXUS', accent: '#c9f24c',
+    accent_secondary: '#5fce62', flags: true, geo_lookup: true, default_format: 'auto',
+    default_max_configs: '', default_scope: 'all', scopes: [], core_formats: [],
+  });
+  view.render();
+  if (!String(elements.get('czTag').innerHTML).includes('اندازه‌گیری‌شده')) {
+    failures.push('the customization tag must name the source of the country labels');
+  }
+  if (!String(elements.get('czPreview').innerHTML).includes('اندازه‌گیری از آی‌پی')) {
+    failures.push('the customization preview must show where the country labels come from');
+  }
+  window.nexus.store.set('customization', {
+    portal_banner: '', support_url: '', app_name: 'NEXUS', accent: '', accent_secondary: '',
+    flags: true, geo_lookup: false, default_format: 'auto', default_max_configs: '',
+    default_scope: 'all', scopes: [], core_formats: [],
+  });
+  view.render();
+  if (!String(elements.get('czTag').innerHTML).includes('برچسب دستی')) {
+    failures.push('a manual label must be visible in the customization tag');
+  }
+  if (!String(elements.get('czPreview').innerHTML).includes('برچسب دستی')) {
+    failures.push('a manual label must be visible in the customization preview');
+  }
+} catch (error) {
+  failures.push(`the geo switch threw: ${error.message}`);
+}
+
+// The address the panel acts on must never be a header the client wrote. The
+// tools tab renders the resolver's own verdict — the address it settled on, the
+// raw TCP peer, the chain it did not believe, and why — so a wrong trust list is
+// visible instead of being an invisible decision nobody can correct.
+try {
+  const view = window.nexus.tools;
+  view.renderClientIp({
+    ip: '198.51.100.7', peer: '10.0.0.9', source: 'forwarded', cloudflare: false,
+    trusted_peer: true, chain: ['9.9.9.9', '198.51.100.7', '10.0.0.1'], spoofed: true,
+    trust_cdn_headers: true, trusted_proxy_cidrs: '', default_trusted: ['127.0.0.0/8'],
+    cloudflare_ranges: 22,
+  });
+  const out = String(elements.get('tlIpOut')?.innerHTML || '');
+  const stats = String(elements.get('tlIpStats')?.innerHTML || '');
+  if (!out.includes('198.51.100.7')) failures.push('the client-ip card must show the address the panel acts on');
+  if (!out.includes('10.0.0.9')) failures.push('the client-ip card must show the raw TCP peer');
+  if (!out.includes('9.9.9.9')) failures.push('the client-ip card must show the hop it refused to believe');
+  if (!stats.includes('198.51.100.7')) failures.push('the client-ip summary must show the resolved address');
+  if (!String(elements.get('tlIpTag')?.innerHTML || '').includes('جعلی')) {
+    failures.push('an ignored forged hop must be labelled in the panel');
+  }
+  if (out.includes('undefined')) failures.push('the client-ip card rendered undefined');
+  // Turning header trust off is reported as the socket peer, not as a blank.
+  view.renderClientIp({
+    ip: '10.0.0.9', peer: '10.0.0.9', source: 'peer', cloudflare: false, trusted_peer: true,
+    chain: ['203.0.113.9'], spoofed: true, trust_cdn_headers: false,
+    trusted_proxy_cidrs: '203.0.113.0/24', default_trusted: [], cloudflare_ranges: 22,
+  });
+  if (!String(elements.get('tlIpOut')?.innerHTML || '').includes('خاموش')) {
+    failures.push('the client-ip card must report the trust switch as off');
+  }
+} catch (error) {
+  failures.push(`the client-ip card threw: ${error.message}`);
+}
+
+// A node whose address sits elsewhere shows a warning badge rather than a flag
+// that contradicts its own IP.
+try {
+  const node = { name: 'ca-cloudflare-01', kind: 'cloudflare', server: '104.24.0.5', port: 443,
+    location: 'ca', geo: { country: 'us', declared: 'ca', measured: true } };
+  const badge = window.nexus.nodes.geoBadge(node);
+  if (!badge.includes('IP: US')) failures.push('a node whose address is elsewhere must carry the country badge');
+  if (window.nexus.nodes.geoBadge({ name: 'us-cf-01', location: 'us', geo: { country: 'us', measured: true } }) !== '') {
+    failures.push('a matching node must not carry the badge');
+  }
+  if (window.nexus.nodes.geoBadge({ name: 'x', location: 'de', geo: {} }) !== '') {
+    failures.push('an unmeasured node must not carry the badge');
+  }
+} catch (error) {
+  failures.push(`the node country badge threw: ${error.message}`);
 }
 
 // The protocol multi-select must build a chip per catalog entry with no DOM, and
@@ -348,12 +499,20 @@ try {
       { id: 'nodes', title: 'کاتالوگ نود', hint: 'Sync بزنید', detail: '۳ نود فعال', done: true, section: 'nodes' },
     ],
     links: { smart: 'https://panel.example.com/sub/1?target=auto', portal: 'https://panel.example.com/portal/1', username: 'demo' },
+    support: 'https://t.me/miliconfig',
   });
   window.nexus.guide.render();
   window.nexus.guide.renderChip();
   window.nexus.guide.toggle(false);
   const state = window.nexus.store.get('guide');
   if (!state || state.steps.length !== 2) failures.push('guide state must survive a render');
+  // The support channel: on a phone this drawer is the only place the link is
+  // reachable, so it must survive every guide render.
+  const drawer = document.querySelector('#guideBody').innerHTML;
+  if (!drawer.includes('href="https://t.me/miliconfig"')) failures.push('the guide must offer the support channel');
+  window.nexus.store.set('guide', { score: 0, tip: {}, steps: [], support: 'javascript:alert(1)' });
+  window.nexus.guide.render();
+  if (document.querySelector('#guideBody').innerHTML.includes('javascript:')) failures.push('the guide must not link a non-http support value');
 } catch (error) {
   failures.push(`guide threw: ${error.message}`);
 }
@@ -416,6 +575,134 @@ try {
   globalThis.fetch = realFetch;
 } catch (error) {
   failures.push(`api client threw: ${error.message}`);
+}
+
+// The second engines (AnyTLS / TUIC). One payload drives the whole card: the rows
+// are built from `catalog`, the engines from `engines`, and the save button
+// rebuilds its request from that same list. When the server nested that status
+// one level down, the card painted «هیچ پروتکلی منتشر نشده» and the save posted an
+// empty profile map — the switch looked live and did nothing.
+try {
+  const view = window.nexus.advanced;
+  const payload = {
+    success: true, enabled: true, host: '203.0.113.10', port_host: '203.0.113.10',
+    tcp: true, udp: false, sni: 'www.cloudflare.com', published: ['anytls'],
+    catalog: [
+      { id: 'anytls', protocol: 'anytls', tag: 'AnyTLS · TLS', note: 'ضد DPI', needs: 'tcp',
+        port: 8444, engine: 'singbox', enabled: true, reachable: true, running: true,
+        published: true, unknown: false, reason: '' },
+      { id: 'tuic', protocol: 'tuic', tag: 'TUIC v5 · QUIC', note: 'روی QUIC', needs: 'udp',
+        port: 8445, engine: 'mihomo', enabled: true, reachable: false, running: false,
+        published: false, unknown: false, reason: 'این پلتفرم پورت UDP نمی‌دهد' },
+    ],
+    engines: [
+      { id: 'singbox', label: 'sing-box', binary: '/usr/local/bin/sing-box', installed: true,
+        running: true, pid: 12, profiles: ['anytls'], error: '' },
+      { id: 'mihomo', label: 'mihomo', binary: '/usr/local/bin/mihomo', installed: true,
+        running: false, pid: null, profiles: [], error: '' },
+    ],
+    notes: ['پورت UDP در دسترس نیست؛ TUIC روی VPS منتشر می‌شود.'],
+    profiles: [], counts: { enabled: 2, published: 1, engines: 1 },
+  };
+  window.nexus.store.set('cores', payload);
+  view.renderCores();
+  const rows = String(elements.get('coProfiles')?.innerHTML || '');
+  if (!rows.includes('AnyTLS') || !rows.includes('TUIC')) {
+    failures.push('the cores card must list every hosted protocol');
+  }
+  if ((rows.match(/data-co-toggle=/g) || []).length !== 2) {
+    failures.push('every hosted protocol needs its own switch in the cores card');
+  }
+  if (!rows.includes('این پلتفرم پورت UDP نمی‌دهد')) failures.push('a withheld protocol must show why');
+  if (!rows.includes('منتشرشده')) failures.push('a published protocol must be labelled as such');
+  if (rows.includes('undefined')) failures.push('the cores card rendered undefined');
+  const engineRows = String(elements.get('coEngines')?.innerHTML || '');
+  if (!engineRows.includes('sing-box') || !engineRows.includes('mihomo')) {
+    failures.push('the cores card must show both engines');
+  }
+  if (!engineRows.includes('Running')) failures.push('a running engine must say so');
+
+  const realApi = window.nexus.api;
+  let sent = null;
+  window.nexus.api = { get: async () => payload, post: async (url, body) => { sent = { url, body }; return payload; } };
+  // The reload that follows a save is offline in this test; the request itself is
+  // what matters here.
+  await view.saveCores().catch(() => {});
+  window.nexus.api = realApi;
+  if (!sent || sent.url !== '/api/cores') failures.push('the cores save must post to /api/cores');
+  if (sent && Object.keys(sent.body.profiles || {}).join(',') !== 'anytls,tuic') {
+    failures.push('the cores save must send one profile entry per hosted protocol');
+  }
+  if (sent && (sent.body.profiles.anytls.port !== 8444 || sent.body.profiles.anytls.engine !== 'singbox')) {
+    failures.push('the cores save must carry the port and engine the card is showing');
+  }
+} catch (error) {
+  failures.push(`the cores card threw: ${error.message}`);
+}
+
+// The automatic-configuration card. A deploy with no admin in the loop must leave
+// a working panel, so the card has to say what the boot pass switched on, which
+// Railway TCP proxies really exist — their public port is random and is the one a
+// link has to carry — and, for everything that stayed off, what is missing.
+try {
+  const view = window.nexus.advanced;
+  window.nexus.store.set('autoconfig', {
+    allowed: true, done: true, ran_at: Math.floor(Date.now() / 1000) - 120,
+    applied: ['webrelay', 'railway'], candidates: [],
+    railway: {
+      api: { configured: true, missing: [], endpoint: 'https://backboard.railway.com/graphql/v2' },
+      done: true, ran_at: 1, created: [8443, 8446],
+      proxies: { catalog: [
+        { id: 'reality', label: 'Reality (مسیر مستقیم)', port: 8443, enabled: true, proxied: true,
+          public_host: 'roundhouse.proxy.rlwy.net', public_port: 23177, switch: null },
+        { id: 'mtproto', label: 'MTProto', port: 8446, enabled: true, proxied: false,
+          public_host: '', public_port: 0, switch: 'tg_mtproto_enabled' },
+        { id: 'http', label: 'وب‌پروکسی HTTP', port: 8448, enabled: false, proxied: false,
+          public_host: '', public_port: 0, switch: 'tg_web_http_enabled' },
+      ], count: 1 },
+    },
+  });
+  view.renderAuto();
+  const rows = String(elements.get('adAutoCandidates')?.innerHTML || '');
+  // The forwarded port is the one a link carries, and it is not the listen port:
+  // Railway allocates it at random, so showing 8,443 here would be a wrong link.
+  const forwarded = loaded.core.Fmt.num(23177);
+  const listen = loaded.core.Fmt.num(8443);
+  if (!rows.includes(`roundhouse.proxy.rlwy.net:${forwarded}`)) {
+    failures.push('the automatic-configuration card must show the public port a link is built from');
+  }
+  if (forwarded === listen) failures.push('the forwarded port must be distinguishable from the listen port');
+  if (!rows.includes('بدون فوروارد') || !rows.includes('خاموش')) {
+    failures.push('a raw-port capability with no proxy must say so instead of looking published');
+  }
+  if (rows.includes('undefined')) failures.push('the automatic-configuration card rendered undefined');
+  const info = String(elements.get('adAutoInfo')?.innerHTML || '');
+  if (!info.includes('webrelay')) failures.push('the card must name what the boot pass switched on');
+  if (String(elements.get('adAutoTag')?.innerHTML || '').includes('اجرا نشده')) {
+    failures.push('a pass that ran must not read as «اجرا نشده»');
+  }
+  // A host without a Railway token: nothing can be created, and the card names
+  // the variables rather than pretending the ports exist.
+  window.nexus.store.set('autoconfig', {
+    allowed: true, done: false, ran_at: 0, applied: [], candidates: [],
+    railway: { api: { configured: false, missing: ['RAILWAY_API_TOKEN', 'RAILWAY_ENVIRONMENT_ID'],
+      guide: ['توکن را با نام RAILWAY_API_TOKEN در Variables ذخیره کنید'] },
+      done: false, ran_at: 0, created: [], proxies: { catalog: [], count: 0 } },
+  });
+  view.renderAuto();
+  if (!String(elements.get('adAutoInfo')?.innerHTML || '').includes('RAILWAY_API_TOKEN')) {
+    failures.push('a host without a Railway token must name the missing variables');
+  }
+  // Naming a variable is not the same as saying where its value comes from: an
+  // admin with only the project id has to be told the token is what unblocks it.
+  if (!String(elements.get('adAutoInfo')?.innerHTML || '').includes('مقدارها از کجا')) {
+    failures.push('the card must say where each Railway value comes from, not only its name');
+  }
+  if (!String(elements.get('adAutoCandidates')?.innerHTML || '').includes('empty')) {
+    failures.push('an empty port catalog must render an empty state');
+  }
+} catch (error) {
+  failures.push(`the automatic-configuration card threw: ${error.message}`);
 }
 
 await new Promise((resolve) => setTimeout(resolve, 50));

@@ -9,6 +9,14 @@
    ========================================================================== */
 import { $, $$, ico, esc, Fmt, bindCopyButtons } from '../core.js';
 
+// Which rule answered «this is the client's address» — the panel shows it so a
+// wrong trust decision is visible instead of looking like a broken deployment.
+const SOURCE_LABELS = {
+  cloudflare: 'هدر معتبر کلودفلر (CF-Connecting-IP)',
+  forwarded: 'زنجیرهٔ پروکسی مورداعتماد',
+  peer: 'آدرس مستقیم اتصال',
+};
+
 export class ToolsView {
   constructor(app) {
     this.app = app;
@@ -30,7 +38,61 @@ export class ToolsView {
     } catch (error) {
       if (!error.unauthorized) throw error;
     }
+    try {
+      this.renderClientIp(await this.api.get('/api/net/client-ip'));
+    } catch (error) {
+      if (!error.unauthorized) throw error;
+    }
     this.render();
+  }
+
+  /* ---------------------------------------------------------- real client IP */
+  renderClientIp(data) {
+    if (!data) return;
+    const trust = $('#tlIpTrust');
+    if (trust) trust.classList.toggle('on', data.trust_cdn_headers !== false);
+    const cidrs = $('#tlIpCidrs');
+    if (cidrs && document.activeElement !== cidrs) cidrs.value = data.trusted_proxy_cidrs || '';
+    const tag = $('#tlIpTag');
+    if (tag) {
+      tag.className = `pill ${data.spoofed ? 'warn' : 'ok'}`;
+      tag.innerHTML = data.spoofed ? '<i class="dot"></i>هدر جعلی نادیده گرفته شد' : '<i class="dot"></i>آدرس تأییدشده';
+    }
+    const stats = $('#tlIpStats');
+    if (stats) {
+      stats.innerHTML = `
+        <div class="stat glass a-ok"><div class="top"><span class="lbl">آدرسی که پنل می‌بیند</span><span class="ico">${ico('globe', 15)}</span></div>
+          <div class="val" dir="ltr" style="font-size:15px">${esc(data.ip || '—')}</div><div class="foot">${esc(SOURCE_LABELS[data.source] || data.source || '')}</div></div>
+        <div class="stat glass"><div class="top"><span class="lbl">همسایهٔ مستقیم TCP</span><span class="ico">${ico('server', 15)}</span></div>
+          <div class="val" dir="ltr" style="font-size:15px">${esc(data.peer || '—')}</div><div class="foot">${data.trusted_peer ? 'پروکسی مورداعتماد' : 'اتصال بی‌پروکسی'}</div></div>
+        <div class="stat glass a-violet"><div class="top"><span class="lbl">زنجیرهٔ هدرها</span><span class="ico">${ico('link', 15)}</span></div>
+          <div class="val">${Fmt.num((data.chain || []).length)}</div><div class="foot">${data.cloudflare ? 'کلودفلر شناسایی شد' : `${Fmt.num(data.cloudflare_ranges || 0)} رنج کلودفلر`}</div></div>`;
+    }
+    const out = $('#tlIpOut');
+    if (out) {
+      const chain = data.chain || [];
+      out.innerHTML = `
+        <div class="kv-line"><span>آدرس مؤثر</span><b dir="ltr">${esc(data.ip || '—')}</b></div>
+        <div class="kv-line"><span>مبنای تصمیم</span><b>${esc(SOURCE_LABELS[data.source] || data.source || '—')}</b></div>
+        <div class="kv-line"><span>همسایهٔ مستقیم TCP</span><b dir="ltr">${esc(data.peer || '—')}</b></div>
+        ${chain.length ? `<div class="kv-line"><span>X-Forwarded-For</span><b dir="ltr" style="white-space:normal">${esc(chain.join(' ← '))}</b></div>` : ''}
+        <div class="kv-line"><span>اعتماد به هدرهای CDN</span><b>${data.trust_cdn_headers === false ? 'خاموش' : 'روشن'}</b></div>`;
+    }
+  }
+
+  async refreshClientIp() {
+    this.renderClientIp(await this.api.get('/api/net/client-ip'));
+    this.toasts.ok('دوباره بررسی شد');
+  }
+
+  async saveClientIp() {
+    const payload = {
+      trust_client_ip: $('#tlIpTrust')?.classList.contains('on') ? '1' : '0',
+      trusted_proxy_cidrs: $('#tlIpCidrs')?.value.trim() || '',
+    };
+    const data = await this.api.post('/api/net/client-ip', payload);
+    this.renderClientIp(data);
+    this.toasts.ok('ذخیره شد');
   }
 
   providers() {
@@ -249,5 +311,11 @@ export class ToolsView {
     if (parse) parse.onclick = () => this.app.safe(() => this.parse());
     const importBtn = $('#tlParseImport');
     if (importBtn) importBtn.onclick = () => this.app.safe(() => this.importLocations());
+    const ipTrust = $('#tlIpTrust');
+    if (ipTrust) ipTrust.onclick = () => ipTrust.classList.toggle('on');
+    const ipRefresh = $('#tlIpRefresh');
+    if (ipRefresh) ipRefresh.onclick = () => this.app.safe(() => this.refreshClientIp());
+    const ipSave = $('#tlIpSave');
+    if (ipSave) ipSave.onclick = () => this.app.safe(() => this.saveClientIp());
   }
 }

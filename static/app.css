@@ -162,6 +162,14 @@ nav{display:grid;gap:5px;position:relative;z-index:1}
 .clock-card .d{font-size:10.5px;color:var(--muted);text-align:center;margin-top:5px}
 .clock-card .z{display:flex;justify-content:space-between;font-size:10px;color:var(--muted-2);margin-top:8px;direction:ltr;font-family:var(--mono)}
 .online-pill{display:flex;align-items:center;gap:8px;font-size:11.5px;color:#a8bb9d;padding:9px 12px;border:1px solid var(--line);border-radius:14px;background:rgba(6,11,20,.4)}
+/* Which build of the panel is on screen — applyBrand() writes the name and
+   release into this line. */
+.brand-version{font-size:10px;color:var(--muted-2);text-align:center;direction:ltr;font-family:var(--mono);letter-spacing:.6px}
+/* The support channel, always one tap from the shell (and in the live guide on
+   phones, where .sidebar-bottom is hidden). */
+.support-pill{color:#d9f76e;border-color:rgba(201,242,76,.24);background:rgba(201,242,76,.07);transition:.22s var(--ease)}
+.support-pill:hover{color:#eaffc0;border-color:rgba(201,242,76,.5);background:rgba(201,242,76,.16)}
+.support-pill svg{flex:0 0 13px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 rgba(62,230,160,.6);animation:pulse 2.4s infinite}
 .dot.bad{background:var(--danger);box-shadow:none;animation:none}
 .dot.warn{background:var(--warn);box-shadow:none;animation:none}

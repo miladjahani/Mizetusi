@@ -17,6 +17,7 @@ self-contained capability an admin drives from one of the newer panel tabs:
 The router authenticates through the panel's own session, resolved lazily so this
 module can be imported by ``app.main`` without a circular import.
 """
+import asyncio
 import ipaddress
 import re
 import time
@@ -24,13 +25,22 @@ import urllib.parse
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app import autoconfig as auto_config
+from app import railway
+from app import self_update
+from app.core import clientip
+from app.cores import service as core_service
 from app.core.settings_store import store
 from app.db import execute
+from app import feedback as feedback_service
 from app.edge import packs as edge_packs
 from app.edge import sources as edge_sources
 from app.subscriptions import transports
 from app.subscriptions import scope as node_scope
 from app.subscriptions import flags as sub_flags
+from app.telegram import mtproto as tg_mtproto
+from app.telegram import service as tg_service
+from app.telegram import webrelay as tg_webrelay
 
 router = APIRouter()
 
@@ -64,6 +74,43 @@ def _flags_on():
     return (_setting('flags_enabled') or '1') != '0'
 
 
+# --------------------------------------------------------------- user feedback
+# The public half of this feature lives in ``app/main.py`` (the status window
+# posts to it). These are the admin's own three actions: read the inbox, mark a
+# note as read/done, and delete one. The count is also what a dashboard card
+# badges, so ``summary`` is returned on every list.
+@router.get('/api/feedback')
+def get_feedback(request: Request, status: str = '', limit: int = 200):
+    _auth(request)
+    return {'success': True, **feedback_service.summary(),
+            'kinds': [{'id': key, 'label': feedback_service.KIND_LABELS[key]}
+                      for key in feedback_service.KINDS],
+            'items': feedback_service.list_all(status=status, limit=limit)}
+
+
+@router.post('/api/feedback/{feedback_id}')
+async def update_feedback(request: Request, feedback_id: int):
+    _auth(request)
+    body = await _json_body(request)
+    try:
+        result = feedback_service.set_status(feedback_id, body.get('status'))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    _audit('feedback.status', f"#{feedback_id} → {result['status']}")
+    return {'success': True, **result, **feedback_service.summary()}
+
+
+@router.delete('/api/feedback/{feedback_id}')
+def delete_feedback(request: Request, feedback_id: int):
+    _auth(request)
+    try:
+        result = feedback_service.remove(feedback_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    _audit('feedback.delete', f'#{feedback_id}')
+    return {'success': True, **result, **feedback_service.summary()}
+
+
 async def _measure(request, source_ids):
     """Sync and ping the locations a pack install / import just created.
 
@@ -75,8 +122,14 @@ async def _measure(request, source_ids):
     if not ids:
         return {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': 0}
     main = _main()
+    # A pack/import writes locations from ranges and remarks, so their countries
+    # are guesses until the addresses themselves are measured — measure them
+    # before publishing, then correct any label the data contradicts (a Canadian
+    # flag on an American address is what users see otherwise).
+    geo_result = await main._edge_geo(limit=16)
     main._edge_sync(request)
-    totals = {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': len(ids), 'results': []}
+    totals = {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': len(ids),
+              'geo': geo_result, 'results': []}
     for source_id in ids:
         result = await main._ping_edge_nodes(source_id=source_id, timeout=2.5, limit=40)
         totals['probed'] += result['probed']
@@ -95,6 +148,9 @@ def _customization():
         'portal_banner': _setting('portal_banner') or '',
         'support_url': _setting('support_url') or '',
         'flags': _flags_on(),
+        # Whether a location's country is measured from its addresses (and its
+        # label corrected when the data disagrees).
+        'geo_lookup': (_setting('geo_lookup') or '1') != '0',
         'default_format': (_setting('default_format') or 'auto').strip().lower(),
         'default_max_configs': _setting('default_max_configs') or '',
         'default_scope': node_scope.normalize(_setting('default_scope') or 'all'),
@@ -134,6 +190,10 @@ async def save_customization(request: Request):
         value = str(body['flags_enabled']).strip().lower()
         _set('flags_enabled', '0' if value in ('0', 'false', 'off', 'no') else '1')
         changed.append('flags_enabled')
+    if 'geo_lookup' in body:
+        value = str(body['geo_lookup']).strip().lower()
+        _set('geo_lookup', '0' if value in ('0', 'false', 'off', 'no') else '1')
+        changed.append('geo_lookup')
     if 'default_format' in body:
         value = str(body['default_format'] or 'auto').strip().lower()
         if value not in CORE_FORMATS:
@@ -470,6 +530,229 @@ async def _json_body(request):
     return body if isinstance(body, dict) else {}
 
 
+# ------------------------------------------------------------------ client ip
+def _trust_cdn_headers():
+    return (_setting('trust_client_ip') or '1') != '0'
+
+
+def _client_ip_state(request, state=None):
+    """What the panel believes this request's address is, and the evidence.
+
+    The panel renders every field — the raw peer, the forwarded chain and which
+    rule won — because a trust decision nobody can inspect is a trust decision
+    nobody can fix. The default trusted ranges are listed too, so it is obvious
+    that a same-host nginx or the platform's own proxy is already covered.
+    """
+    extra = _setting('trusted_proxy_cidrs') or ''
+    resolved = state or clientip.resolve(request, extra_trusted=extra,
+                                         trust_headers=_trust_cdn_headers())
+    return {
+        **resolved,
+        'trust_cdn_headers': _trust_cdn_headers(),
+        'trusted_proxy_cidrs': extra,
+        'default_trusted': list(clientip.DEFAULT_TRUSTED),
+        'cloudflare_ranges': len(clientip.CLOUDFLARE),
+    }
+
+
+@router.get('/api/net/client-ip')
+def get_client_ip(request: Request):
+    """The address behind the proxies, the way nginx ``real_ip`` resolves it."""
+    _auth(request)
+    return {'success': True, **_client_ip_state(request)}
+
+
+@router.post('/api/net/client-ip')
+async def save_client_ip(request: Request):
+    """Store the trusted-proxy rule (the panel's ``set_real_ip_from``).
+
+    An unusable CIDR is a 400 instead of a silently dropped token: an operator
+    who typed a range has to know whether it took effect.
+    """
+    _auth(request)
+    body = await _json_body(request)
+    changed = []
+    if 'trust_client_ip' in body:
+        value = str(body['trust_client_ip']).strip().lower()
+        _set('trust_client_ip', '0' if value in ('0', 'false', 'off', 'no') else '1')
+        changed.append('trust_client_ip')
+    if 'trusted_proxy_cidrs' in body:
+        raw = str(body['trusted_proxy_cidrs'] or '').strip()
+        unusable = clientip.invalid_cidrs(raw)
+        if unusable:
+            raise HTTPException(400, 'این مقدارها آی‌پی یا CIDR معتبر نیستند: ' + ', '.join(unusable[:6]))
+        _set('trusted_proxy_cidrs', raw)
+        changed.append('trusted_proxy_cidrs')
+    if changed:
+        _audit('settings.client_ip', ','.join(changed))
+    return {'success': True, 'changed': changed, **_client_ip_state(request)}
+
+
+# ------------------------------------------------------------------- telegram
+def _telegram_payload(request):
+    """The Telegram card's payload, absolute URLs included."""
+    return tg_service.payload(_main().public_base(request))
+
+
+@router.get('/api/telegram')
+def get_telegram(request: Request):
+    """The Telegram proxies: MTProto, the HTTP/SOCKS5 web proxy and Telegram Web.
+
+    One payload for all three because they are one card: each entry carries its
+    own switch, its own reason when it is not published, and every link it would
+    hand out — per user for the web proxies, so one leaked line is visible here.
+    """
+    _auth(request)
+    return _telegram_payload(request)
+
+
+@router.post('/api/telegram')
+async def save_telegram(request: Request):
+    """Store the switches and bring the listeners to exactly that state.
+
+    ``action`` picks between a save, a secret rotation (the old ``tg://`` link
+    stops working — that is what rotation is for) and a plain reconcile of the
+    processes. The listeners are reconciled before the answer goes out, so the
+    card shows what really came up rather than what was asked for.
+    """
+    _auth(request)
+    body = await _json_body(request)
+    action = str(body.get('action') or 'save').strip().lower()
+    if action == 'rotate':
+        secret = tg_mtproto.rotate_secret()
+        sync = await tg_service.reconcile()
+        _audit('telegram.rotate', 'mtproto secret reissued')
+        return {'success': True, 'secret': secret, 'sync': sync, **_telegram_payload(request)}
+    if action == 'rotate-webrelay':
+        # The WEB proxy's own secret: it lives inside every ``tg://webproxy`` link
+        # handed out, so rotating it is what revokes them — the switch state and
+        # every other setting stay exactly as they were.
+        secret = tg_webrelay.rotate_secret()
+        sync = await tg_service.reconcile()
+        _audit('telegram.rotate', 'webrelay secret reissued')
+        return {'success': True, 'secret': secret, 'sync': sync, **_telegram_payload(request)}
+    if action == 'probe-webrelay':
+        # «Does the WEB proxy really connect?» — the bridge page *and* the carrier
+        # socket it opens, which is the half a bound loopback port hides: the page
+        # can load perfectly while the socket is refused.
+        result = await tg_service.probe_webrelay()
+        _audit('telegram.probe', f"webrelay ok={result.get('ok')} "
+                                 f"socket={bool((result.get('socket') or {}).get('ok'))}")
+        return {'success': True, 'webrelay_probe': result, **_telegram_payload(request)}
+    if action == 'reload':
+        sync = await tg_service.reconcile()
+        _audit('telegram.reload', ' '.join(f"{name}:{'up' if item.get('running') else 'down'}"
+                                          for name, item in sync.items()))
+        return {'success': True, 'changed': [], 'sync': sync, **_telegram_payload(request)}
+    try:
+        changed = tg_service.save(body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    sync = await tg_service.reconcile()
+    if changed:
+        _audit('telegram.update', ','.join(changed))
+    return {'success': True, 'changed': changed, 'sync': sync, **_telegram_payload(request)}
+
+
+# --------------------------------------------------- automatic configuration
+@router.get('/api/system/autoconfig')
+def get_autoconfig(request: Request):
+    """What the boot pass did, and what is left for an admin to decide.
+
+    The panel shows this instead of an instruction manual: the Railway TCP proxies
+    that were created for the raw-port capabilities an admin enabled, and — for
+    every capability that is still off, the WEB proxy included — the one thing that
+    would have to exist first (or, for the WEB proxy, the reason it is a choice).
+    """
+    _auth(request)
+    return {'success': True, **auto_config.state()}
+
+
+@router.post('/api/system/autoconfig')
+async def run_autoconfig(request: Request):
+    """Run one half of the pass by hand.
+
+    ``action`` is ``switches`` (re-run the pass — it flips no switch of its own and
+    only writes its marker), ``railway`` (create the TCP proxies Railway needs and
+    learn their public ports) or ``all``. The
+    API calls block, so both run in a worker thread and the answer carries the
+    state the panel renders — the same shape the automatic boot pass leaves
+    behind, which is what makes a manual run auditable.
+    """
+    _auth(request)
+    body = await _json_body(request)
+    action = str(body.get('action') or 'all').strip().lower()
+    if action not in ('switches', 'railway', 'all'):
+        raise HTTPException(400, 'action باید switches، railway یا all باشد')
+    outcome = {}
+    if action in ('railway', 'all'):
+        if not railway.token():
+            raise HTTPException(400, 'برای این کار توکن API رِیلوی لازم است؛ RAILWAY_API_TOKEN را ست کنید')
+        outcome['railway'] = await asyncio.to_thread(auto_config.railway_ports, True)
+    if action in ('switches', 'all'):
+        switched = await asyncio.to_thread(auto_config.apply, True)
+        outcome['switches'] = switched
+    _audit('system.autoconfig', action)
+    return {'success': True, 'action': action, 'outcome': outcome, **auto_config.state()}
+
+
+@router.post('/api/telegram/probe')
+async def probe_telegram(request: Request):
+    """Fetch Telegram Web from this server and report what actually came back."""
+    _auth(request)
+    result = await tg_service.probe()
+    _audit('telegram.probe', f"status={result.get('status')} bytes={result.get('bytes')}")
+    return {'success': True, 'probe': result, **_telegram_payload(request)}
+
+
+# ---------------------------------------------------------------------- cores
+def _sync_summary(result):
+    """Just enough of a sync result to show on the card after saving."""
+    return {engine: {'running': bool(item.get('running')), 'profiles': item.get('profiles') or [],
+                     'reason': item.get('reason') or ''}
+            for engine, item in (result or {}).items()}
+
+
+@router.get('/api/cores')
+def get_cores(request: Request):
+    """The second engines: what each one serves and what is actually published."""
+    _auth(request)
+    return {'success': True, **core_service.catalog()}
+
+
+@router.post('/api/cores')
+async def save_cores(request: Request):
+    """Store the switch, public port and hosting engine of every hosted protocol.
+
+    The engines are reconciled before the answer goes out, so the panel shows the
+    real result of the change (a port the host cannot expose is reported as
+    withheld, not as published).
+    """
+    _auth(request)
+    body = await _json_body(request)
+    updates = dict(body.get('profiles') or {}) if isinstance(body.get('profiles'), dict) else {}
+    if 'sni' in body:
+        updates['sni'] = body['sni']
+    try:
+        changed = core_service.save(updates)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    result = await core_service.sync(force=True)
+    if changed:
+        _audit('cores.update', ','.join(changed))
+    return {'success': True, 'changed': changed, 'sync': _sync_summary(result), **core_service.catalog()}
+
+
+@router.post('/api/cores/reload')
+async def reload_cores(request: Request):
+    """Bring the engines to the state the settings ask for, right now."""
+    _auth(request)
+    result = await core_service.sync(force=True)
+    _audit('cores.reload', ' '.join(f"{engine}:{'up' if item.get('running') else 'down'}"
+                                    for engine, item in result.items()) or 'nothing enabled')
+    return {'success': True, 'sync': _sync_summary(result), **core_service.catalog()}
+
+
 # --------------------------------------------------------------------- scopes
 @router.get('/api/scopes')
 def get_scopes(request: Request, username: str = ''):
@@ -532,6 +815,11 @@ SECTION_TIPS = {
         'بستهٔ «کلودفلر — لوکیشن‌های چندگانه» با یک کلیک ۸ منطقهٔ واقعی می‌سازد.',
         'نود Hysteria2 تا وقتی هاست و رمز ذخیره و فعال نشود هیچ‌جا منتشر نمی‌شود.',
     ]},
+    'telegram': {'title': 'پروکسی تلگرام', 'items': [
+        'اگر کاربر فقط تلگرام می‌خواهد، لینک <b>tg://</b> را بدهید: در خود تلگرام اضافه می‌شود و نیازی به نصب کلاینت ندارد.',
+        'وب‌پروکسی HTTP/SOCKS5 همان «Custom Proxy» تلگرام دسکتاپ است و هر کاربر اعتبار جدا دارد.',
+        'web.telegram.org از همین دامنه باز می‌شود؛ اگر آی‌پی پنل بسته است، همین مسیر از دامنهٔ Worker هم کار می‌کند.',
+    ]},
     'settings': {'title': 'تنظیمات و امنیت', 'items': [
         'پیشوند برچسب و آدرس پایه را یک‌بار درست کنید تا همهٔ لینک‌ها تمیز باشند.',
         'با «ابطال همه نشست‌ها» هر دستگاه دیگری از پنل بیرون می‌آید.',
@@ -552,6 +840,10 @@ def _guide_state(request):
     users = list(main.list_users())
     active = [u for u in users if u.get('is_active')]
     scoped = [u for u in users if transports.user_scope(u) != node_scope.SCOPE_ALL]
+    # The Telegram proxies are their own step: they are the one thing a user asks
+    # for before anything else, and each of the three is a switch an admin has to
+    # turn on deliberately.
+    tg_counts = tg_service.counts()
     brand = main._brand()
     base = main.public_base(request)
     newest = active[0] if active else (users[0] if users else None)
@@ -580,6 +872,11 @@ def _guide_state(request):
          'hint': 'سابلینک هوشمند را بدهید یا پنجرهٔ وضعیت را برای کاربر باز کنید.',
          'detail': (f"{newest['username']} · {node_scope.label(transports.user_scope(newest))}" if newest else 'کاربری نیست'),
          'done': bool(active)},
+        {'id': 'telegram', 'title': 'پروکسی تلگرام (MTProto · وب‌پروکسی)', 'section': 'telegram',
+         'hint': 'اگر کاربر فقط تلگرام می‌خواهد، از این تب یک لینک tg://، وب‌پروکسی HTTP/SOCKS5 یا نسخهٔ وب بسازید.',
+         'detail': (f"{tg_counts['published']} منتشرشده از {tg_counts['enabled']} روشن"
+                    if tg_counts['enabled'] else 'هیچ‌کدام روشن نیست'),
+         'done': bool(tg_counts['enabled'])},
         {'id': 'brand', 'title': 'برند و پنجرهٔ وضعیت', 'section': 'customize',
          'hint': 'نام برنامه، بنر و لینک پشتیبانی را تنظیم کنید تا کاربر بداند کجاست.',
          'detail': brand.get('app_name') or 'NEXUS',
@@ -593,6 +890,9 @@ def _guide_state(request):
         links = {'smart': main._sub_url(base, token, main._user_target(newest)),
                  'portal': main._portal_url(base, token), 'username': newest['username']}
     return {'steps': steps, 'links': links, 'tips': SECTION_TIPS,
+            # The channel an admin (or an end user asking for a renewal) should
+            # reach: what the admin configured, else the built-in channel.
+            'support': brand.get('support_url') or '',
             'score': round(100 * sum(1 for step in steps if step['done']) / len(steps)),
             'next': next((step['id'] for step in steps if not step['done']), ''),
             'catalog_total': len(nodes), 'locations': locations}
@@ -607,3 +907,24 @@ def get_guide(request: Request, section: str = ''):
     state['section'] = wanted if wanted in SECTION_TIPS else 'dashboard'
     state['tip'] = SECTION_TIPS[state['section']]
     return state
+
+
+@router.get('/api/system/update')
+def get_update_status(request: Request, remote: bool = True):
+    """GitHub head, persistent-storage and deploy-provider preflight."""
+    _auth(request)
+    main = _main()
+    return {'success': True, **self_update.status(check_remote=remote),
+            'version': main.APP_VERSION, 'build': main.BUILD_TOKEN}
+
+
+@router.post('/api/system/update')
+def apply_update(request: Request):
+    """Back up first, then ask Railway/Render to deploy the latest GitHub commit."""
+    _auth(request)
+    result = self_update.apply()
+    if not result.get('ok'):
+        raise HTTPException(400, result.get('reason') or 'بروزرسانی انجام نشد')
+    _audit('system.update',
+           f"{result.get('provider', {}).get('id')} → {str(result.get('target_commit', ''))[:12]}")
+    return {'success': True, **result}

@@ -69,7 +69,10 @@
         <div class="z"><span id="clockUtc">UTC --:--</span><span id="clockUptime">UP 0s</span></div>
       </div>
       <div class="online-pill"><i class="dot" id="sysDot"></i><span id="sysText">در حال اتصال…</span></div>
+      <a class="online-pill support-pill" href="{{ brand.support_url }}" target="_blank" rel="noopener"
+         title="کانال پشتیبانی: {{ brand.support_url }}"><svg width="13" height="13"><use href="#i-link"/></svg><span>کانال پشتیبانی</span></a>
       <button class="logout" id="logout">خروج از حساب</button>
+      <div class="brand-version" id="brandVersion">—</div>
     </div>
   </aside>
 
@@ -84,7 +87,8 @@
         <span class="pill ok" id="livePill"><i class="dot"></i> زنده</span>
         <button class="pill" id="guidePill" title="راهنمای زنده">راهنما</button>
         <button class="tbtn" id="btnInstallBar" data-pwa-install="compact" title="نصب NEXUS روی این دستگاه">نصب برنامه</button>
-        <button class="icon-btn" id="btnRefresh" title="بروزرسانی"><svg><use href="#i-refresh"/></svg></button>
+        <button class="tbtn" id="btnPanelUpdate" title="دریافت و نصب آخرین نسخه از GitHub"><svg width="14" height="14"><use href="#i-download"/></svg> نسخه جدید</button>
+        <button class="icon-btn" id="btnRefresh" title="بروزرسانی داده‌ها"><svg><use href="#i-refresh"/></svg></button>
       </div>
     </header>
 
@@ -155,6 +159,13 @@
           <div id="recentLogs"></div>
         </div>
       </div>
+
+      <div class="panel glass" id="feedbackPanel">
+        <div class="panel-head"><div><h3>بازخورد کاربران</h3>
+          <p class="sub">پیام‌هایی که کاربران از پنجره وضعیت خود فرستاده‌اند</p></div>
+          <span class="pill" id="feedbackPill">—</span></div>
+        <div class="rank-list" id="feedbackList"></div>
+      </div>
     </section>
 
     <!-- ================= NODES ================= -->
@@ -195,6 +206,29 @@
           <div id="exploreLinks" style="margin-top:12px"></div>
         </div>
       </div>
+
+      <!-- Scanned nodes wait here until an admin publishes them: a scan never
+           adds an address to the catalog on its own (see app/nodes.py). -->
+      <details class="acc" id="nodeCandidatesCard" style="margin-top:13px">
+        <summary>
+          <span class="acc-ico"><svg width="15" height="15"><use href="#i-nodes"/></svg></span>
+          <span class="acc-t"><b>نودهای اسکن‌شده — انتخاب دستی</b><span>نودهایی که اسکن پیدا کرده ولی هنوز منتشر نشده‌اند؛ هرکدام را خودتان تأیید کنید</span></span>
+          <span class="acc-meta" id="candidatePill">—</span>
+          <svg class="chev" width="15" height="15"><use href="#i-chevron"/></svg>
+        </summary>
+        <div class="acc-body">
+          <div class="setting-row" style="margin-bottom:10px">
+            <div class="txt"><b>افزودن خودکار نودهای اسکن‌شده</b><p>اگر روشن باشد هر اسکن نودهای تازه را بی‌درنگ منتشر می‌کند؛ پیش‌فرض «خاموش» است تا فقط نودهای تأییدشده منتشر شوند.</p></div>
+            <button class="switch" id="nodeAutoSwitch" type="button"></button>
+          </div>
+          <div class="actions" style="margin:0 0 10px">
+            <button class="secondary compact" id="candidateSelectAll">انتخاب همه</button>
+            <button class="secondary compact" id="candidateClear">پاک کردن انتخاب</button>
+            <button class="primary compact" id="candidatePublish"><svg width="14" height="14"><use href="#i-plus"/></svg> افزودن انتخاب‌شده‌ها</button>
+          </div>
+          <div id="candidateList" class="stagger"></div>
+        </div>
+      </details>
     </section>
 
     <!-- ================= USERS ================= -->
@@ -253,20 +287,74 @@
       </details>
     </section>
 
+    <!-- ================= ADVANCED SUBSCRIPTIONS ================= -->
+    <section class="section" id="section-subs">
+      <div class="panel glass">
+        <div class="panel-head">
+          <div><h2>سابلینک پیشرفته</h2><p class="sub">گزارش مصرف، هشدار انقضا و سهمیه، مدیریت لینک هر کاربر و تنظیم دقیق هر کلاینت</p></div>
+          <div class="actions" style="margin:0">
+            <button class="secondary compact" id="subsReload"><svg width="14" height="14"><use href="#i-sync"/></svg> بازخوانی</button>
+          </div>
+        </div>
+
+        <div id="subsAlerts"></div>
+
+        <div class="grid-2" style="margin-top:13px">
+          <div class="panel glass" data-acc="آستانهٔ هشدار|زمان‌بندی: چند روز قبل و از چند درصد هشدار بدهیم|activity">
+            <div class="panel-head"><div><h3>آستانهٔ هشدار</h3><p class="sub">چند روز قبل از انقضا و از چند درصد سهمیه هشدار داده شود</p></div><span class="pill" id="subsAlertPill">—</span></div>
+            <div class="grid-2">
+              <div><label>هشدار انقضا (روز)</label><input id="subsThresholdExpiry" type="number" min="0" max="365" dir="ltr"></div>
+              <div><label>هشدار سهمیه (٪)</label><input id="subsThresholdQuota" type="number" min="1" max="100" dir="ltr"></div>
+            </div>
+            <div class="actions" style="margin-top:10px"><button class="primary compact" id="subsSaveAlerts"><svg width="14" height="14"><use href="#i-check"/></svg> ذخیرهٔ آستانه‌ها</button></div>
+          </div>
+          <div class="panel glass" data-acc="گزارش مصرف|جمع مصرف و وضعیت کاربران|activity">
+            <div class="panel-head"><div><h3>گزارش مصرف</h3><p class="sub">جمع مصرف، کاربران فعال و وضعیت سهمیه</p></div></div>
+            <div id="subsTotals"></div>
+          </div>
+        </div>
+
+        <details class="acc" id="subsClientsCard" style="margin-top:14px">
+          <summary>
+            <span class="acc-ico"><svg width="15" height="15"><use href="#i-link"/></svg></span>
+            <span class="acc-t"><b>تنظیم دقیق هر کلاینت</b><span>برای هر کلاینت انتخاب کنید چه قالبی بگیرد و لینک همان را کپی کنید</span></span>
+            <span class="acc-meta" id="subsClientPill">—</span>
+            <svg class="chev" width="15" height="15"><use href="#i-chevron"/></svg>
+          </summary>
+          <div class="acc-body">
+            <label>کاربر مورد نظر برای ساخت لینک‌ها</label>
+            <select id="subsUser"></select>
+            <div id="subsClients" style="margin-top:12px"></div>
+            <div class="actions" style="margin-top:10px"><button class="primary compact" id="subsSaveClients">ذخیرهٔ تنظیم کلاینت‌ها</button></div>
+          </div>
+        </details>
+
+        <div class="panel glass" style="margin-top:14px">
+          <div class="panel-head"><div><h3>مدیریت لینک و مصرف هر کاربر</h3><p class="sub">گزارش مصرف، وضعیت سهمیه، انقضا و بازنشانی توکن سابلینک</p></div><div class="filters" id="subsSort"></div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>کاربر</th><th>مصرف</th><th>سهمیه</th><th>انقضا</th><th>وضعیت</th><th>لینک</th></tr></thead>
+              <tbody id="subsTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ================= CLOUDFLARE ================= -->
     <section class="section" id="section-cloudflare">
       <div class="grid-2">
         <div class="panel glass">
-          <div class="panel-head"><div><h2>Cloudflare Worker</h2><p class="sub">پل WebSocket برای ورودی‌های CF</p></div><span class="pill" id="cfTag">—</span></div>
-          <label>Worker URL <span class="hint">— باید HTTPS باشد</span></label>
-          <input id="workerUrl" placeholder="https://nexus-edge.workers.dev" dir="ltr">
+          <div class="panel-head"><div><h2>Cloudflare Worker</h2><p class="sub">پنل و ورودی‌های CF روی یک آدرس تمیز</p></div><span class="pill" id="cfTag">—</span></div>
+          <label>Worker URL <span class="hint">— باید HTTPS باشد و دامنهٔ سفارشی Worker؛ خودِ workers.dev در ایران فیلتر است</span></label>
+          <input id="workerUrl" placeholder="https://panel.example.com" dir="ltr">
           <label>API Key <span class="hint">— اختیاری</span></label>
           <input id="workerKey" type="password" placeholder="کلید اختیاری Worker" dir="ltr">
           <div class="actions">
             <button class="primary" id="saveWorker">ذخیره و Sync</button>
             <button class="secondary" id="clearWorker">حذف Worker</button>
           </div>
-          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ اگر لوکیشنی تعریف نکنید فقط نود مستقیم همین سرویس منتشر می‌شود.</p></div></div>
+          <div class="setting-row" id="workerState"><div class="txt"><b>مقدمه</b><p>Worker اختیاری است؛ اگر لوکیشنی تعریف نکنید فقط نود مستقیم همین سرویس منتشر می‌شود. وقتی ذخیره شد، خودِ پنل هم از همان آدرس باز می‌شود و سابلینک‌ها روی دامنهٔ Worker ساخته می‌شوند. برای باز شدن پنل در ایران بدون فیلترشکن، به Worker یک دامنهٔ سفارشی وصل کنید و همان را اینجا بگذارید؛ آدرس workers.dev خودش فیلتر است.</p></div></div>
         </div>
         <div class="panel glass">
           <div class="panel-head">          <div><h2>Probe آی‌پی‌های لبه</h2><p class="sub">اسکن از سمت همین سرور</p></div></div>
@@ -296,6 +384,7 @@
         <div class="panel-head">
           <div><h2>منابع لبه و لوکیشن‌ها</h2><p class="sub">آی‌پی تمیز از هر CDN، لیست دستی و دامنه‌های تمیز — هر منبع یک لوکیشن</p></div>
           <div class="actions" style="margin:0">
+            <button class="secondary compact" id="btnEdgeGeo" title="کشور هر لوکیشن از روی خودِ آدرس‌هایش اندازه‌گیری می‌شود (چند دیتابیس، رأی اکثریت)">تشخیص کشور آی‌پی‌ها</button>
             <button class="secondary compact" id="btnEdgeScan">اسکن همه providerها</button>
             <button class="secondary compact" id="btnEdgeReload">بروزرسانی</button>
           </div>
@@ -341,8 +430,8 @@
           <div class="panel-head"><div><h2>ظاهر و متن پنجرهٔ وضعیت</h2><p class="sub">هر چیزی که کاربر نهایی می‌بیند: بنر، لینک پشتیبانی، پرچم کشورها و سابلینک پیشنهادی</p></div><span class="pill" id="czTag">—</span></div>
           <label>متن بنر بالای پنجرهٔ وضعیت <span class="hint">خالی = بدون بنر</span></label>
           <input id="czBanner" placeholder="مثال: تمدید اشتراک از طریق پشتیبانی تلگرام" maxlength="200">
-          <label>لینک پشتیبانی</label>
-          <input id="czSupport" dir="ltr" placeholder="https://t.me/your_support">
+          <label>لینک پشتیبانی <span class="hint">خالی = کانال پیش‌فرض ({{ brand.support_url }})</span></label>
+          <input id="czSupport" dir="ltr" placeholder="{{ brand.support_url }}">
           <div class="field-grid">
             <div><label>نام برنامه <span class="hint">روی آیکون نصب‌شده و عنوان پنل</span></label><input id="czAppName" dir="ltr" placeholder="NEXUS"></div>
             <div><label>فرمت پیشنهادی <span class="hint">خانوادهٔ همان کلاینت در پنجرهٔ وضعیت برجسته می‌شود</span></label>
@@ -354,6 +443,8 @@
           </div>
           <div class="switch-row"><div class="txt"><b>پرچم کشور روی نام نودها</b><span>نام هر نود در سابلینک با پرچم کشورش می‌آید (🇩🇪 آلمان · ...)</span></div>
             <div class="switch on" id="czFlags"></div></div>
+          <div class="switch-row"><div class="txt"><b>اندازه‌گیری کشور از روی آی‌پی</b><span>کشور هر لوکیشن از خودِ آدرس‌هایش پرسیده می‌شود (سه دیتابیس جغرافیایی، رأی اکثریت) و برچسبی که با داده نمی‌خواند اصلاح می‌شود — تا روی آی‌پی آمریکا پرچم کانادا نیفتد. خاموش = برچسب‌ها همان‌طور که وارد کرده‌اید می‌مانند.</span></div>
+            <div class="switch on" id="czGeo"></div></div>
           <div class="actions">
             <button class="primary" id="czSave">ذخیره شخصی‌سازی</button>
             <button class="secondary" id="czReload">بازخوانی</button>
@@ -420,6 +511,23 @@
         </div>
       </div>
 
+      <div class="panel glass" style="margin-top:13px" data-acc="IP واقعی کاربر|چه آدرسی پشت CDN و پروکسی‌ها دیده می‌شود و کدام هدرها قابل‌اعتمادند|shield">
+        <div class="panel-head">
+          <div><h2>IP واقعی کاربر</h2><p class="sub">همان کاری که real_ip در nginx می‌کند: فقط هدر پروکسی‌های مورداعتماد خوانده می‌شود، پس یک IP جعل‌شده نه در لاگ می‌نشیند و نه سقف تلاش ورود را دور می‌زند</p></div>
+          <span class="pill" id="tlIpTag">—</span>
+        </div>
+        <div class="stats" style="margin-top:0" id="tlIpStats"></div>
+        <div class="switch-row"><div class="txt"><b>اعتماد به هدرهای CDN</b><span>خاموش = فقط آدرس مستقیم اتصال گزارش می‌شود؛ مناسب سروری که خودش روی اینترنت است</span></div>
+          <div class="switch" id="tlIpTrust"></div></div>
+        <label>پروکسی‌های مورداعتماد <span class="hint">CIDR با کاما — لوپ‌بک و شبکه‌های داخلی همیشه مورداعتمادند</span></label>
+        <input id="tlIpCidrs" dir="ltr" placeholder="203.0.113.0/24, 198.51.100.7">
+        <div class="actions">
+          <button class="primary" id="tlIpSave">ذخیره</button>
+          <button class="secondary" id="tlIpRefresh">بررسی دوباره</button>
+        </div>
+        <div class="kv-list" id="tlIpOut"></div>
+      </div>
+
       <div class="panel glass" style="margin-top:13px" data-acc="تحلیل سابلینک|هاست‌ها و پرچم کشورها را جدا می‌کند و به لوکیشن تبدیل می‌کند|search">
         <div class="panel-head">
           <div><h2>تحلیل سابلینک</h2><p class="sub">متن کانفیگ‌ها یا آدرس سابلینک را بدهید: پروتکل‌ها، هاست‌ها و پرچم کشورها را جدا می‌کند و در صورت خواستن، به لوکیشن تبدیل می‌کند</p></div>
@@ -438,8 +546,126 @@
       </div>
     </section>
 
+    <!-- ================= TELEGRAM PROXIES ================= -->
+    <section class="section" id="section-telegram">
+      <!-- One proxy type by default. A user is handed exactly one kind of
+           Telegram proxy unless an admin asks for the rest, because «one kind» is
+           one thing to explain, one thing to rotate and one thing to support. -->
+      <div class="panel glass">
+        <div class="panel-head">
+          <div><h2>نوع پروکسی تلگرام</h2><p class="sub">به کاربران کدام نوع پروکسی تلگرام داده شود — حالت پیش‌فرض فقط WEB است، چون بدون هیچ پورت خام TCP روی هر میزبانی کار می‌کند</p></div>
+          <span class="pill" id="tgModeTag">—</span>
+        </div>
+        <div class="field-grid">
+          <div><label>حالت انتشار</label><select id="tgMode">
+            <option value="web">فقط WEB (پیشنهادشده)</option>
+            <option value="all">همهٔ انواع (WEB + MTProto + وب‌پروکسی + وب تلگرام)</option>
+          </select></div>
+        </div>
+        <div class="actions"><button class="primary" id="tgModeSave">ذخیرهٔ حالت</button></div>
+        <p class="muted" id="tgModeInfo"></p>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px" data-acc="پروکسی WEB (tg://webproxy)|تلگرام دسکتاپ ۷.۱+؛ روی همین دامنه و پورت ۴۴۳، بدون هیچ TCP Proxy|globe" data-acc-open="1">
+        <div class="panel-head">
+          <div><h2>پروکسی WEB (تلگرام دسکتاپ ۷.۱+)</h2><p class="sub">MTProto داخل یک صفحهٔ HTTPS معمولی و یک WebSocket هم‌منبع حمل می‌شود؛ کلاینت هیچ سوکت خامی باز نمی‌کند، پس روی Railway بدون هیچ TCP Proxy و حتی از پشت Cloudflare کار می‌کند</p></div>
+          <span class="pill" id="tgRelayTag">—</span>
+        </div>
+        <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>تا وقتی relay و صفحه‌اش بالا نیامده باشد هیچ لینکی منتشر نمی‌شود</span></div>
+          <div class="switch" id="tgRelayEnabled"></div></div>
+        <div class="field-grid">
+          <div><label>دامنهٔ عمومی <span class="hint">خالی بگذارید تا دامنهٔ خود پنل استفاده شود</span></label><input id="tgRelayDomain" dir="ltr" placeholder="nexus.up.railway.app"></div>
+          <div><label>نشست هم‌زمان <span class="hint">۱ تا ۶۴</span></label><input id="tgRelaySessions" type="number" min="1" max="64" dir="ltr" value="6"></div>
+          <div><label>استریم هر نشست <span class="hint">۱ تا ۲۵۶</span></label><input id="tgRelayStreams" type="number" min="1" max="256" dir="ltr" value="32"></div>
+          <!-- The sponsored row Telegram puts at the top of a chat list is not something
+               this panel can draw: Telegram renders it from help.promoData for a proxy it
+               knows (a promotion tag from @MTProxybot). So the card asks for exactly the
+               two facts Telegram keys it on — the tag and the channel — and says plainly
+               when the row is not being advertised. -->
+          <div><label>تگ تبلیغاتی <span class="hint">۳۲ کاراکتر هگز از @MTProxybot؛ با آن کانال اسپانسر بالای چت‌لیست کاربران می‌آید</span></label><input id="tgRelaySponsorTag" dir="ltr" maxlength="32" placeholder="0123456789abcdef0123456789abcdef"></div>
+          <div><label>کانال اسپانسر <span class="hint">همان کانالی که در ربات ثبت می‌کنید؛ @ یا لینک هم قبول است</span></label><input id="tgRelaySponsorChannel" dir="ltr" placeholder="miliconfig"></div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="tgRelaySave">ذخیره و انتشار</button>
+          <button class="secondary" id="tgRelayRotate">چرخش secret</button>
+          <button class="secondary" id="tgRelayProbe">تست اتصال</button>
+        </div>
+        <div class="kv-list" id="tgRelayInfo"></div>
+        <div id="tgRelayLinks"></div>
+        <div id="tgRelayBroadcast"></div>
+      </div>
+
+      <div class="grid-2b" id="tgOtherTypes" style="margin-top:13px">
+        <div class="panel glass" data-acc="پروکسی MTProto (لینک tg://)|پروکسی خود تلگرام؛ کاربر فقط یک لینک اضافه می‌کند|link">
+          <div class="panel-head">
+            <div><h2>پروکسی MTProto (لینک tg://)</h2><p class="sub">با mtg و حالت FakeTLS سرو می‌شود: کاربر لینک را در خود تلگرام اضافه می‌کند و نیازی به نصب کلاینت ندارد</p></div>
+            <span class="pill" id="tgMtTag">—</span>
+          </div>
+          <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>تا فعال نشود هیچ لینکی منتشر نمی‌شود</span></div>
+            <div class="switch" id="tgMtEnabled"></div></div>
+          <div class="field-grid">
+            <div><label>پورت عمومی <span class="hint">روی Railway برای این پورت هم TCP Proxy بسازید</span></label><input id="tgMtPort" type="number" min="1" max="65535" dir="ltr" value="8446"></div>
+            <div><label>دامنهٔ fronting (SNI) <span class="hint">داخل secret ذخیره می‌شود؛ تغییرش لینک را تازه می‌کند</span></label><input id="tgMtDomain" dir="ltr" placeholder="www.cloudflare.com"></div>
+            <div><label>حداکثر اتصال همزمان</label><input id="tgMtConcurrency" type="number" min="1" max="100000" dir="ltr" value="8192"></div>
+            <div><label>DoH برای حل نام</label><input id="tgMtDns" dir="ltr" placeholder="https://1.1.1.1"></div>
+            <div><label>آی‌پی fronting <span class="hint">اختیاری؛ وقتی دامنه روی این سرور DNS نمی‌شود</span></label><input id="tgMtFrontIp" dir="ltr" placeholder="1.2.3.4"></div>
+          </div>
+          <div class="actions">
+            <button class="primary" id="tgSave">ذخیره و انتشار</button>
+            <button class="secondary" id="tgReload">همگام‌سازی</button>
+            <button class="secondary" id="tgMtRotate">چرخش secret</button>
+            <button class="danger-btn" id="tgMtOff">غیرفعال</button>
+          </div>
+          <div class="kv-list" id="tgMtInfo"></div>
+          <div id="tgMtLinks"></div>
+        </div>
+
+        <div class="panel glass" data-acc="وب‌پروکسی HTTP / SOCKS5|همان Custom Proxy تلگرام دسکتاپ و مرورگر؛ هر کاربر اعتبار جدا|server">
+          <div class="panel-head">
+            <div><h2>وب‌پروکسی HTTP / SOCKS5</h2><p class="sub">روی همان Xray سرو می‌شود؛ هر کاربر نام کاربری و رمز خودش را دارد و با غیرفعال شدن کاربر، خط پروکسی‌اش هم قطع می‌شود</p></div>
+            <span class="pill" id="tgWebHost">—</span>
+          </div>
+          <div id="tgWebProfiles"></div>
+          <div id="tgWebAccounts"></div>
+        </div>
+      </div>
+
+      <div class="panel glass" id="tgOtherWeb" style="margin-top:13px" data-acc="پروکسی وب تلگرام (web.telegram.org)|نسخهٔ وب تلگرام از همین دامنه باز می‌شود؛ پشت Cloudflare هم کار می‌کند|globe">
+        <div class="panel-head">
+          <div><h2>پروکسی وب تلگرام (web.telegram.org)</h2><p class="sub">تلگرام وب از دامنهٔ خودتان سرو می‌شود (مسیر زیر)؛ همان مسیر از دامنهٔ Worker کلودفلر هم عبور می‌کند تا وقتی آی‌پی پنل بسته است</p></div>
+          <span class="pill" id="tgAppTag">—</span>
+        </div>
+        <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>پروکسی فقط به هاست‌های خود تلگرام وصل می‌شود (web.telegram.org، telegram.org، t.me)</span></div>
+          <div class="switch" id="tgAppEnabled"></div></div>
+        <div class="actions">
+          <button class="secondary" id="tgAppProbe">تست دسترسی سرور</button>
+          <a class="tbtn" id="tgAppOpen" target="_blank" rel="noopener">باز کردن تلگرام وب</a>
+        </div>
+        <div class="kv-list" id="tgAppInfo"></div>
+        <p class="muted" id="tgAppWorker"></p>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head"><div><h2>نکته‌ها و محدودیت‌ها</h2><p class="sub">هر چیزی که برای منتشر شدن این پروکسی‌ها لازم است، همین‌جا نوشته می‌شود</p></div></div>
+        <div class="kv-list" id="tgNotes"></div>
+      </div>
+    </section>
+
     <!-- ================= ADVANCED ================= -->
     <section class="section" id="section-advanced">
+      <div class="panel glass" data-acc="پیکربندی خودکار پس از استقرار|آنچه یک استقرار تازه خودش روشن می‌کند و پورت‌های TCP که روی Railway خودکار ساخته می‌شوند|zap" data-acc-open="1">
+        <div class="panel-head">
+          <div><h2>پیکربندی خودکار پس از استقرار</h2><p class="sub">این پاس هیچ سوییچی را خودش روشن نمی‌کند؛ تنها کاری که خودش انجام می‌دهد ساختن یک TCP Proxy روی Railway است (با پورت تصادفی) برای هر قابلیت پورت‌خامی که خودتان روشن کرده‌اید. پروکسی WEB تلگرام فقط یک پیشنهاد است و تا خودتان روشنش نکنید روی دامنهٔ این سرویس سرو نمی‌شود — دامنه‌ای که ترافیک پروکسی تلگرام را حمل کند، همان دامنه‌ای است که شبکه‌ها می‌بندند</p></div>
+          <span class="pill" id="adAutoTag">—</span>
+        </div>
+        <div class="kv-list" id="adAutoInfo"></div>
+        <div id="adAutoCandidates"></div>
+        <div class="actions">
+          <button class="primary" id="adAutoRun">اجرای دوبارهٔ پیکربندی خودکار</button>
+          <button class="secondary" id="adAutoPorts">ساخت پورت‌های TCP روی Railway</button>
+        </div>
+        <div class="kv-list" id="adAutoPortsInfo"></div>
+      </div>
       <div class="grid-2b">
         <div class="panel glass" data-acc="نود Hysteria2|QUIC مستقل از Xray؛ تا فعال نشود منتشر نمی‌شود|zap">
           <div class="panel-head"><div><h2>نود Hysteria2</h2><p class="sub">Hysteria2 روی QUIC کار می‌کند و در Xray اینباند ندارد؛ آدرس سرور هاستریزیای خودتان را بدهید تا در سابلینک‌ها منتشر شود</p></div><span class="pill" id="adHy2Tag">—</span></div>
@@ -468,6 +694,24 @@
           <label>دامنه‌های جایگزین / Host-SNI <span class="hint">اختیاری برای بسته‌های دامنه‌محور — برای بستهٔ کلودفلر دامنهٔ Worker یا دامنهٔ پنل (هر خط/کاما یک دامنه، به ترتیب روی لوکیشن‌ها می‌نشیند)</span></label>
           <input id="adPackHosts" dir="ltr" placeholder="worker.example.workers.dev">
         </div>
+      </div>
+
+      <div class="panel glass" style="margin-top:13px" data-acc="هسته‌های دوم (sing-box · mihomo)|پروتکل‌هایی که Xray ندارد: AnyTLS و TUIC v5 — هر کدام با یک پورت و یک موتور|zap">
+        <div class="panel-head">
+          <div><h2>هسته‌های دوم (sing-box · mihomo)</h2><p class="sub">AnyTLS و TUIC v5 در Xray اینباند ندارند؛ روی همین سرور با sing-box یا mihomo سرو می‌شوند و مثل بقیهٔ نودها در همهٔ سابلینک‌ها منتشر می‌شوند — هر کاربر یک اعتبار جدا دارد</p></div>
+          <span class="pill" id="coTag">—</span>
+        </div>
+        <div class="stats" style="margin-top:0" id="coStats"></div>
+        <div id="coProfiles"></div>
+        <div class="field-grid">
+          <div><label>نام SNI گواهی <span class="hint">گواهی خودامضا برای همین نام صادر می‌شود؛ لینک‌ها insecure هستند</span></label><input id="coSni" dir="ltr" placeholder="www.cloudflare.com"></div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="coSave">ذخیره و انتشار</button>
+          <button class="secondary" id="coReload">راه‌اندازی مجدد موتورها</button>
+        </div>
+        <div class="kv-list" id="coEngines"></div>
+        <div class="kv-list" id="coNotes"></div>
       </div>
 
       <div class="grid-2b" style="margin-top:13px">

@@ -27,16 +27,20 @@ import urllib.parse
 #   always -> ports are free (VPS, Docker, Fly)
 #   proxy  -> only when a TCP proxy/port was provisioned (Railway)
 #   none   -> HTTP(S) only (Render without a TCP port, Heroku, Vercel)
+# ``udp`` says whether a UDP port can be exposed at all. It follows the same split
+# (a host that owns its ports also owns UDP; a platform that forwards HTTP or a
+# TCP proxy cannot carry QUIC), and the second engines need it to know whether a
+# TUIC node may be published.
 PLATFORMS = {
-    'railway': {'label': 'Railway', 'tcp': 'proxy'},
-    'render': {'label': 'Render', 'tcp': 'none'},
-    'fly': {'label': 'Fly.io', 'tcp': 'always'},
-    'koyeb': {'label': 'Koyeb', 'tcp': 'none'},
-    'heroku': {'label': 'Heroku', 'tcp': 'none'},
-    'vercel': {'label': 'Vercel', 'tcp': 'none'},
-    'replit': {'label': 'Replit', 'tcp': 'none'},
-    'docker': {'label': 'VPS / Docker', 'tcp': 'always'},
-    'local': {'label': 'Local', 'tcp': 'always'},
+    'railway': {'label': 'Railway', 'tcp': 'proxy', 'udp': False},
+    'render': {'label': 'Render', 'tcp': 'none', 'udp': False},
+    'fly': {'label': 'Fly.io', 'tcp': 'always', 'udp': True},
+    'koyeb': {'label': 'Koyeb', 'tcp': 'none', 'udp': False},
+    'heroku': {'label': 'Heroku', 'tcp': 'none', 'udp': False},
+    'vercel': {'label': 'Vercel', 'tcp': 'none', 'udp': False},
+    'replit': {'label': 'Replit', 'tcp': 'none', 'udp': False},
+    'docker': {'label': 'VPS / Docker', 'tcp': 'always', 'udp': True},
+    'local': {'label': 'Local', 'tcp': 'always', 'udp': True},
 }
 
 # Platform markers, checked in order. The value is what ``platform()`` returns.
@@ -135,6 +139,20 @@ def has_tcp():
     if mode == 'proxy':
         return bool(_env(*DIRECT_HOST_KEYS) and _env(*DIRECT_PORT_KEYS))
     return bool(_env('NEXUS_DIRECT_HOST') and _env('NEXUS_DIRECT_PORT'))
+
+
+def has_udp():
+    """Whether a UDP port can be exposed here (the mirror of :func:`has_tcp`).
+
+    A host that owns its ports — a VPS, Docker, Fly — also has UDP; a platform
+    that only forwards HTTP or a single TCP proxy (Railway, Render, Heroku,
+    Vercel) cannot carry QUIC at all. ``NEXUS_UDP=1`` overrides it for an admin
+    who arranged UDP forwarding (a tunnel, a separate relay) themselves.
+    """
+    override = (os.getenv('NEXUS_UDP') or '').strip().lower()
+    if override:
+        return override in ('1', 'true', 'yes', 'on')
+    return bool(PLATFORMS.get(platform(), PLATFORMS['local']).get('udp'))
 
 
 def is_public_address(value):
@@ -242,6 +260,7 @@ def info():
         'label': label(),
         'tcp': PLATFORMS.get(pid, PLATFORMS['local'])['tcp'],
         'has_tcp': has_tcp(),
+        'has_udp': has_udp(),
         'host': host(),
         'public_base': public_base(),
         'direct': endpoint,

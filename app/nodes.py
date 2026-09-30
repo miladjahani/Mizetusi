@@ -114,6 +114,62 @@ class NodeCatalog:
         self.ensure()
         execute('DELETE FROM nodes WHERE name=?', (name,))
 
+    # -------------------------------------------------------- manual selection
+    def auto_publish(self):
+        """Whether a freshly scanned edge node is published without a human.
+
+        The default is **off**: a scan produces *candidates* an admin consciously
+        promotes, so a public catalog never grows addresses nobody chose. The
+        deployment's own node is never a candidate — it is the guaranteed
+        baseline of every subscription and is always published.
+        """
+        try:
+            row_ = row('SELECT value FROM settings WHERE key=?', ('edge_auto_publish',))
+        except Exception:
+            row_ = None
+        if not row_:
+            return False
+        value = row_.get('value') if isinstance(row_, dict) else row_
+        return str(value or '').strip().lower() in ('1', 'true', 'on', 'yes')
+
+    def _mark_candidate(self, name, on):
+        """Tag an edge node as a not-yet-published candidate (or clear the tag)."""
+        node = self.get(name)
+        if not node:
+            return
+        meta = edge_sources.parse_metadata(node.get('metadata'))
+        if on:
+            if meta.get('candidate'):
+                return
+            meta['candidate'] = True
+        else:
+            if not meta.get('candidate'):
+                return
+            meta.pop('candidate', None)
+        execute('UPDATE nodes SET metadata=?, updated_at=? WHERE name=?',
+                (json.dumps(meta, ensure_ascii=False), int(time.time()), name))
+
+    def candidates(self):
+        """Scanned edge nodes an admin has not published yet."""
+        self.ensure()
+        return [n for n in self.list()
+                if not n.get('enabled') and edge_sources.parse_metadata(n.get('metadata')).get('candidate')]
+
+    def select(self, names, enabled=True):
+        """Publish (or park) scanned candidates — only edge nodes can move."""
+        chosen = []
+        for name in (names or []):
+            name = str(name).strip()
+            if not name:
+                continue
+            node = self.get(name)
+            if not node or str(node.get('kind')) not in ('cloudflare', 'edge'):
+                continue
+            self.update(name, {'enabled': 1 if enabled else 0})
+            self._mark_candidate(name, not enabled)
+            chosen.append(name)
+        return chosen
+
     def mark(self, name, latency, metadata=None):
         meta = metadata if metadata is None else json.dumps(metadata, ensure_ascii=False)
         if meta is None:
@@ -209,7 +265,11 @@ class NodeCatalog:
     def sync(self, base_url=None, worker_url=None, edge_host=None):
         """Rebuild the catalog: this deployment's own node plus every location.
 
-        Everything here is automatic. When the admin has defined edge sources
+        The deployment's own node is always published; every other node a rebuild
+        produces — whether from an admin-configured edge source or the automatic
+        clean-IP catalog — is parked as a **candidate** for :meth:`select`, unless
+        :meth:`auto_publish` is on or the node was already published (an admin's
+        hand-pick survives every re-scan). When the admin has defined edge sources
         (clean-IP providers, hand-written IPs, clean domains — each with a
         location), those define the catalog: one group of nodes per location, each
         carrying its own Host/SNI. With no source configured the historical
@@ -220,6 +280,14 @@ class NodeCatalog:
         created = 0
         if self.ensure_origin(base_url) is not None:
             created += 1
+        # Which edge nodes are already published, captured *before* the rebuild
+        # disables the old catalog: a node the admin approved by hand keeps its
+        # place across every re-scan (only a node they never picked waits as a
+        # candidate). This is what makes selection manual without ever dropping a
+        # node the admin already chose.
+        published_before = {n['name'] for n in rows(
+            "SELECT name FROM nodes WHERE enabled=1 AND kind IN ('cloudflare','edge')")}
+        auto = self.auto_publish()
         # The previous edge catalog is disabled first so stale IPs never survive a
         # re-probe. Only the rows this sync owns are reset: a node the admin added
         # by hand — or from one of the ready-made samples — must survive a rebuild,
@@ -231,10 +299,21 @@ class NodeCatalog:
         edge = edge_host or NodeCatalog.edge_cache.get('host')
         keep = set()
         for item in edge_sources.plan(worker_url, edge):
-            self.upsert(item['name'], item['kind'], item['server'], item['port'], item['tls'],
+            name = item['name']
+            self.upsert(name, item['kind'], item['server'], item['port'], item['tls'],
                         item['sni'], item['host'], item['source'], item['metadata'])
-            self.update(item['name'], {'enabled': 1, 'latency_ms': item.get('latency_ms')})
-            keep.add(item['name'])
+            # Strictly manual: *no* scanned node is published by a rebuild. Only
+            # the deployment's own node is (it is added before the loop), a node an
+            # admin selected by hand (``published_before``), or every node when the
+            # auto-publish switch is on. A location the admin configured is scanned
+            # exactly like the automatic catalog, so it waits for the same pick.
+            publish = auto or name in published_before
+            self.update(name, {'enabled': 1 if publish else 0, 'latency_ms': item.get('latency_ms')})
+            # A scanned node that nobody has published yet is a *candidate*: it is
+            # listed (and pinged) but handed to no subscription until an admin
+            # selects it — see :meth:`select` and «نودهای اسکن‌شده» in the panel.
+            self._mark_candidate(name, not publish)
+            keep.add(name)
             created += 1
         # A location the admin deleted takes its nodes with it.
         edge_sources.cleanup_orphans(keep)
@@ -388,8 +467,16 @@ class NodeProbe:
                 'latency_ms': ms, 'tcp_latency_ms': tcp_ms, 'error': err, 'hint': hint, 'at': now}
 
     async def ping_all(self, names=None, timeout=4.0, concurrency=None):
-        """Probe every enabled node: Cloudflare clean IPs and the Railway origin."""
-        items = self.catalog.enabled()
+        """Probe every enabled node: Cloudflare clean IPs and the Railway origin.
+
+        Two callers, two sets. The background loop (and «پینگ همه نودها» with no
+        names) measures what is *published*, so a subscription is never ordered by
+        a number nobody verified. An explicit list of names — the per-location ping
+        button, a fresh source — measures exactly those nodes **even when they are
+        still candidates**: an admin has to see a scanned node answer before they
+        can decide to publish it.
+        """
+        items = self.catalog.enabled() if not names else self.catalog.list()
         if names:
             wanted = {str(n).strip().lower() for n in names if str(n).strip()}
             items = [n for n in items if str(n['name']).lower() in wanted]

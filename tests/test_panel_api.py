@@ -21,7 +21,8 @@ client = TestClient(app)
 PANEL_MODULES = [
     'js/core.js', 'js/ui.js', 'js/session.js', 'js/api.js', 'js/store.js', 'js/pwa.js',
     'js/views/dashboard.js', 'js/views/nodes.js', 'js/views/users.js', 'js/views/system.js',
-    'js/views/customize.js', 'js/views/tools.js', 'js/views/advanced.js', 'js/views/guide.js',
+    'js/views/customize.js', 'js/views/tools.js', 'js/views/telegram.js',
+    'js/views/advanced.js', 'js/views/subscriptions.js', 'js/views/guide.js',
     'js/app.js',
 ]
 LEGACY_MODULES = ['app.js', 'app-dashboard.js', 'app-nodes.js', 'app-users.js', 'app-panel.js']
@@ -67,6 +68,30 @@ def test_stylesheet_keeps_the_layout_inside_a_phone_viewport():
     assert '-webkit-line-clamp:2' in css
     assert '@media (max-width:700px)' in css
     assert 'max-width:900px' in css
+
+
+def test_support_channel_is_the_default_support_link():
+    # Out of the box every install points at the support channel, and an admin's
+    # own link in «شخصی‌سازی» still wins over it.
+    from app.config import SUPPORT_CHANNEL
+    from app.main import _brand
+    assert _brand()['support_url'] == SUPPORT_CHANNEL
+    _set('support_url', 'https://t.me/my_own_desk')
+    try:
+        assert _brand()['support_url'] == 'https://t.me/my_own_desk'
+    finally:
+        _set('support_url', '')
+
+
+def test_support_channel_is_reachable_from_the_panel_login_and_guide():
+    # An admin who cannot get in (or an end user asking for a renewal) needs the
+    # channel on the login screen too, and on a phone the live guide is the only
+    # place the link stays reachable — the sidebar footer is hidden there.
+    from app.config import SUPPORT_CHANNEL
+    for page in (client.get('/login'), client.get('/', headers=h())):
+        assert page.status_code == 200
+        assert f'href="{SUPPORT_CHANNEL}"' in page.text
+    assert client.get('/api/guide', headers=h()).json()['support'] == SUPPORT_CHANNEL
 
 
 def test_phone_bottom_bar_does_not_clip_its_group_sheet():
@@ -118,6 +143,8 @@ def test_every_module_import_resolves():
 def test_dashboard_shell_references_assets():
     r = client.get('/', headers=h())
     assert r.status_code == 200
+    assert 'id="btnPanelUpdate"' in r.text
+    assert 'آخرین نسخه از GitHub' in r.text
     assert '/static/app.css' in r.text
     # One module entry point: the imports own the load order, not the template.
     assert '<script type="module" src="/static/js/app.js"></script>' in r.text
@@ -331,7 +358,11 @@ def test_a_rejected_transport_shrinks_the_config_instead_of_killing_it():
     from app.subscriptions import transports as tp
 
     ladder = list(xray._candidate_configs())
-    assert len(ladder) == 2 + len(tp.SS_CIPHERS)
+    # The full config, the one without WARP/Reality, the one without the Telegram
+    # web proxies (the newest inbounds, so the first thing dropped), then one rung
+    # per Shadowsocks cipher family.
+    assert len(ladder) == 3 + len(tp.SS_CIPHERS)
+    assert not [item for item in ladder[2][0]['inbounds'] if item['tag'].startswith('tg-')]
     served_sets = [set(served) for _config, served, _note in ladder]
     assert all(len(before) >= len(after) for before, after in zip(served_sets, served_sets[1:]))
     assert len(served_sets[0]) == len(xray._config()['inbounds'])
@@ -550,7 +581,10 @@ def test_quick_create_applies_iran_preset_and_returns_links():
     # And the generated subscription really renders (YAML for bettbox).
     sub = client.get(f"/sub/{user['uuid']}?target=bettbox")
     assert sub.status_code == 200
-    assert sub.headers['x-nexus-target'] == 'clash' and 'proxies' in sub.text
+    assert sub.headers['x-nexus-target'] == 'clash' and sub.headers['x-nexus-format'] == 'clash'
+    # A Clash/Mihomo client is handed a whole YAML profile, not a JSON fragment.
+    assert 'proxies:' in sub.text and 'proxy-groups:' in sub.text and 'rules:' in sub.text
+    assert not sub.text.lstrip().startswith('{')
 
 
 def test_quick_create_precedence_and_validation():
@@ -580,8 +614,10 @@ def test_per_client_subscription_formats():
     # Bettbox is a Clash/Mihomo client: YAML only, never a Base64 container.
     bettbox = client.get(f'/sub/{uuid_value}?target=bettbox')
     assert bettbox.status_code == 200
-    assert 'proxies' in bettbox.text and 'vless://' not in bettbox.text
+    assert 'proxies:' in bettbox.text and 'proxy-groups:' in bettbox.text
+    assert 'vless://' not in bettbox.text
     assert bettbox.headers['x-nexus-target'] == 'clash'
+    assert bettbox.headers['x-nexus-format'] == 'clash'
 
     clash = client.get(f'/sub/{uuid_value}?target=clash')
     assert clash.headers['x-nexus-target'] == 'clash'
@@ -608,7 +644,9 @@ def test_a_user_is_provisioned_on_every_inbound_by_default():
     _seed_nodes()
     execute('DELETE FROM users')
     created = client.post('/api/users', headers=h(), json={'username': 'allproto'}).json()
-    assert created['protocols'] == ['vless', 'vmess', 'trojan', 'ss']
+    # Every protocol this deployment knows, which is the Xray set plus the ones a
+    # second engine hosts (AnyTLS, TUIC) — see ``app/cores``.
+    assert created['protocols'] == ['vless', 'vmess', 'trojan', 'ss', 'anytls', 'tuic']
     assert 'همه' in created['protocol_label']
 
     for protocol in ('vless', 'vmess', 'trojan'):
@@ -642,10 +680,13 @@ def test_protocol_selection_can_be_all_or_a_subset():
     execute('DELETE FROM users')
     client.post('/api/users', headers=h(), json={'username': 'multi'})
 
-    # All protocols selected at once (what the default form submits).
-    every = client.put('/api/users/multi', headers=h(),
-                       json={'protocol': ['vless', 'vmess', 'trojan', 'ss']}).json()
-    assert sorted(every['protocols']) == ['ss', 'trojan', 'vless', 'vmess']
+    # All protocols selected at once (what the default form submits), asked for
+    # from the panel's own catalog so a new protocol cannot quietly fall out.
+    settings_payload = client.get('/api/settings', headers=h()).json()
+    catalog = [item['id'] for item in settings_payload['subscription']['protocol_catalog']['protocols']]
+    assert catalog, 'the panel must publish its own protocol catalog'
+    every = client.put('/api/users/multi', headers=h(), json={'protocol': catalog}).json()
+    assert every['protocols'] == catalog
     assert every['protocol_value'] == 'all'
 
     # A real subset only offers what was selected.
@@ -668,7 +709,7 @@ def test_protocol_selection_can_be_all_or_a_subset():
     # out of every inbound.
     assert client.put('/api/users/multi', headers=h(), json={'protocol': 'vless,trojan'}).json()['protocols'] == ['vless', 'trojan']
     assert client.post('/api/users', headers=h(), json={'username': 'bad', 'protocol': 'wireguard'}).status_code == 422
-    assert client.put('/api/users/multi', headers=h(), json={'protocol': []}).json()['protocols'] == ['vless', 'vmess', 'trojan', 'ss']
+    assert client.put('/api/users/multi', headers=h(), json={'protocol': []}).json()['protocols'] == catalog
 
     # Legacy single-value rows keep meaning "the whole matrix".
     execute("UPDATE users SET protocol='vless' WHERE username='multi'")
@@ -731,8 +772,8 @@ def test_shadowsocks_ships_every_cipher_family():
     assert {o['method'] for o in shadowsocks} == methods
     assert len({o['password'] for o in shadowsocks}) == len(tp.SS_CIPHERS)
     assert all(o['plugin'] == 'v2ray-plugin' and 'mode=websocket' in o['plugin_opts'] for o in shadowsocks)
-    clash = json.loads(client.get(f'/sub/{uuid_value}?target=clash').text)['proxies']
-    assert {p['cipher'] for p in clash if p['type'] == 'ss'} == methods
+    clash_text = client.get(f'/sub/{uuid_value}?target=clash').text
+    assert {method for method in methods if f'cipher: {method}' in clash_text} == methods
     xray_out = json.loads(client.get(f'/sub/{uuid_value}?target=xray').text)['outbounds']
     assert {o['settings']['servers'][0]['method'] for o in xray_out if o['protocol'] == 'shadowsocks'} == methods
 
@@ -796,6 +837,12 @@ def test_worker_code_is_prefilled_and_downloadable():
     data = client.get('/api/cloudflare/worker-code', headers=h()).json()
     assert data['filename'] == 'nexus-worker.js'
     assert data['steps']
+    # The custom-domain step is the one that decides reachability from a filtered
+    # network: `*.workers.dev` is filtered in Iran as a *suffix*, so a guide that
+    # stops at the default hostname sends the admin straight back to a panel that
+    # only opens through a VPN — the exact failure this section exists to fix.
+    guide = ' '.join(data['steps'])
+    assert 'workers.dev' in guide and 'Add custom domain' in guide
     assert 'NEXUS_ORIGIN' in data['code']
     assert 'const ORIGIN_FALLBACK = "";' not in data['code']  # prefilled, paste-ready
     assert data['origin'] in data['code']
@@ -806,6 +853,59 @@ def test_worker_code_is_prefilled_and_downloadable():
     assert 'nexus-worker.js' in download.headers['content-disposition']
     # Credentials come from the cookie session, so only a fresh client is anonymous.
     assert TestClient(app).get('/api/cloudflare/worker-code').status_code == 401
+
+
+def test_a_workers_dev_address_is_saved_with_a_warning():
+    """The saved address is where the panel, its subscriptions and its node links
+    live, so a hostname a filtered network cannot reach is a dead end — and the
+    warning is the only thing between that and an admin who finds it out from a
+    user in Iran. A custom domain is the supported answer, so it warns about
+    nothing."""
+    saved = client.post('/api/settings/cloudflare-worker', headers=h(),
+                        json={'url': 'https://nexus-edge.example.workers.dev'}).json()
+    assert saved['success'] is True
+    assert saved['host'] == 'nexus-edge.example.workers.dev'
+    assert 'workers.dev' in saved['warning']
+    clean = client.post('/api/settings/cloudflare-worker', headers=h(),
+                        json={'url': 'https://panel.example.com'}).json()
+    assert clean['success'] is True and clean['warning'] == ''
+    # Leave no Worker URL behind for a later test on the shared database.
+    assert client.post('/api/settings/cloudflare-worker', headers=h(),
+                       json={'url': '', 'api_key': ''}).status_code == 200
+
+
+def test_the_panel_moves_to_the_worker_host_while_the_app_stays_on_railway():
+    """The split the Cloudflare section promises: «پنل روی Worker، اصل روی Railway».
+
+    Every link handed to a user has to name the Worker — the Railway address is
+    exactly the one a filtered network cannot open — while the origin the Worker
+    itself dials stays the platform address. Pointing the served copy at the
+    Worker host would make the Worker call itself.
+    """
+    import re
+    _seed_nodes()
+    execute('DELETE FROM users')
+    client.post('/api/users', headers=h(), json={'username': 'workerhost'})
+    # Before a Worker exists, every subscription URL names this deployment.
+    before = client.get('/api/users/workerhost/links', headers=h()).json()
+    assert set(re.findall(r'https?://[^"\s]+/sub/', json.dumps(before))) == {'https://testserver/sub/'}
+    saved = client.post('/api/settings/cloudflare-worker', headers=h(),
+                        json={'url': 'https://edge.example.org'}).json()
+    assert saved['configured'] is True
+    links = client.get('/api/users/workerhost/links', headers=h()).json()
+    body = json.dumps(links)
+    # Every subscription URL a user is handed names the Worker host...
+    assert set(re.findall(r'https?://[^"\s]+/sub/', body)) == {'https://edge.example.org/sub/'}
+    # ...while the origin node still points at the deployment itself, which is
+    # the address the Worker has to dial.
+    assert '"server": "testserver"' in body
+    config = client.get('/api/client-config/workerhost', headers=h()).json()
+    assert config['subscription'].startswith('https://edge.example.org/sub/')
+    # ...while the copy the Worker is deployed from still names the origin.
+    code = client.get('/api/cloudflare/worker-code', headers=h()).json()
+    assert code['origin'] in code['code']
+    assert 'edge.example.org' not in code['code']
+    client.post('/api/settings/cloudflare-worker', headers=h(), json={'url': ''})
 
 
 def test_client_download_links_can_be_overridden_from_the_panel():
@@ -842,6 +942,12 @@ def test_public_status_window_lists_links_clients_and_nodes():
     assert {c['id'] for c in data['clients']} >= {'bettbox', 'exclusive', 'nekoboxplus'}
     assert data['nodes_total'] == len(data['nodes']) == 2
     assert data['portal_url'].endswith('/portal/' + user['uuid'])
+
+    # The support channel is the default target, so «پشتیبانی» is never a dead
+    # button in a fresh install's status window.
+    from app.config import SUPPORT_CHANNEL
+    assert data['support_url'] == SUPPORT_CHANNEL
+    assert f'href="{SUPPORT_CHANNEL}"' in page.text
 
     # Username lookup works too, and the legacy admin URL renders the same window.
     assert anonymous.get(f"/portal/{user['username']}").status_code == 200

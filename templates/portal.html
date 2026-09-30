@@ -141,6 +141,33 @@
     </div>
   </section>
 
+  <section class="glass sub-card" id="feedbackCard">
+    <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-activity"/></svg> بازخورد و پیشنهاد <span class="count">نظر شما این سرویس را بهتر می‌کند</span></h2>
+    <p style="color:var(--muted);font-size:12px;margin:0 0 10px;line-height:1.8">
+      اگر جایی کند است، چیزی کار نمی‌کند یا ایده‌ای برای بهتر شدن دارید، همین‌جا بنویسید؛ پیام شما مستقیم به مدیریت می‌رسد.
+    </p>
+    <div id="fbForm">
+      <div id="fbKinds" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <button type="button" class="tbtn on" data-kind="bug">اشکال</button>
+        <button type="button" class="tbtn" data-kind="slow">کندی</button>
+        <button type="button" class="tbtn" data-kind="idea">پیشنهاد</button>
+        <button type="button" class="tbtn" data-kind="other">دیگر</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <span style="font-size:12px;color:var(--muted)">رضایت کلی</span>
+        <span id="fbStars" style="display:inline-flex;gap:4px;direction:ltr"></span>
+      </div>
+      <textarea id="fbMessage" rows="3" maxlength="2000" placeholder="متن بازخورد…"
+        style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);border-radius:12px;color:var(--fg);font-family:inherit;font-size:13px;padding:10px 12px;resize:vertical"></textarea>
+      <input id="fbContact" maxlength="200" placeholder="راه تماس (اختیاری: تلگرام یا ایمیل)"
+        style="width:100%;box-sizing:border-box;margin-top:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);border-radius:12px;color:var(--fg);font-family:inherit;font-size:13px;padding:10px 12px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <button class="tbtn" id="fbSend" type="button">ارسال بازخورد</button>
+        <span id="fbHint" style="font-size:11.5px;color:var(--muted)"></span>
+      </div>
+    </div>
+  </section>
+
   <section>
     <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-link"/></svg> لینک اشتراک هوشمند <span class="count">سریع‌ترین نود بر اساس پینگ</span></h2>
     <div class="link-box">
@@ -158,6 +185,64 @@
       <button class="copy-btn" data-copy="{{ p.portal_url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
     </div>
   </section>
+
+  {% if p.telegram %}
+  <section>
+    <h2><svg width="15" height="15" style="color:#d9f76e"><use href="#i-link"/></svg> پروکسی تلگرام
+      <span class="count">فقط برای تلگرام — بدون کلاینت اضافه</span></h2>
+    {% if p.telegram.webrel %}
+    <div class="link-box">
+      <div class="lb-main">
+        <b>پروکسی WEB · {{ p.telegram.webrel.label }}</b>
+        <code>{{ p.telegram.webrel.url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ p.telegram.webrel.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+      <a class="tbtn" href="{{ p.telegram.webrel.tme }}" target="_blank" rel="noopener">افزودن با یک کلیک</a>
+    </div>
+    <p class="fam-hint">در تلگرام دسکتاپ ۷.۱ یا بالاتر: تنظیمات → پیشرفته → نوع اتصال → افزودن پروکسی → نوع <b>WEB</b>، بعد همین لینک را اضافه کنید. تکرارش فقط یک بار لازم است.</p>
+    {% endif %}
+    {% if p.telegram.mtproto %}
+    <div class="link-box">
+      <div class="lb-main">
+        <b>پروکسی MTProto · {{ p.telegram.mtproto.label }}</b>
+        <code>{{ p.telegram.mtproto.url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ p.telegram.mtproto.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+      <a class="tbtn" href="{{ p.telegram.mtproto.tme }}" target="_blank" rel="noopener">افزودن با یک کلیک</a>
+    </div>
+    {% endif %}
+    {% for line in p.telegram.lines %}
+    <div class="link-box">
+      <div class="lb-main">
+        <b>وب‌پروکسی {{ line.label }} <span class="muted" style="font-weight:400">نام کاربری: {{ line.username }}</span></b>
+        <code>{{ line.url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ line.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+    </div>
+    {% endfor %}
+    {% if p.telegram.web %}
+    <div class="link-box">
+      <div class="lb-main">
+        <b>{{ p.telegram.web.label }}</b>
+        <code>{{ p.telegram.web.url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ p.telegram.web.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+      <a class="tbtn" href="{{ p.telegram.web.url }}" target="_blank" rel="noopener">باز کردن</a>
+    </div>
+    {% endif %}
+    {% if p.telegram.sponsor %}
+    <div class="link-box">
+      <div class="lb-main">
+        <b>{{ p.telegram.sponsor.label }} <span class="muted" style="font-weight:400">@{{ p.telegram.sponsor.handle }}</span></b>
+        <code>{{ p.telegram.sponsor.url }}</code>
+      </div>
+      <button class="copy-btn" data-copy="{{ p.telegram.sponsor.url }}" title="کپی"><svg><use href="#i-copy"/></svg></button>
+      <a class="tbtn" href="tg://resolve?domain={{ p.telegram.sponsor.handle }}">عضویت در تلگرام</a>
+    </div>
+    {% endif %}
+    <p class="fam-hint">{{ p.telegram.hint }}</p>
+  </section>
+  {% endif %}
 
   {% if p.scope_empty %}
   <div class="notice">
@@ -384,6 +469,71 @@
       if (!silent) toast('بروزرسانی ناموفق بود', 'err');
     }
   };
+
+  // Feedback: the sender is an end user, not the admin, so the subscription
+  // token in the body is what authorises the write on the server side.
+  (() => {
+    const kinds = document.getElementById('fbKinds');
+    const stars = document.getElementById('fbStars');
+    const send = document.getElementById('fbSend');
+    const message = document.getElementById('fbMessage');
+    const contact = document.getElementById('fbContact');
+    const hint = document.getElementById('fbHint');
+    if (!kinds || !send || !message) return;
+    let kind = 'bug';
+    let rating = 0;
+
+    kinds.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-kind]');
+      if (!button) return;
+      kind = button.dataset.kind;
+      kinds.querySelectorAll('[data-kind]').forEach((other) => other.classList.toggle('on', other === button));
+    });
+
+    // Five stars, painted from JS so the markup stays one line in the template.
+    if (stars) {
+      for (let value = 1; value <= 5; value += 1) {
+        const star = document.createElement('button');
+        star.type = 'button';
+        star.textContent = '★';
+        star.dataset.value = String(value);
+        star.style.cssText = 'background:none;border:0;cursor:pointer;font-size:18px;line-height:1;padding:0;color:rgba(255,255,255,.22)';
+        stars.appendChild(star);
+      }
+      stars.addEventListener('click', (event) => {
+        const star = event.target.closest('[data-value]');
+        if (!star) return;
+        rating = Number(star.dataset.value);
+        stars.querySelectorAll('[data-value]').forEach((other) => {
+          other.style.color = Number(other.dataset.value) <= rating ? '#d9f76e' : 'rgba(255,255,255,.22)';
+        });
+      });
+    }
+
+    send.addEventListener('click', async () => {
+      const text = message.value.trim();
+      if (text.length < 3) { hint.textContent = 'کمی بیشتر بنویسید (حداقل ۳ نویسه)'; return; }
+      send.disabled = true;
+      hint.textContent = 'در حال ارسال…';
+      try {
+        const response = await fetch('/api/feedback', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token: TOKEN, kind, message: text, rating, contact: contact.value.trim() }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'ارسال نشد');
+        message.value = ''; contact.value = ''; rating = 0;
+        if (stars) stars.querySelectorAll('[data-value]').forEach((other) => { other.style.color = 'rgba(255,255,255,.22)'; });
+        hint.textContent = 'ممنون! بازخورد شما ثبت شد.';
+        toast('بازخورد ثبت شد — ممنون');
+      } catch (error) {
+        hint.textContent = error.message || 'ارسال نشد؛ بعداً تلاش کنید';
+      } finally {
+        send.disabled = false;
+      }
+    });
+  })();
 
   document.getElementById('btnRefresh').addEventListener('click', () => refresh(false));
   tick();

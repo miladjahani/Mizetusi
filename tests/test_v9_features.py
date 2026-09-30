@@ -38,7 +38,7 @@ from app.main import _setting, app
 from app.nodes import catalog, ensure as ensure_nodes, upsert
 from app.subscriptions import flags as sub_flags
 from app.subscriptions import transports as tp
-from app.subscriptions.generator import node_links, render
+from app.subscriptions.generator import clash_document, node_links, render
 from app.users.service import create_user
 
 init_db()
@@ -228,12 +228,16 @@ def test_hysteria2_stays_out_until_it_is_configured_and_then_reaches_every_forma
     singbox = json.loads(render(user, 'https://panel.example.com', 'singbox'))
     assert any(item['type'] == 'hysteria2' and item['server'] == 'hy2.example.com'
                for item in singbox['outbounds'])
-    clash = json.loads(render(user, 'https://panel.example.com', 'clash'))
+    # Clash/Mihomo gets a whole YAML profile; the external endpoint is one of its
+    # proxies like it is one of the sing-box outbounds.
+    clash = clash_document(user)
     assert any(item['type'] == 'hysteria2' for item in clash['proxies'])
+    clash_text = render(user, 'https://panel.example.com', 'clash')
+    assert 'type: hysteria2' in clash_text and 'proxy-groups:' in clash_text
 
     # It is one shared external endpoint, so a per-node subscription leaves it out
     # and Xray (which has no hysteria2 outbound) never carries it.
-    assert 'hysteria2://' not in render(user, 'https://panel.example.com', 'auto', include_hy2=False)
+    assert 'hysteria2://' not in render(user, 'https://panel.example.com', 'auto', include_extras=False)
     assert 'hysteria2' not in render(user, 'https://panel.example.com', 'xray')
 
     off = client.post('/api/hysteria', headers=h(), json={'action': 'disable'}).json()
@@ -259,7 +263,7 @@ def test_the_per_user_config_count_is_honoured_by_every_format():
     decoded = base64.b64decode(render(user, 'https://panel.example.com', 'base64')).decode()
     assert len([line for line in decoded.splitlines() if line]) == 5
     assert len(json.loads(render(user, 'https://panel.example.com', 'singbox'))['outbounds']) == 5
-    assert len(json.loads(render(user, 'https://panel.example.com', 'clash'))['proxies']) == 5
+    assert len(clash_document(user)['proxies']) == 5
     assert len(json.loads(render(user, 'https://panel.example.com', 'xray'))['outbounds']) == 5
 
     # Empty means every published combination, and the API round-trips the value.
@@ -305,7 +309,15 @@ def test_the_status_window_groups_the_client_sublinks_by_engine_and_reports_the_
                for item in data['transports'])
 
     assert data['config_count'] == 6 and data['config_limit'] == 6
-    assert data['banner'] == 'تمدید از پشتیبانی' and data['support_url'] == ''
+    # The admin's support link always wins; with nothing configured the window
+    # falls back to the built-in support channel instead of dropping the button.
+    from app.config import SUPPORT_CHANNEL
+    assert data['banner'] == 'تمدید از پشتیبانی' and data['support_url'] == SUPPORT_CHANNEL
+    client.post('/api/customization', headers=h(), json={'support_url': 'https://t.me/my_desk'})
+    try:
+        assert client.get(f"/portal/{user['uuid']}/json").json()['support_url'] == 'https://t.me/my_desk'
+    finally:
+        client.post('/api/customization', headers=h(), json={'support_url': ''})
     assert data['flags'] is True
     # The admin's preferred shape is what the window marks as recommended.
     assert data['default_format'] == 'clash'

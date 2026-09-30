@@ -72,6 +72,10 @@ export class GuideView {
     // The step list is the server's; an unexpected payload must not take the
     // drawer (and the tab behind it) down with it.
     const steps = Array.isArray(guide.steps) ? guide.steps : [];
+    // The support channel is where renewals and client questions actually land,
+    // and on a phone this drawer is the only place that stays reachable (the
+    // sidebar footer that carries the same link is hidden below 900px).
+    const support = typeof guide.support === 'string' && /^https?:\/\//.test(guide.support) ? guide.support : '';
     const done = steps.filter((step) => step.done).length;
     const next = steps.find((step) => !step.done);
     const score = Fmt.clamp(Number(guide.score) || 0, 0, 100);
@@ -97,6 +101,14 @@ export class GuideView {
             ${step.done ? '' : `<div class="g-go"><button data-guide-go="${esc(step.section)}">${ico('chevron', 12)} رفتن به این تب</button></div>`}
           </div>
         </div>`).join('')}
+      ${support ? `
+      <div class="guide-tip">
+        <b>${ico('link', 13)} پشتیبانی</b>
+        <p style="margin:6px 0 0;font-size:10.5px;color:var(--muted);line-height:1.85">
+          تمدید اشتراک، راهنمای کلاینت‌ها و اطلاع از تغییرات در کانال پشتیبانی اعلام می‌شود.
+        </p>
+        <div style="margin-top:9px"><a class="tbtn info" href="${esc(support)}" target="_blank" rel="noopener">${ico('link', 12)} کانال پشتیبانی</a></div>
+      </div>` : ''}
       ${guide.links?.smart ? `
       <div class="guide-tip">
         <b>${ico('link', 13)} اولین کاربر آماده: ${esc(guide.links.username)}</b>

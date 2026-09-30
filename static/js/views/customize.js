@@ -52,6 +52,10 @@ export class CustomizeView {
 
     const flags = $('#czFlags');
     if (flags) flags.classList.toggle('on', data.flags !== false);
+    // Whether a location's country is measured from its own addresses instead of
+    // trusted as typed (app/edge/geo.py).
+    const geoSwitch = $('#czGeo');
+    if (geoSwitch) geoSwitch.classList.toggle('on', data.geo_lookup !== false);
 
     // Node scope: which slice of the catalog a quick-created user publishes by
     // default. The server sends the catalog with live node counts, so the choice
@@ -72,7 +76,8 @@ export class CustomizeView {
     const tag = $('#czTag');
     if (tag) {
       tag.className = 'pill ok';
-      tag.innerHTML = `${ico('edit', 12)} ${data.flags === false ? 'بدون پرچم' : 'پرچم فعال'}`;
+      tag.innerHTML = `${ico('edit', 12)} ${data.flags === false ? 'بدون پرچم' : 'پرچم فعال'}`
+        + (data.geo_lookup === false ? ' · برچسب دستی' : ' · کشور اندازه‌گیری‌شده');
     }
 
     const preview = $('#czPreview');
@@ -92,6 +97,7 @@ export class CustomizeView {
           <div class="kv-line"><span>نام برنامه</span><b>${esc(data.app_name)}</b></div>
           <div class="kv-line"><span>لینک پشتیبانی</span><b dir="ltr">${esc(data.support_url || '—')}</b></div>
           <div class="kv-line"><span>پرچم کشور روی نودها</span><b>${data.flags === false ? 'خاموش' : 'روشن'}</b></div>
+          <div class="kv-line"><span>منبع کشور لوکیشن‌ها</span><b>${data.geo_lookup === false ? 'برچسب دستی' : 'اندازه‌گیری از آی‌پی'}</b></div>
           <div class="kv-line"><span>تعداد کانفیگ پیش‌فرض</span><b>${cap ? Fmt.num(cap) : 'بدون سقف'}</b></div>
           <div class="kv-line"><span>محدودهٔ نودهای کاربر</span><b>${esc(options.find((item) => item.id === data.default_scope)?.label || 'همه نودها')}</b></div>
         </div>
@@ -101,6 +107,7 @@ export class CustomizeView {
 
   async save() {
     const flags = $('#czFlags')?.classList.contains('on');
+    const geoLookup = $('#czGeo')?.classList.contains('on');
     const payload = {
       portal_banner: $('#czBanner')?.value.trim() || '',
       support_url: $('#czSupport')?.value.trim() || '',
@@ -109,6 +116,7 @@ export class CustomizeView {
       accent_secondary: $('#czAccent2')?.value.trim() || '',
       default_format: $('#czFormat')?.value || 'auto',
       flags_enabled: flags ? '1' : '0',
+      geo_lookup: geoLookup ? '1' : '0',
       default_max_configs: $('#czMaxConfigs')?.value.trim() || '',
       default_scope: ($$('#czScopes .pick.on').find(() => true) || {}).dataset?.scope || 'all',
     };
@@ -124,6 +132,8 @@ export class CustomizeView {
   bindEvents() {
     const switchEl = $('#czFlags');
     if (switchEl) switchEl.onclick = () => switchEl.classList.toggle('on');
+    const geoSwitch = $('#czGeo');
+    if (geoSwitch) geoSwitch.onclick = () => geoSwitch.classList.toggle('on');
     const save = $('#czSave');
     if (save) save.onclick = () => this.app.safe(() => this.save());
     const reload = $('#czReload');

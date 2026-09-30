@@ -27,6 +27,10 @@ from app.subscriptions import transports as tp
 _proc = None
 _last_hash = None
 _last_warning = ''
+# Tags of the inbounds the last successful (re)start really contains. ``None``
+# means "nothing was started in this process yet", which is what the Telegram
+# web-proxy card reads to tell «configured» from «served».
+_last_served = None
 
 
 # ------------------------------------------------------------------- credentials
@@ -132,6 +136,23 @@ def edge_inbounds(profiles=None):
     return items
 
 
+def telegram_inbounds():
+    """The Telegram web proxies (HTTP/SOCKS5) the admin switched on.
+
+    They ride *this* engine on purpose: Xray serves both inbound types with real
+    accounts, so the web proxies need no second binary, share the supervisor's
+    candidate ladder, and are revoked with the user they authenticate. The import
+    is deferred because the Telegram package reads this module back.
+    """
+    from app.telegram import webproxy
+    return webproxy.xray_inbounds()
+
+
+def served_tags():
+    """Which inbound tags the running config really has (``None`` = not known)."""
+    return None if _last_served is None else list(_last_served)
+
+
 def edge_profile_ids(config=None):
     """Profile tags of a config's inbounds (what the engine actually serves)."""
     cfg = config if config is not None else _config()
@@ -195,16 +216,19 @@ def routing():
     return {'domainStrategy': 'AsIs', 'rules': rules}
 
 
-def _config(edge=None, with_warp=True, with_direct=True):
+def _config(edge=None, with_warp=True, with_direct=True, with_telegram=True):
     """The engine config.
 
-    ``edge``/``with_warp``/``with_direct`` exist so a transport the installed
-    Xray build refuses can be dropped **without** taking the whole engine down:
-    the candidates in :func:`_candidate_configs` are tried richest-first.
+    ``edge``/``with_warp``/``with_direct``/``with_telegram`` exist so a transport the
+    installed Xray build refuses (or a Telegram web proxy it rejects) can be
+    dropped **without** taking the whole engine down: the candidates in
+    :func:`_candidate_configs` are tried richest-first.
     """
     inbounds = list(edge_inbounds() if edge is None else edge)
     if not with_warp:
         inbounds = [item for item in inbounds if item['tag'] != tp.WARP_PROFILE['id']]
+    if with_telegram:
+        inbounds += telegram_inbounds()
     if with_direct:
         inbounds += direct_inbounds()
     outs = [item for item in outbounds() if with_warp or item.get('tag') != 'warp']
@@ -256,8 +280,14 @@ def _candidate_configs():
     yield full, served(full), ''
     trimmed = _config(edge=edge_inbounds(), with_warp=False, with_direct=False)
     yield trimmed, served(trimmed), 'WARP/Reality حذف شد'
+    # A Telegram web proxy is the newest inbound here, so it is the first thing
+    # dropped when the engine refuses a config it cannot see: the VPN transports
+    # must never be the casualty of a Telegram listener.
+    plain = _config(edge=edge_inbounds(), with_warp=False, with_direct=False, with_telegram=False)
+    yield plain, served(plain), 'WARP/Reality/پروکسی تلگرام حذف شد'
     for keep in range(len(tp.SS_CIPHERS) - 1, -1, -1):
-        reduced = _config(edge=_edge_without_ciphers(keep), with_warp=False, with_direct=False)
+        reduced = _config(edge=_edge_without_ciphers(keep), with_warp=False, with_direct=False,
+                          with_telegram=False)
         names = ', '.join(c['id'] for c in tp.SS_CIPHERS[:keep]) or 'هیچ'
         yield reduced, served(reduced), f'شادوساکس محدود به {names}'
 
@@ -334,7 +364,7 @@ async def _stop():
 
 
 async def start_or_reload(force=False):
-    global _proc, _last_hash, _last_warning
+    global _proc, _last_hash, _last_warning, _last_served
     if not settings.xray_enabled or not os.path.exists(settings.xray_binary):
         return {'running': False, 'reason': 'xray binary unavailable'}
     if tp.direct_endpoint():
@@ -351,10 +381,12 @@ async def start_or_reload(force=False):
         # Even the smallest config is invalid; nothing can be served, so nothing
         # may be published either.
         tp.set_served([])
+        _last_served = []
         _last_warning = error
         return {'running': False, 'reason': error, 'served': []}
     # From here on, links are only generated for inbounds that really exist.
     tp.set_served(served)
+    _last_served = list(served)
     _last_warning = note
     if not force and digest == _last_hash and _proc and _proc.returncode is None:
         return {'running': True, 'pid': _proc.pid, 'reloaded': False, 'warning': note or None, 'served': served}
