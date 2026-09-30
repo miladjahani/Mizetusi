@@ -68,6 +68,8 @@ a dedicated subscription per client.
   for the published ports or prints exactly which to open. `--domain` sets the host clients use,
   `--open-firewall` runs the ufw rules, `--no-build` reuses existing images. An existing `.env` is
   never overwritten, so re-running it on a live host cannot rotate a password out from under you.
+  For the whole path end to end — picking a host, the domain, TLS through Cloudflare, migrating
+  users and backups — see **[docs/VPS-DEPLOY-FA.md](docs/VPS-DEPLOY-FA.md)** (Persian).
 - **Users can now talk back, and the panel can be handed to a crowd safely.** Sharing a
   deployment used to be listen-only: the status window showed a user their traffic and links, and
   there was no path back. The window now carries a **بازخورد و پیشنهاد** card (a category, an
