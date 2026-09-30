@@ -1,0 +1,293 @@
+"""Railway's own TCP proxies, driven from the panel itself.
+
+Railway publishes a service on HTTPS/443 and **nothing else**. Every capability
+whose listener is a raw TCP port — the Reality transport, AnyTLS, MTProto and the
+HTTP/SOCKS5 web proxies — needs its own *TCP proxy* there, and the port Railway
+allocates for it is random and is *not* the port the container binds. That gap is
+the single most common way a card looks «روشن» while the link it hands a user
+answers nothing, so the panel closes it itself instead of asking an admin to copy
+numbers between two dashboards:
+
+```
+container 0.0.0.0:8443   ← the listener the panel renders
+   ↓  TCP proxy (created here)
+*.proxy.rlwy.net:23177   ← the port a client must actually dial
+```
+
+Two facts about the API shape everything below:
+
+* a TCP proxy maps an ``applicationPort`` (the container's) to a ``proxyPort``
+  (Railway's) on a ``*.proxy.rlwy.net`` name — so the mapping, not the env vars,
+  is what a link has to be built from (``RAILWAY_TCP_PROXY_*`` describes only the
+  first proxy a service has);
+* ``tcpProxyCreate`` is marked *deprecated* in the published schema — it is still
+  the only create path the public API exposes, and its own deprecation note says
+  why it is deprecated rather than what replaced it: a TCP proxy created this way
+  is only **active after the service is redeployed**, which this module therefore
+  does once (see :func:`redeploy`).
+
+Credentials come from the environment like every other secret here — a Railway
+project token (``RAILWAY_API_TOKEN``) or a project token
+(``RAILWAY_TOKEN``/``NEXUS_RAILWAY_TOKEN``); Railway injects the project,
+environment and service ids into every deployment by itself. Nothing is sent
+anywhere but ``backboard.railway.com``, and every failure is returned as a
+readable reason rather than raised, because a card has to be able to say *why*.
+"""
+import os
+
+import httpx
+
+ENDPOINT = 'https://backboard.railway.com/graphql/v2'
+# An operator override first, then the two names Railway's own tooling uses.
+TOKEN_KEYS = ('NEXUS_RAILWAY_TOKEN', 'RAILWAY_API_TOKEN', 'RAILWAY_TOKEN')
+PROJECT_KEYS = ('NEXUS_RAILWAY_PROJECT_ID', 'RAILWAY_PROJECT_ID')
+ENVIRONMENT_KEYS = ('NEXUS_RAILWAY_ENVIRONMENT_ID', 'RAILWAY_ENVIRONMENT_ID')
+SERVICE_KEYS = ('NEXUS_RAILWAY_SERVICE_ID', 'RAILWAY_SERVICE_ID')
+TIMEOUT = httpx.Timeout(20.0, connect=8.0)
+
+# Where each half of a call comes from, in the order an admin has to set them.
+# The card used to print the variable names and nothing else, which leaves an
+# admin holding one value (the project id off the dashboard URL) with no way to
+# tell that it does nothing on its own — without a token every call is refused
+# before the id is ever read.
+GUIDE = (
+    '۱) توکن: Railway → Account Settings → Tokens (یا Project Settings → Tokens) یک توکن با نقش '
+    'Workspace/Project Admin بسازید و در Railway → سرویس → Variables با نام RAILWAY_API_TOKEN ذخیره کنید. '
+    'بدون توکن، شناسهٔ پروژه تنها هیچ کاری نمی‌کند — API پیش از خواندن شناسه رد می‌کند.',
+    '۲) شناسهٔ پروژه: همان شناسه‌ای که در آدرس داشبورد می‌بینید (railway.app/project/<شناسه>) → RAILWAY_PROJECT_ID',
+    '۳) شناسهٔ محیط و سرویس: Railway خودش RAILWAY_ENVIRONMENT_ID و RAILWAY_SERVICE_ID را به هر دیپلوی '
+    'تزریق می‌کند؛ فقط اگر کارت آن دو را «ست نشده» نشان داد، از Project Settings → Environments و '
+    'Service → Settings کپی و همان‌جا به Variables اضافه کنید.',
+    '۴) پس از ذخیرهٔ متغیرها Railway خودش یک‌بار ری‌استارت می‌کند؛ بعد از آن دکمهٔ «ساخت پورت‌های TCP روی '
+    'Railway» را بزنید تا پروکسی هر پورت خام ساخته و در جدول همین کارت فوروارد شود.',
+)
+
+# One query and two mutations — spelled out rather than built from strings so the
+# exact fields a card needs are visible here, and a schema field that disappears
+# fails loudly in a test instead of silently emptying a card.
+_LIST = ('query($environmentId:String!,$serviceId:String!){'
+         ' tcpProxies(environmentId:$environmentId,serviceId:$serviceId){'
+         ' id domain proxyPort applicationPort syncStatus } }')
+_CREATE = ('mutation($input:TCPProxyCreateInput!){ tcpProxyCreate(input:$input){'
+           ' id domain proxyPort applicationPort syncStatus } }')
+_DELETE = 'mutation($id:String!){ tcpProxyDelete(id:$id) }'
+_REDEPLOY = ('mutation($serviceId:String!,$environmentId:String!){'
+             ' serviceInstanceRedeploy(serviceId:$serviceId,environmentId:$environmentId) }')
+_VARIABLE = ('mutation($input:VariableUpsertInput!){ variableUpsert(input:$input) }')
+
+
+def _env(*names):
+    """First non-empty environment value among ``names``."""
+    for name in names:
+        value = (os.getenv(name) or '').strip()
+        if value:
+            return value
+    return ''
+
+
+def token():
+    """The Railway API token, or ``''`` when an admin has not provided one."""
+    return _env(*TOKEN_KEYS)
+
+
+def project():
+    return _env(*PROJECT_KEYS)
+
+
+def environment():
+    return _env(*ENVIRONMENT_KEYS)
+
+
+def service():
+    return _env(*SERVICE_KEYS)
+
+
+def configured():
+    """Whether every half of a Railway API call is present."""
+    return bool(token() and project() and environment() and service())
+
+
+def missing():
+    """The names an admin still has to set, in the order they matter."""
+    out = []
+    if not token():
+        out.append('RAILWAY_API_TOKEN')
+    if not environment():
+        out.append('RAILWAY_ENVIRONMENT_ID')
+    if not service():
+        out.append('RAILWAY_SERVICE_ID')
+    if not project():
+        out.append('RAILWAY_PROJECT_ID')
+    return out
+
+
+def http_port():
+    """The port the HTTP edge really serves on.
+
+    Railway injects ``PORT`` for that edge, and ``NEXUS_HTTP_PORT`` is the
+    operator's override (the ``Dockerfile`` gives uvicorn the same two names, so
+    this and the process that binds it cannot disagree). The fallback is the
+    ``Dockerfile``'s own default.
+    """
+    raw = _env('NEXUS_HTTP_PORT', 'PORT')
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 0
+    return value if 1 <= value <= 65535 else 8080
+
+
+def _headers():
+    """Both auth headers, because a project token uses the second one.
+
+    Railway's public API takes a workspace/account token in ``Authorization`` and
+    a project token in ``Project-Access-Token``. They are mutually exclusive and
+    each is ignored when the wrong kind is supplied, so sending both lets one
+    setting accept either kind without asking an admin which one they made.
+    """
+    value = token()
+    return {'Authorization': f'Bearer {value}', 'Project-Access-Token': value,
+            'Content-Type': 'application/json'}
+
+
+def _call(query, variables=None):
+    """One API call. Returns ``(data, error)`` — never raises.
+
+    GraphQL answers 200 with an ``errors`` array for authorization failures too,
+    so the array is inspected rather than the status code alone (see the API's own
+    documentation: a query that runs but is denied returns 200).
+    """
+    if not token():
+        return None, 'توکن API رِیلوی ست نشده است (RAILWAY_API_TOKEN)'
+    payload = {'query': query, 'variables': variables or {}}
+    try:
+        with httpx.Client(timeout=TIMEOUT) as client:
+            response = client.post(ENDPOINT, headers=_headers(), json=payload)
+    except Exception as exc:
+        return None, f'ارتباط با API رِیلوی برقرار نشد ({type(exc).__name__})'
+    if response.status_code == 429:
+        return None, 'محدودیت نرخ API رِیلوی (۴۲۹)؛ کمی بعد دوباره تلاش کنید'
+    try:
+        body = response.json()
+    except Exception:
+        return None, f'پاسخ API رِیلوی خوانده نشد (HTTP {response.status_code})'
+    problems = body.get('errors') or []
+    if problems:
+        message = str((problems[0] or {}).get('message') or 'unknown error')
+        code = str(((problems[0] or {}).get('extensions') or {}).get('code') or '')
+        if code == 'INTERNAL_SERVER_ERROR' and 'not authorized' in message.lower():
+            return None, 'توکن API رِیلوی مجاز نیست — نقش Workspace/Project Admin لازم است'
+        return None, f'API رِیلوی خطا داد: {message[:200]}'
+    return body.get('data'), None
+
+
+# ------------------------------------------------------------------- proxies
+def proxies():
+    """Every TCP proxy this service has, with the port it really forwards.
+
+    ``[{'id','domain','proxyPort','applicationPort','syncStatus'}]`` — the raw
+    API shape, because :mod:`app.ports` is what decides how the panel stores it.
+    """
+    data, error = _call(_LIST, {'environmentId': environment(), 'serviceId': service()})
+    if error:
+        return [], error
+    rows = ((data or {}).get('tcpProxies') or [])
+    return [item for item in rows if isinstance(item, dict)], ''
+
+
+def create(application_port):
+    """Create a TCP proxy in front of ``application_port``. ``(proxy, error)``."""
+    if not configured():
+        return None, 'شناسه‌های پروژه/محیط/سرویس رِیلوی در دسترس نیست (' + '، '.join(missing()) + ')'
+    port = int(application_port)
+    if not 1 <= port <= 65535:
+        return None, f'پورت داخلی نامعتبر است ({application_port})'
+    data, error = _call(_CREATE, {'input': {'environmentId': environment(),
+                                            'serviceId': service(),
+                                            'applicationPort': port}})
+    if error:
+        return None, error
+    item = (data or {}).get('tcpProxyCreate') or {}
+    if not item.get('domain') or not item.get('proxyPort'):
+        return None, 'رِیلوی پروکسی TCP را نساخت (پاسخ ناقص بود)'
+    return item, ''
+
+
+def remove(proxy_id):
+    """Delete one TCP proxy by id. ``(ok, error)``."""
+    data, error = _call(_DELETE, {'id': str(proxy_id)})
+    if error:
+        return False, error
+    return bool((data or {}).get('tcpProxyDelete')), ''
+
+
+def redeploy():
+    """Redeploy once, so a TCP proxy created here is really active.
+
+    The API's own deprecation note for ``tcpProxyCreate`` says a proxy created
+    through it only takes effect after the service is redeployed. Since the pass
+    that creates them runs inside the running container, the honest completion is
+    one restart of that same service — after which the panel's stored mapping and
+    the real proxy agree, and the links it publishes answer.
+    """
+    data, error = _call(_REDEPLOY, {'serviceId': service(), 'environmentId': environment()})
+    if error:
+        return False, error
+    return bool(data), ''
+
+
+def set_variable(name, value, redeploy=False):
+    """Store one variable on the service. ``(ok, error)``.
+
+    ``skipDeploys`` is deliberate: the pass that needs this redeploys once itself
+    straight afterwards — a TCP proxy is only active after a restart — and a second
+    restart for the same change is one too many.
+    """
+    if not (project() and environment() and service()):
+        return False, 'شناسه‌های پروژه/محیط/سرویس رِیلوی در دسترس نیست (' + '، '.join(missing()) + ')'
+    if not str(name or '').strip():
+        return False, 'نام متغیر خالی است'
+    data, error = _call(_VARIABLE, {'input': {'projectId': project(),
+                                              'environmentId': environment(),
+                                              'serviceId': service(),
+                                              'name': str(name).strip(), 'value': str(value),
+                                              'skipDeploys': not redeploy}})
+    if error:
+        return False, error
+    return bool((data or {}).get('variableUpsert')), ''
+
+
+def pin_http_port():
+    """Keep the HTTP edge off the ports the raw transports own. ``(ok, error)``.
+
+    Railway hands a service whose networking was only HTTPS the port it already
+    serves on — but the moment a **TCP proxy** exists it hands the service that
+    proxy's *application* port as ``PORT`` instead, and that port is one Xray is
+    already listening on (Reality, AnyTLS, MTProto, a web proxy). uvicorn then dies
+    on «address already in use» and the panel crash-loops, which is a failure no card
+    can show because there is no panel left to show it.
+
+    Writing the *same* port as a **stored variable** is what fixes it: Railway
+    rewrites the ``PORT`` it injects, not one the service owns. Called from the pass
+    that creates the proxies, while this container is still serving on the real port.
+    """
+    if not _env('PORT'):
+        # No injected HTTP port to protect: a host that owns its ports (a VPS, a
+        # container started by hand) is not the case this exists for.
+        return True, ''
+    return set_variable('PORT', str(http_port()))
+
+
+def info(**extra):
+    """The panel's view of this integration — never the token itself."""
+    return {
+        'configured': configured(),
+        'missing': missing(),
+        'guide': list(GUIDE),
+        'endpoint': ENDPOINT,
+        'http_port': http_port(),
+        'project_id': project(),
+        'environment_id': environment(),
+        'service_id': service(),
+        **extra,
+    }

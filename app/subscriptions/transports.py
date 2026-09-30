@@ -21,7 +21,7 @@ import json
 import os
 import secrets
 
-from app import runtime
+from app import ports, runtime
 from app.config import settings
 # The hosted protocols are pure data (no imports of their own), so re-exporting
 # their ids here keeps this module the one place the app looks for the protocol
@@ -211,9 +211,13 @@ def _core_profiles():
     for item in cores.chosen():
         if not cores.is_published(item['id']):
             continue
+        # The published port, not the listen port: on Railway a TCP proxy forwards
+        # an arbitrary public port to the container's, and a client has to be
+        # handed the forwarded one (app/ports.py).
         out.append({'id': item['id'], 'protocol': item['protocol'], 'network': item['network'],
                     'security': item['security'], 'tag': item['tag'], 'group': CORE,
-                    'port': item['port'], 'engine': item['engine'], 'path': '', 'port_setting': None})
+                    'port': ports.published_port(item['port'], item['port']),
+                    'engine': item['engine'], 'path': '', 'port_setting': None})
     return out
 
 
@@ -333,6 +337,17 @@ def direct_endpoint():
         port = 0
     if host and port:
         return {'host': host, 'port': port, 'source': 'panel'}
+    # A TCP proxy the panel created for itself (app/ports.py) is more truthful
+    # than the environment: ``RAILWAY_TCP_PROXY_*`` describes only the *first*
+    # proxy a service has, while this mapping names the port that was really
+    # allocated for the Reality listener.
+    forwarded = ports.entry(int(settings.xray_reality_port))
+    if forwarded:
+        try:
+            return {'host': str(forwarded['host']), 'port': int(forwarded['port']),
+                    'source': 'railway'}
+        except (TypeError, ValueError, KeyError):
+            pass
     detected = runtime.direct()
     if detected:
         return {'host': detected['host'], 'port': int(detected['port']),

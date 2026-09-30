@@ -15,6 +15,7 @@ from app.db import rows
 from app.subscriptions.clients import CLIENT_FORMATS, FORMATS
 from app.subscriptions import transports as tp
 from app.subscriptions import scope as scopes
+from app.subscriptions import yamlout
 
 # Every client format NEXUS can emit, plus one target per known client id so a
 # client can subscribe with the exact name it is listed under in the panel.
@@ -408,6 +409,159 @@ def clash(user, node, profile, prefix=''):
     return entry
 
 
+# ------------------------------------------------------------- clash profile
+# Clash/Mihomo is handed a **whole profile**, not a fragment. That is the format:
+# every one of its clients (Clash Verge, Mihomo, FlClash, Bettbox, Stash) imports
+# a YAML config carrying ``proxies``, ``proxy-groups``, ``rules`` and ``dns`` — a
+# bare ``proxies:`` array is not a config, which is why the link used to look
+# broken. The shape below is the one working providers publish: one selector on
+# top, one latency group per country (the same country the node *names* carry),
+# an automatic group over everything, and local/Iranian traffic going direct.
+SELECT_GROUP = '🚀 انتخاب مسیر'
+AUTO_GROUP = '♻️ خودکار (کمترین تاخیر)'
+ORIGIN_GROUP = '🏠 سرور اصلی'
+PROBE_URL = 'https://www.gstatic.com/generate_204'
+
+# A short, curated block list. It is rendered only when the user's own
+# «بلاک تبلیغات» / «محتوای بزرگسال» switches are on, so a profile that never
+# asked for filtering does not silently drop a domain.
+AD_DOMAINS = (
+    'doubleclick.net', 'googlesyndication.com', 'googleadservices.com',
+    'adservice.google.com', 'ads.yahoo.com', 'amazon-adsystem.com',
+    'criteo.com', 'taboola.com', 'outbrain.com', 'scorecardresearch.com',
+    'adcolony.com', 'applovin.com', 'adjust.com', 'ads-twitter.com',
+)
+BLOCKED_CONTENT = (
+    'pornhub.com', 'xvideos.com', 'xnxx.com', 'xhamster.com', 'redtube.com',
+    'youporn.com', 'onlyfans.com', 'chaturbate.com',
+)
+
+
+def _flag_on(user, key):
+    """Whether a per-user switch is really on (it arrives as 0/1 or as text)."""
+    value = (user or {}).get(key)
+    if isinstance(value, str):
+        return value.strip().lower() not in ('', '0', 'false', 'no', 'off')
+    return bool(value)
+
+
+def _group_name(node):
+    """The proxy group a node belongs to: its country, or this server.
+
+    A multi-location subscription is only usable when its entries are grouped the
+    same way they are named, so the group carries the flag and Persian name the
+    node labels do (``app/subscriptions/flags.py``) — and it follows the panel's
+    «پرچم کشور روی نام نودها» switch, because the names inside it do.
+    """
+    location = tp.node_location(node)
+    if not location:
+        return ORIGIN_GROUP
+    from app.subscriptions import flags
+    name = flags.name(location) or location.upper()
+    return f'{tp.node_flag(node)} {name}'.strip()
+
+
+def _dns_block():
+    """A resolver setup that works from inside Iran and behind a CDN.
+
+    ``fake-ip`` is what the clients in this market already run; the local
+    resolvers answer the direct routes quickly, the encrypted fallbacks resolve
+    the proxied half, and a resolved address inside Iran follows the fallback
+    answer instead of a faked one.
+    """
+    return {
+        'enable': True,
+        'ipv6': False,
+        'enhanced-mode': 'fake-ip',
+        'fake-ip-range': '198.18.0.1/16',
+        'fake-ip-filter': ['*.lan', '*.local', '+.ir'],
+        'default-nameserver': ['223.5.5.5', '1.1.1.1'],
+        'nameserver': ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
+        'fallback': ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'],
+        'fallback-filter': {'geoip': True, 'geoip-code': 'IR'},
+    }
+
+
+def _rules(user):
+    """Local and Iranian traffic direct, filtered domains rejected, the rest proxied."""
+    items = ['GEOIP,LAN,DIRECT', 'GEOIP,IR,DIRECT', 'DOMAIN-SUFFIX,ir,DIRECT']
+    if _flag_on(user, 'block_ads'):
+        items += [f'DOMAIN-SUFFIX,{domain},REJECT' for domain in AD_DOMAINS]
+    if _flag_on(user, 'block_porn'):
+        items += [f'DOMAIN-SUFFIX,{domain},REJECT' for domain in BLOCKED_CONTENT]
+    return items + [f'MATCH,{SELECT_GROUP}']
+
+
+def clash_document(user, nodes=None, profiles=None, prefix='', include_extras=True):
+    """The whole Clash/Mihomo profile as a plain document.
+
+    Kept separate from its YAML text so the panel and the tests can assert on the
+    structure instead of parsing the serialisation back. The defaults mirror what
+    :func:`render` resolves, so ``clash_document(user)`` is exactly the document a
+    ``?target=clash`` request returns.
+    """
+    if nodes is None:
+        nodes = active_nodes(scope=tp.user_scope(user))
+    if profiles is None:
+        profiles = profiles_for('all', tp.user_protocols(user))
+    proxies, members, used = [], [], set()
+    for node, profile in entry_pairs(user, nodes, profiles, include_extras):
+        entry = clash(user, node, profile, prefix)
+        name = str(entry.get('name') or '').strip()
+        if not name:
+            continue
+        # A Clash profile silently keeps the *last* proxy of a repeated name, so
+        # a collision would drop a node without saying anything.
+        if name in used:
+            suffix = 2
+            while f'{name} {suffix}' in used:
+                suffix += 1
+            name = f'{name} {suffix}'
+            entry['name'] = name
+        used.add(name)
+        proxies.append(entry)
+        members.append((_group_name(node), name))
+    if not proxies:
+        raise ValueError('no proxies for this subscription')
+    grouped = {}
+    for group, name in members:
+        grouped.setdefault(group, []).append(name)
+    country_groups = [{'name': group, 'type': 'url-test', 'url': PROBE_URL,
+                       'interval': 600, 'tolerance': 80, 'proxies': names}
+                      for group, names in grouped.items()]
+    return {
+        'mixed-port': 7890,
+        'allow-lan': False,
+        'bind-address': '127.0.0.1',
+        'mode': 'rule',
+        'log-level': 'info',
+        'ipv6': False,
+        'unified-delay': True,
+        'external-controller': '127.0.0.1:9090',
+        'secret': str((user or {}).get('uuid') or ''),
+        'dns': _dns_block(),
+        'proxies': proxies,
+        'proxy-groups': [
+            {'name': SELECT_GROUP, 'type': 'select',
+             'proxies': [AUTO_GROUP] + [group['name'] for group in country_groups] + ['DIRECT']},
+            {'name': AUTO_GROUP, 'type': 'url-test', 'url': PROBE_URL,
+             'interval': 300, 'tolerance': 50,
+             'proxies': [proxy['name'] for proxy in proxies]},
+        ] + country_groups,
+        'rules': _rules(user),
+        'sniffer': {'enable': True, 'force-dns-mapping': True, 'parse-pure-ip': True,
+                    'override-destination': True,
+                    'sniff': {'HTTP': {'ports': [80, '8080-8880']}, 'TLS': {'ports': [443]},
+                              'QUIC': {'ports': [443]}}},
+        'profile': {'store-selected': True, 'store-fake-ip': True},
+    }
+
+
+def clash_profile(user, nodes=None, profiles=None, prefix='', include_extras=True):
+    """The Clash/Mihomo subscription body: the document above, serialised as YAML."""
+    return yamlout.dump(clash_document(user, nodes, profiles, prefix, include_extras))
+
+
 def xray(user, node, profile, prefix=''):
     address, port = tp.node_address(node, profile)
     protocol = profile['protocol']
@@ -572,8 +726,11 @@ def entry_pairs(user, nodes, profiles, include_extras=True):
 
 
 def _json_subscription(user, nodes, profiles, kind, prefix='', include_extras=True):
-    builder = {'singbox': singbox, 'clash': clash, 'xray': xray}[kind]
-    key = 'proxies' if kind == 'clash' else 'outbounds'
+    # Clash/Mihomo gets a whole profile rather than a proxy list: its clients
+    # import a config (proxies + groups + rules), not a fragment of one.
+    if kind == 'clash':
+        return clash_profile(user, nodes, profiles, prefix, include_extras)
+    builder = {'singbox': singbox, 'xray': xray}[kind]
     entries = []
     for node, profile in entry_pairs(user, nodes, profiles, include_extras):
         # Xray has neither a hysteria2 nor an AnyTLS/TUIC outbound: those entries
@@ -581,7 +738,7 @@ def _json_subscription(user, nodes, profiles, kind, prefix='', include_extras=Tr
         if kind == 'xray' and profile.get('group') in (tp.HY2, tp.CORE):
             continue
         entries.append(builder(user, node, profile, prefix))
-    return json.dumps({key: entries}, ensure_ascii=False, indent=2)
+    return json.dumps({'outbounds': entries}, ensure_ascii=False, indent=2)
 
 
 def render(user, base, target, nodes=None, prefix='', include_extras=True):

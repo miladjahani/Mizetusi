@@ -24,7 +24,7 @@ to keep in sync.
 """
 import urllib.parse
 
-from app import runtime
+from app import ports, runtime
 from app.config import settings
 from app.db import execute, row, rows
 
@@ -94,19 +94,50 @@ def port(item):
     return value if 1 <= value <= 65535 else int(getattr(settings, item['default_port']))
 
 
+def listen_port(item):
+    """The port this proxy binds — for a raw profile *or* one from :func:`chosen`.
+
+    ``port()`` resolves a raw catalog entry through its settings key, while an
+    entry from :func:`chosen` already carries the resolved number. Both shapes
+    travel around this module (the tests hand a raw profile to :func:`reachable`),
+    so the one place that answers «which port» accepts either.
+    """
+    try:
+        value = int(item.get('port'))
+    except (TypeError, ValueError):
+        value = 0
+    return value if 1 <= value <= 65535 else port(item)
+
+
 def chosen():
-    """Both proxies with their resolved settings, in catalog order."""
+    """Both proxies with their resolved settings, in catalog order.
+
+    ``port`` is what Xray binds inside this container; ``published_port`` is what a
+    user has to dial. They differ on Railway, where a TCP proxy forwards an
+    arbitrary public port to the container's — and only the forwarded one belongs
+    in a line handed to a user (app/ports.py).
+    """
     out = []
     for item in PROFILES:
         entry = dict(item)
-        entry.update({'enabled': enabled(item), 'port': port(item)})
+        listen = listen_port(item)
+        entry.update({'enabled': enabled(item), 'port': listen,
+                      'published_port': ports.published_port(listen, listen)})
         out.append(entry)
     return out
 
 
 # ------------------------------------------------------------------ reachability
-def host():
-    """Where these listeners are reachable from outside, or ``''``."""
+def host(item=None):
+    """Where these listeners are reachable from outside, or ``''``.
+
+    With an ``item`` the TCP proxy made for that listener's own port wins: Railway
+    gives each forwarded port its own name, and a line has to name the one that
+    really forwards it.
+    """
+    forwarded = ports.published_host(listen_port(item)) if item else ''
+    if forwarded:
+        return forwarded
     from app.subscriptions import transports
     endpoint = transports.direct_endpoint() or {}
     return str(endpoint.get('host') or '')
@@ -114,9 +145,9 @@ def host():
 
 def reachable(item):
     """``(ok, reason)`` — could a client outside really dial this proxy?"""
-    if not runtime.has_tcp():
+    if not runtime.has_tcp() and not ports.proxied(listen_port(item)):
         return False, 'این پلتفرم پورت خام نمی‌دهد؛ وب‌پروکسی روی VPS یا با یک TCP Proxy (Railway) منتشر می‌شود'
-    if not host():
+    if not host(item):
         return False, 'آدرس عمومی پیدا نشد (روی Railway یک TCP Proxy بسازید یا direct_host را ست کنید)'
     return True, ''
 
@@ -201,12 +232,13 @@ def xray_inbounds():
 # ---------------------------------------------------------------------- links
 def line(item, username, password, hostname=None):
     """One ready-to-paste proxy line for one user ('' while unpublished)."""
-    address = hostname or host()
+    address = hostname or host(item)
     if not (address and username and password):
         return ''
     user = urllib.parse.quote(str(username), safe='')
     secret = urllib.parse.quote(str(password), safe='')
-    return f"{item['scheme']}://{user}:{secret}@{address}:{int(item['port'])}"
+    number = int(item.get('published_port') or listen_port(item))
+    return f"{item['scheme']}://{user}:{secret}@{address}:{number}"
 
 
 def lines(username=None, password=None):
@@ -217,13 +249,15 @@ def lines(username=None, password=None):
             continue
         if username and password:
             out.append({'id': item['id'], 'protocol': item['protocol'], 'label': item['label'],
-                        'note': item['note'], 'host': host(), 'port': int(item['port']),
+                        'note': item['note'], 'host': host(item),
+                        'port': int(item['published_port']), 'listen_port': int(item['port']),
                         'username': username, 'password': password,
                         'url': line(item, username, password)})
             continue
         for name, secret in users():
             out.append({'id': item['id'], 'protocol': item['protocol'], 'label': item['label'],
-                        'note': item['note'], 'host': host(), 'port': int(item['port']),
+                        'note': item['note'], 'host': host(item),
+                        'port': int(item['published_port']), 'listen_port': int(item['port']),
                         'username': name, 'password': secret,
                         'url': line(item, name, secret)})
     return out
@@ -240,7 +274,8 @@ def status():
         catalog.append({
             'id': item['id'], 'protocol': item['protocol'], 'tag': item['tag'],
             'label': item['label'], 'note': item['note'], 'engine': item['engine'],
-            'enabled': item['enabled'], 'port': int(item['port']),
+            'enabled': item['enabled'], 'port': int(item['published_port']),
+            'listen_port': int(item['port']),
             'reachable': ok, 'reason': reason, 'running': live, 'published': published(item),
         })
     return {

@@ -50,7 +50,7 @@ export class CloudflareView {
     const stateBox = $('#workerState');
     if (stateBox) {
       const copy = {
-        worker: ['Worker فعال است', 'Node Catalog از آی‌پی‌های سالم لوکیشن کلودفلر و از طریق Worker منتشر می‌شود.'],
+        worker: ['Worker فعال است', 'Node Catalog از آی‌پی‌های سالم لوکیشن کلودفلر و از طریق Worker منتشر می‌شود؛ خودِ پنل و سابلینک‌ها هم از همان آدرس منتشر می‌شوند، پس دامنهٔ فیلترشده لازم نیست.'],
         edge: ['حالت خودکار — بدون Worker', `دامنه پنل از طریق Cloudflare جلوه‌گذاری شده است؛ ${Fmt.num(cfNodes)} نود تمیز به‌صورت خودکار ساخته و پینگ شدند. اگر Worker هم مستقر کنید، همان آدرس اینجا ذخیره می‌شود.`],
         origin: ['لوکیشنی تنظیم نشده', `فقط نود مستقیم همین سرویس (${native}) منتشر می‌شود؛ از «منابع لبه و لوکیشن‌ها» می‌توانید آی‌پی تمیز یا دامنهٔ تمیز اضافه کنید.`],
       }[mode];
@@ -326,7 +326,9 @@ export class CloudflareView {
         if (guide) {
           guide.innerHTML = (data.steps || []).map((step, index) => `<div class="kv-line"><span>مرحله ${Fmt.num(index + 1)}</span>
             <b style="font-family:Vazirmatn;direction:rtl;max-width:78%;white-space:normal">${esc(step)}</b></div>`).join('')
-            + `<div class="kv-line"><span>آدرس سرویس داخل کد</span><b>${esc(data.origin)}</b></div>`;
+            + `<div class="kv-line"><span>آدرس سرویس داخل کد</span><b>${esc(data.origin)}</b></div>`
+            + '<div class="kv-line"><span>آدرس Worker = پنل</span><b style="font-family:Vazirmatn;direction:rtl;max-width:78%;white-space:normal">'
+            + 'آدرس Worker خودِ پنل را هم سرو می‌کند؛ همان آدرس را باز کنید و وارد شوید. از آن به بعد لینک‌های سابلینک و پنجرهٔ وضعیت از همین دامنه ساخته می‌شوند، پس دامنهٔ فیلترشده لازم نیست.</b></div>';
         }
       } catch (error) {
         this.store.set('workerCode', '');
@@ -366,10 +368,14 @@ export class CloudflareView {
         save.disabled = true;
         save.innerHTML = '<span class="spin-inline"></span> ذخیره…';
         try {
-          await this.api.post('/api/settings/cloudflare-worker', {
+          const saved = await this.api.post('/api/settings/cloudflare-worker', {
             url: $('#workerUrl').value.trim(), api_key: $('#workerKey')?.value.trim() || '',
           });
-          this.toasts.ok('تنظیمات Worker ذخیره و نودها Sync شد');
+          // A workers.dev host is saved but is not reachable from a filtered
+          // network, so the honest answer is a warning next to the success —
+          // otherwise the admin only finds out by testing from Iran.
+          if (saved.warning) this.toasts.err(saved.warning, 14000);
+          else this.toasts.ok('تنظیمات Worker ذخیره و نودها Sync شد');
           await this.app.loadCloudflare();
           await this.app.reloadNodes();
           await this.app.loadMetrics();
@@ -539,7 +545,7 @@ export class SettingsView {
     if (!version) this.app.safe(() => this.loadVersion());
     const count = metrics ? `${Fmt.num(metrics.totals.users)} کل · ${Fmt.num(metrics.totals.active_users)} فعال` : '—';
     const rows = [
-      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 9.2.0'],
+      ['نسخه پنل', version ? `NEXUS ${version.version} · build ${version.build}` : 'NEXUS 9.8.0'],
       ['آدرس پایه', settings.resolved_base_url || location.origin],
       ['کاربران', count],
       ['نودهای فعال', metrics ? `${Fmt.num(metrics.totals.nodes_enabled)} از ${Fmt.num(metrics.totals.nodes)}` : '—'],

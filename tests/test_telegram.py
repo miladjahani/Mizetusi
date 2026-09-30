@@ -99,6 +99,19 @@ def a_host_that_owns_its_ports(monkeypatch):
     monkeypatch.setattr(runtime, 'has_tcp', lambda: True)
 
 
+@pytest.fixture(autouse=True)
+def no_publish_mode_is_left_behind():
+    """Nothing here may depend on a publish mode left in the shared database.
+
+    The mode picker is gone with the WEB proxy that default served, but a value a
+    previous run (or an older deployment) stored must not change what these tests
+    see, so the key is cleared rather than pinned.
+    """
+    execute("DELETE FROM settings WHERE key='tg_proxy_mode'")
+    yield
+    execute("DELETE FROM settings WHERE key='tg_proxy_mode'")
+
+
 def a_user(username='tguser', uuid=USER_UUID):
     from app.core.models import UserCreate
     from app.users.service import create_user, list_users
@@ -518,6 +531,17 @@ def test_the_app_shell_is_served_with_the_shim_and_rewritten_urls(telegram_origi
     assert f"'{webapp.default_host()}'" in text and "'telegram.org'" in text
     assert '/__ws/' in text and '/__p/' in text
     assert 'WebSocket' in text and 'XMLHttpRequest' in text
+    # The sponsor is a row in the authenticated chat list, not an admin-panel
+    # link. It waits for Telegram's list, survives its re-renders, and opens the
+    # public channel through this proxy so a blocked direct t.me request is not
+    # what the user depends on.
+    assert f"const SPONSOR_URL = '{webapp.SPONSOR_URL}'" in text
+    assert f"const SPONSOR_HANDLE = '{webapp.SPONSOR_HANDLE}'" in text
+    assert "const SPONSOR_ID = 'nexus-sponsor-chat'" in text
+    assert "PREFIX + '/__p/t.me/' + SPONSOR_HANDLE" in text
+    assert "'#chat-list'" in text and 'findChatList' in text
+    assert 'new MutationObserver(schedule)' in text
+    assert "entry.target = '_blank'" in text and "entry.rel = 'noopener noreferrer'" in text
 
 
 def test_a_non_html_asset_streams_through_untouched(telegram_origin):
@@ -714,7 +738,8 @@ def test_the_panel_ships_the_tab_that_drives_all_this():
         html = handle.read()
     for element in ('section-telegram', 'tgMtTag', 'tgMtEnabled', 'tgMtPort', 'tgMtLinks',
                     'tgSave', 'tgReload', 'tgMtRotate', 'tgWebProfiles', 'tgWebAccounts',
-                    'tgAppEnabled', 'tgAppProbe', 'tgAppInfo', 'tgNotes'):
+                    'tgAppEnabled', 'tgAppProbe', 'tgAppInfo', 'tgNotes',
+                    'tgOtherTypes', 'tgOtherWeb'):
         assert f'id="{element}"' in html, element
     with open(os.path.join(root, 'static', 'js', 'views', 'telegram.js'), encoding='utf-8') as handle:
         view = handle.read()
@@ -740,9 +765,21 @@ def test_the_image_ships_the_mtproto_binary():
 
 
 def test_the_worker_carries_the_telegram_path():
+    """The Telegram Web prefix rides the Worker's whole-panel proxy.
+
+    The Worker no longer special-cases ``/tg``: it fronts the panel itself, so
+    the prefix (and the WebSocket half of it) is forwarded by the same hop as
+    every other panel route, with the path, query, body and client address
+    intact, and the host the origin builds its links from.
+    """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, 'cloudflare-worker', 'worker.js'), encoding='utf-8') as handle:
         worker = handle.read()
-    assert "const TELEGRAM_PREFIX = '/tg'" in worker
-    assert 'isTelegramPath(url.pathname)' in worker
+    assert 'const forward = new Request(origin + url.pathname + url.search, request)' in worker
     assert "forward.headers.set('X-Forwarded-Proto', 'https')" in worker
+    assert "forward.headers.set('X-Forwarded-Host', edgeHost)" in worker
+    # The panel proxy must stay a panel proxy: the edge path table never claims
+    # the Telegram prefix, and a path shaped like an absolute URL is refused.
+    block = worker.split('const EDGE_PATHS = [', 1)[1].split('];', 1)[0]
+    assert "'/tg'" not in block and '/tg/' not in block
+    assert 'isRelayShaped(url.pathname)' in worker

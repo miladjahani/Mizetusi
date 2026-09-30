@@ -17,6 +17,7 @@ self-contained capability an admin drives from one of the newer panel tabs:
 The router authenticates through the panel's own session, resolved lazily so this
 module can be imported by ``app.main`` without a circular import.
 """
+import asyncio
 import ipaddress
 import re
 import time
@@ -24,10 +25,14 @@ import urllib.parse
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app import autoconfig as auto_config
+from app import railway
+from app import self_update
 from app.core import clientip
 from app.cores import service as core_service
 from app.core.settings_store import store
 from app.db import execute
+from app import feedback as feedback_service
 from app.edge import packs as edge_packs
 from app.edge import sources as edge_sources
 from app.subscriptions import transports
@@ -66,6 +71,43 @@ def _audit(action, detail=''):
 
 def _flags_on():
     return (_setting('flags_enabled') or '1') != '0'
+
+
+# --------------------------------------------------------------- user feedback
+# The public half of this feature lives in ``app/main.py`` (the status window
+# posts to it). These are the admin's own three actions: read the inbox, mark a
+# note as read/done, and delete one. The count is also what a dashboard card
+# badges, so ``summary`` is returned on every list.
+@router.get('/api/feedback')
+def get_feedback(request: Request, status: str = '', limit: int = 200):
+    _auth(request)
+    return {'success': True, **feedback_service.summary(),
+            'kinds': [{'id': key, 'label': feedback_service.KIND_LABELS[key]}
+                      for key in feedback_service.KINDS],
+            'items': feedback_service.list_all(status=status, limit=limit)}
+
+
+@router.post('/api/feedback/{feedback_id}')
+async def update_feedback(request: Request, feedback_id: int):
+    _auth(request)
+    body = await _json_body(request)
+    try:
+        result = feedback_service.set_status(feedback_id, body.get('status'))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    _audit('feedback.status', f"#{feedback_id} → {result['status']}")
+    return {'success': True, **result, **feedback_service.summary()}
+
+
+@router.delete('/api/feedback/{feedback_id}')
+def delete_feedback(request: Request, feedback_id: int):
+    _auth(request)
+    try:
+        result = feedback_service.remove(feedback_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    _audit('feedback.delete', f'#{feedback_id}')
+    return {'success': True, **result, **feedback_service.summary()}
 
 
 async def _measure(request, source_ids):
@@ -595,6 +637,48 @@ async def save_telegram(request: Request):
     return {'success': True, 'changed': changed, 'sync': sync, **_telegram_payload(request)}
 
 
+# --------------------------------------------------- automatic configuration
+@router.get('/api/system/autoconfig')
+def get_autoconfig(request: Request):
+    """What the boot pass did, and what is left for an admin to decide.
+
+    The panel shows this instead of an instruction manual: the Railway TCP proxies
+    that were created for the raw-port capabilities an admin enabled, and — for
+    every capability that is still off, the WEB proxy included — the one thing that
+    would have to exist first (or, for the WEB proxy, the reason it is a choice).
+    """
+    _auth(request)
+    return {'success': True, **auto_config.state()}
+
+
+@router.post('/api/system/autoconfig')
+async def run_autoconfig(request: Request):
+    """Run one half of the pass by hand.
+
+    ``action`` is ``switches`` (re-run the pass — it flips no switch of its own and
+    only writes its marker), ``railway`` (create the TCP proxies Railway needs and
+    learn their public ports) or ``all``. The
+    API calls block, so both run in a worker thread and the answer carries the
+    state the panel renders — the same shape the automatic boot pass leaves
+    behind, which is what makes a manual run auditable.
+    """
+    _auth(request)
+    body = await _json_body(request)
+    action = str(body.get('action') or 'all').strip().lower()
+    if action not in ('switches', 'railway', 'all'):
+        raise HTTPException(400, 'action باید switches، railway یا all باشد')
+    outcome = {}
+    if action in ('railway', 'all'):
+        if not railway.token():
+            raise HTTPException(400, 'برای این کار توکن API رِیلوی لازم است؛ RAILWAY_API_TOKEN را ست کنید')
+        outcome['railway'] = await asyncio.to_thread(auto_config.railway_ports, True)
+    if action in ('switches', 'all'):
+        switched = await asyncio.to_thread(auto_config.apply, True)
+        outcome['switches'] = switched
+    _audit('system.autoconfig', action)
+    return {'success': True, 'action': action, 'outcome': outcome, **auto_config.state()}
+
+
 @router.post('/api/telegram/probe')
 async def probe_telegram(request: Request):
     """Fetch Telegram Web from this server and report what actually came back."""
@@ -806,3 +890,24 @@ def get_guide(request: Request, section: str = ''):
     state['section'] = wanted if wanted in SECTION_TIPS else 'dashboard'
     state['tip'] = SECTION_TIPS[state['section']]
     return state
+
+
+@router.get('/api/system/update')
+def get_update_status(request: Request, remote: bool = True):
+    """GitHub head, persistent-storage and deploy-provider preflight."""
+    _auth(request)
+    main = _main()
+    return {'success': True, **self_update.status(check_remote=remote),
+            'version': main.APP_VERSION, 'build': main.BUILD_TOKEN}
+
+
+@router.post('/api/system/update')
+def apply_update(request: Request):
+    """Back up first, then ask Railway/Render to deploy the latest GitHub commit."""
+    _auth(request)
+    result = self_update.apply()
+    if not result.get('ok'):
+        raise HTTPException(400, result.get('reason') or 'بروزرسانی انجام نشد')
+    _audit('system.update',
+           f"{result.get('provider', {}).get('id')} → {str(result.get('target_commit', ''))[:12]}")
+    return {'success': True, **result}

@@ -87,12 +87,34 @@ class SessionManager:
 
 
 class LoginThrottle:
-    """Sliding-window limiter for password attempts, keyed by client IP."""
+    """Sliding-window limiter for password attempts (and other public writes),
+    keyed by client IP.
+
+    The map is bounded on purpose: on a panel in front of a public URL every
+    request can arrive from a different address, so an unbounded ``_hits`` dict
+    is a slow memory leak an attacker controls. Each write sweeps expired keys
+    and, if the cap is still exceeded (many live sources at once), drops the
+    oldest windows first.
+    """
+
+    MAX_KEYS = 4096
 
     def __init__(self, limit=10, window=300):
         self.limit = max(1, int(limit))
         self.window = max(30, int(window))
         self._hits = {}
+
+    def _sweep(self, now):
+        if len(self._hits) <= self.MAX_KEYS:
+            return
+        for key in [key for key, hits in self._hits.items()
+                    if not hits or now - hits[-1] >= self.window]:
+            self._hits.pop(key, None)
+        overflow = len(self._hits) - self.MAX_KEYS
+        if overflow > 0:
+            oldest = sorted(self._hits.items(), key=lambda item: item[1][-1])[:overflow]
+            for key, _ in oldest:
+                self._hits.pop(key, None)
 
     def _prune(self, key, now):
         recent = [t for t in self._hits.get(key, []) if now - t < self.window]
@@ -108,6 +130,7 @@ class LoginThrottle:
 
     def fail(self, key):
         now = time.time()
+        self._sweep(now)
         recent = self._prune(key, now)
         recent.append(now)
         self._hits[key] = recent

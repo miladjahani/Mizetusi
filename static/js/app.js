@@ -24,6 +24,7 @@ import { CustomizeView } from './views/customize.js';
 import { ToolsView } from './views/tools.js';
 import { TelegramView } from './views/telegram.js';
 import { AdvancedView } from './views/advanced.js';
+import { SubscriptionsView } from './views/subscriptions.js';
 import { GuideView } from './views/guide.js';
 
 const POLL_SECONDS = 25;
@@ -46,12 +47,14 @@ export class NexusApp {
     this.tools = new ToolsView(this);
     this.telegram = new TelegramView(this);
     this.advanced = new AdvancedView(this);
+    this.subs = new SubscriptionsView(this);
     this.settings = new SettingsView(this);
     this.guide = new GuideView(this);
     this.clockTimer = null;
     this.polling = true;
     this.loginOverlay = null;
     this.resizeTimer = null;
+    this._resetSections = undefined;
   }
 
   /* ------------------------------------------------------------------ errors */
@@ -216,6 +219,15 @@ export class NexusApp {
     }
   }
 
+  async loadFeedback() {
+    try {
+      this.store.set('feedback', await this.api.get('/api/feedback?limit=50'));
+    } catch (error) {
+      this.store.set('feedback', null);
+      if (!error.unauthorized) throw error;
+    }
+  }
+
   async loadCore() {
     try {
       this.store.set('core', await this.api.get('/api/core/status'));
@@ -307,19 +319,61 @@ export class NexusApp {
   /* --------------------------------------------------------------- sections */
   go(section) { this.router.go(section); }
 
+  /* -------------------------------------------------- reset a tab to defaults
+     One mapping on the server (app/panel_extras.py) says which settings keys
+     belong to which tab; this injects that tab's own «بازگردانی پیش‌فرض» bar so
+     every section offers it without each view repeating the markup. */
+  async sectionResetMeta() {
+    if (this._resetSections !== undefined) return this._resetSections;
+    try {
+      this._resetSections = (await this.api.get('/api/settings/sections')).sections || {};
+    } catch (error) {
+      this._resetSections = null;
+    }
+    return this._resetSections;
+  }
+
+  async ensureSectionReset(section) {
+    const host = $(`#section-${section}`);
+    if (!host) return;
+    const meta = await this.sectionResetMeta();
+    if (!meta || !meta[section] || host.querySelector('[data-section-reset]')) return;
+    const bar = document.createElement('div');
+    bar.className = 'actions';
+    bar.dataset.sectionReset = section;
+    bar.style.cssText = 'margin:0 0 10px;justify-content:flex-end';
+    bar.innerHTML = `<button class="secondary compact" type="button">${ico('sync', 13)} بازگردانی پیش‌فرض این بخش</button>`;
+    host.insertBefore(bar, host.firstChild);
+    bar.querySelector('button').onclick = () => this.safe(() => this.resetSection(section));
+  }
+
+  async resetSection(section) {
+    const meta = await this.sectionResetMeta();
+    const keys = (meta && meta[section] && meta[section].keys) || [];
+    const confirmed = await this.modals.ask('بازگردانی پیش‌فرض بخش',
+      `تنظیمات این بخش (${keys.length} کلید) پاک می‌شود و پیش‌فرض‌ها برمی‌گردند.`, { confirmLabel: 'بازگردانی' });
+    if (!confirmed) return;
+    await this.api.post('/api/settings/reset', { section });
+    this._resetSections = undefined;
+    await this.showSection(section);
+    this.toasts.ok('بخش به پیش‌فرض برگردانده شد');
+  }
+
   async showSection(section) {
     this.applyNavState();
+    await this.ensureSectionReset(section);
     // The guide follows the tab: its tips and its «next step» are re-read on
     // every navigation, so the number in the topbar chip is never stale.
     this.safe(() => this.guide.load(section));
     if (section === 'dashboard') {
-      await Promise.all([this.loadCore(), this.loadWorkerSettings(), this.loadLogs()]);
+      await Promise.all([this.loadCore(), this.loadWorkerSettings(), this.loadLogs(), this.loadFeedback()]);
       this.dashboard.render();
       this.setLive(true);
       return;
     }
     if (section === 'nodes') {
       if (!this.store.get('users').length) await this.loadUsers();
+      await this.ensureSettings();
       await this.loadNodes();
       this.nodes.render();
       this.nodes.renderCoverage();
@@ -353,6 +407,12 @@ export class NexusApp {
     }
     if (section === 'advanced') {
       await Promise.all([this.loadNodes(), this.advanced.load()]);
+      return;
+    }
+    if (section === 'subs') {
+      await this.ensureSettings();
+      if (!this.store.get('users').length) await this.loadUsers();
+      await this.subs.load();
       return;
     }
     if (section === 'settings') await this.loadSettings();
@@ -391,6 +451,11 @@ export class NexusApp {
       }
       if (section === 'telegram') await this.telegram.load();
       if (section === 'advanced') await this.advanced.load();
+      if (section === 'subs') {
+        await this.ensureSettings();
+        if (!this.store.get('users').length) await this.loadUsers();
+        await this.subs.load();
+      }
       if (section === 'settings') await this.loadSettings();
       this.safe(() => this.guide.load(section));
       this.setLive(true);
@@ -472,6 +537,59 @@ export class NexusApp {
     if (apple) apple.setAttribute('content', name);
   }
 
+  /* ------------------------------------------------------------ panel update */
+  async updatePanel() {
+    const button = $('#btnPanelUpdate');
+    const original = button?.innerHTML || 'نسخه جدید';
+    if (button) { button.disabled = true; button.innerHTML = '<span class="spin-inline"></span> بررسی GitHub'; }
+    try {
+      const info = await this.api.get('/api/system/update');
+      if (!info.safe) {
+        this.toasts.err(info.reason || 'این استقرار هنوز برای بروزرسانی امن آماده نیست', 10000);
+        return;
+      }
+      const current = String(info.current_commit || '').slice(0, 7) || 'نامشخص';
+      const latest = String(info.latest?.sha || '').slice(0, 7) || 'نامشخص';
+      const change = info.update_available
+        ? `نسخه فعلی ${current} و آخرین commit شاخه ${info.branch}: ${latest} است.`
+        : `آخرین commit شاخه ${info.branch} با نسخه فعلی (${current}) یکسان است؛ سرویس دوباره ساخته می‌شود.`;
+      const confirmed = await this.modals.ask('نصب آخرین نسخه از GitHub',
+        `${change}\n\nپیش از استقرار، از کاربران، UUID لینک‌ها، تنظیمات و کاتالوگ نود نسخه پشتیبان گرفته می‌شود. سرویس چند دقیقه ری‌استارت خواهد شد.`,
+        { confirmLabel: 'پشتیبان بگیر و بروزرسانی کن' });
+      if (!confirmed) return;
+      if (button) button.innerHTML = '<span class="spin-inline"></span> در حال استقرار';
+      const result = await this.api.post('/api/system/update', {});
+      const target = String(result.target_commit || '').slice(0, 7);
+      this.toasts.info(`نسخه ${target} درخواست شد؛ منتظر بازگشت سرویس…`, 7000);
+
+      // A redeploy briefly drops the edge. Once the new process answers, its
+      // database guard verifies every user UUID before the panel reloads.
+      const deadline = Date.now() + 5 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        try {
+          const health = await fetch('/health', { cache: 'no-store' });
+          if (!health.ok) continue;
+          const state = await this.api.get('/api/system/update?remote=false');
+          if (state.guard?.restarted) {
+            if (!state.guard.preserved) {
+              this.toasts.err('سرویس بالا آمد اما شناسه لینک‌ها با پشتیبان فرق دارد؛ بازگشت خودکار انجام نشد', 15000);
+              return;
+            }
+            this.toasts.ok('نسخه جدید نصب شد و همه شناسه‌های لینک حفظ شدند', 7000);
+            setTimeout(() => location.reload(), 900);
+            return;
+          }
+        } catch (error) {
+          // The expected offline window while Railway replaces the container.
+        }
+      }
+      this.toasts.info('استقرار هنوز در حال انجام است؛ چند لحظه بعد صفحه را تازه کنید', 10000);
+    } finally {
+      if (button) { button.disabled = false; button.innerHTML = original; }
+    }
+  }
+
   /* ------------------------------------------------------- session recovery */
   handleSessionLost() {
     this.polling = false;
@@ -543,6 +661,8 @@ export class NexusApp {
         this.toasts.ok('بروزرسانی انجام شد', 1600);
       });
     }
+    const panelUpdate = $('#btnPanelUpdate');
+    if (panelUpdate) panelUpdate.onclick = () => this.safe(() => this.updatePanel());
     const logout = $('#logout');
     if (logout) logout.onclick = () => this.safe(() => this.logout());
     $$('[data-pwa-install]').forEach((button) => {
@@ -574,6 +694,7 @@ export class NexusApp {
     this.tools.bindEvents();
     this.telegram.bindEvents();
     this.advanced.bindEvents();
+    this.subs.bindEvents();
     this.settings.bindEvents();
     this.guide.bindEvents();
   }
