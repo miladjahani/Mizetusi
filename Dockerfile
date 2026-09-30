@@ -70,11 +70,15 @@ USER appuser
 # 8080 is the panel and the WebSocket edge; every protocol that terminates its own
 # connection listens on its own public port and needs its own forwarding:
 # AnyTLS 8444 (TCP), TUIC 8445 (UDP), MTProto 8446 (TCP), the HTTP and SOCKS5 web
-# proxies 8448/8449 (TCP). The WEB proxy is deliberately absent from this list:
+# proxies 8448/8449 (TCP), and the advanced transports behind Reality — one port
+# each, 10101 gRPC, 10102 HTTPUpgrade, 10104 XHTTP, 10105/10106 the VMess and
+# Trojan gRPC shapes. Those five stay closed until an admin switches one on in
+# «مبهم‌سازی پیشرفته», and the panel publishes a link for one only once its port
+# really answers. The WEB proxy is deliberately absent from this list:
 # its carrier is HTTPS on the panel's own 443 plus a same-origin WebSocket, so it
 # is the one Telegram proxy that is reachable here without any forwarding (8081
 # and 8447 are loopback-only: the relay, and the data plane it dials).
-EXPOSE 8080 8444 8445 8446 8448 8449
+EXPOSE 8080 8444 8445 8446 8448 8449 10101 10102 10104 10105 10106
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.getenv('PORT','8080')+'/health',timeout=3)"
 # --forwarded-allow-ips is deliberately loopback-only. With '*' uvicorn replaces
 # the TCP peer with the *leftmost* X-Forwarded-For entry, which is whatever the
@@ -90,4 +94,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 CMD pytho
 # ``app/railway.py`` pins the port the edge is really on (``pin_http_port``) before
 # it redeploys, and this is the other half of that: the same two names, in the same
 # order, so app/railway.py and this command can never disagree about the edge port.
-CMD ["sh","-c","exec uvicorn app.main:app --host 0.0.0.0 --port ${NEXUS_HTTP_PORT:-${PORT:-8080}} --proxy-headers --forwarded-allow-ips='127.0.0.1' --workers 1 --timeout-keep-alive 30"]
+# --no-server-header is the fingerprint half of the same command: ``Server:
+# uvicorn`` names the stack on every single response, and the panel's own
+# middleware (app/core/stealth.py) puts a plausible value back when an admin
+# wants one. The ``Date`` header stays — clients and CDNs cache on it.
+CMD ["sh","-c","exec uvicorn app.main:app --host 0.0.0.0 --port ${NEXUS_HTTP_PORT:-${PORT:-8080}} --proxy-headers --forwarded-allow-ips='127.0.0.1' --workers 1 --timeout-keep-alive 30 --no-server-header"]

@@ -1,0 +1,86 @@
+# NEXUS · nginx in front of the panel (an alternative to the bundled Caddyfile).
+#
+# Same shape as ``Caddyfile``, for a host that already terminates TLS with
+# nginx. Copy it, point the certificate at the app, and the deployment's main
+# address opens at ``/admin`` — the login page and the panel — with the paths a
+# client dials (the WebSocket edge, subscriptions, portal, Telegram carrier)
+# still at the root.
+#
+#   certbot --nginx -d panel.example.com     # or however the certs are issued
+#   nginx -t && systemctl reload nginx
+#
+# Two things are deliberate:
+#
+#   * **no ``server`` token and no upstream version header.** A default nginx
+#     banner names the software and version on every response; the panel's own
+#     middleware (app/core/stealth.py) removes the rest of the identifying
+#     headers, so this only has to not *add* one;
+#   * **8080 is bound to loopback on the app side** (see the ``NEXUS_HTTP_PORT``
+#     line in docker-compose.yml), so nothing reaches the panel except through
+#     this file.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name panel.example.com;          # ← your domain
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name panel.example.com;          # ← your domain
+
+    ssl_certificate     /etc/letsencrypt/live/panel.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/panel.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    # Another free, cheap signal: HSTS, so a second visit never falls back to
+    # plaintext and an active prober cannot talk the client back down to HTTP.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # The panel's real client address, for the per-user device limit. The app
+    # reads the raw peer and X-Forwarded-For itself (app/core/clientip.py), so
+    # this only has to be honest, not trusted.
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_http_version 1.1;
+    proxy_read_timeout 600s;
+
+    # The whole app is mounted a second time under /admin (app/main.py), so this
+    # one block is the entire panel: its pages, its API, its static assets.
+    location /admin {
+        proxy_pass http://127.0.0.1:8080;
+    }
+
+    # The WebSocket edge (/ws/…, /cdn/…) and the Telegram WEB proxy's carrier
+    # socket live at the root, and each of them is a long-lived stream — hence
+    # the Upgrade headers and the buffer bypass, without which a client hangs
+    # halfway through its handshake.
+    location /ws {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+    }
+    location /cdn {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_buffering off;
+    }
+    location /api/v1/socket {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+    }
+
+    # Subscriptions, status windows, static assets, the health probe, the
+    # Telegram web app prefix: everything else a client or an operator opens.
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+    }
+}

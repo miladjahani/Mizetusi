@@ -384,10 +384,11 @@ def test_transport_catalog_endpoint_describes_the_matrix():
     ids = {p['id'] for p in data['profiles']}
     assert {'vless-ws', 'vless-cdn', 'vmess-ws', 'vmess-cdn', 'trojan-ws', 'trojan-cdn', 'ss-ws'} <= ids
     assert {'vless', 'vmess', 'trojan', 'ss'} <= set(data['protocols'])
-    # gRPC / XHTTP / HTTPUpgrade cannot ride an HTTPS-only edge, so they are
-    # advertised as planned (with the reason) instead of as broken links.
-    assert {p['id'] for p in data['planned']} >= {'vless-grpc', 'vless-xhttp'}
-    assert all(p['needs'] for p in data['planned'])
+    # gRPC / XHTTP / HTTPUpgrade cannot ride an HTTPS-only edge, so they are not
+    # published here: the advanced-obfuscation card lists each one with the one
+    # thing it is missing rather than as a broken link.
+    assert {'vless-grpc', 'vless-xhttp', 'vless-httpupgrade'} <= {p['id'] for p in data['obfuscation']['profiles']}
+    assert all(p['reason'] for p in data['obfuscation']['profiles'])
     assert data['nodes'] and all(node['transports'] for node in data['nodes'])
     assert data['xray']['vless_listener'] == cfg.xray_vless_port
 

@@ -35,8 +35,10 @@ OPEN_FIREWALL=0
 DO_BUILD=1
 
 # The ports the stack publishes. Kept in one place so the summary, the ufw rules
-# and docker-compose.yml can never drift apart silently.
-PORTS_TCP=(8080 8443 8446 8448 8449)
+# and docker-compose.yml can never drift apart silently. The 101xx block is the
+# advanced transports (one port each) — published, but nothing listens on one
+# until an admin switches that transport on in «مبهم‌سازی پیشرفته».
+PORTS_TCP=(8080 8443 8446 8448 8449 10101 10102 10104 10105 10106)
 
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!! \033[0m%s\n' "$*" >&2; }
@@ -133,13 +135,22 @@ cat <<EOF
 
   NEXUS is up.
 
-    panel   : http://${HOST}:8080
+    panel   : http://${HOST}:8080/admin
+              (the same panel also answers at the root; /admin is the address
+               to bookmark, and the one a front proxy should open)
     reality : ${HOST}:8443   (raw TCP — the direct transport)
     MTProto : ${HOST}:8446   (enable it in the panel first)
     web     : ${HOST}:8448 and :8449 (HTTP / SOCKS5, per-user)
+    advanced: ${HOST}:10101, :10102, :10104, :10105, :10106
+               (XHTTP / gRPC / HTTPUpgrade — open them only for the transports
+                you switch on under «مبهم‌سازی پیشرفته»)
 
   Log in with the ADMIN_PASSWORD printed above.
-  Put a domain (ideally behind Cloudflare) in front of 8080 for TLS.
+  Put a domain (ideally behind Cloudflare) in front of 8080 for TLS — the panel
+  itself is at /admin on that domain, and behind TLS the port above can be bound
+  to loopback ('127.0.0.1:8080:8080') so nothing reaches it directly.
+  `docker compose --profile tls up -d` starts a bundled TLS edge for it
+  (Caddyfile), or use deploy/nginx.conf.example if nginx already fronts the host.
 
 EOF
 

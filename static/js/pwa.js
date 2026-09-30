@@ -5,7 +5,10 @@
    Chrome/Edge/Safari offer a real install (standalone window, home-screen icon,
    app shell cached for a flaky connection).
    ========================================================================== */
-import { $, $$ } from './core.js';
+import { $, $$, panelBase } from './core.js';
+
+// The build/version probe rides the panel's own prefix, so an installable panel
+// opened at /admin never has to touch the root API.
 
 export class PwaManager {
   static REGISTERED = false;
@@ -125,7 +128,7 @@ export class PwaManager {
 
   async currentBuild() {
     try {
-      const response = await fetch('/api/version', { cache: 'no-store' });
+      const response = await fetch(`${panelBase()}/api/version`, { cache: 'no-store' });
       return (await response.json())?.build || '';
     } catch { return ''; }
   }

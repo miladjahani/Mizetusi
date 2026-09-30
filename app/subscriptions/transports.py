@@ -23,6 +23,7 @@ import secrets
 
 from app import ports, runtime
 from app.config import settings
+from app.subscriptions import obfuscation as obfs
 # The hosted protocols are pure data (no imports of their own), so re-exporting
 # their ids here keeps this module the one place the app looks for the protocol
 # catalog — without the cycle that importing the service would create.
@@ -233,32 +234,17 @@ def protocol_catalog():
     }
 
 # Reality terminates TLS inside Xray with the certificate of a real site, so the
-# handshake is indistinguishable from ordinary browsing. This is the one direct
-# transport Xray 26 serves reliably on a single public TCP port.
-#
-# gRPC / XHTTP / HTTPUpgrade are deliberately NOT listed: Reality only accepts
-# RAW, XHTTP and gRPC clients, the h2-shaped ones need their own dedicated port
-# (Reality fallbacks are not honoured for them in 26.9.9 — verified), and a
-# Railway service can publish exactly one raw TCP port. Those transports stay
-# listed in the panel as "planned" so nobody wonders where they went.
+# handshake is indistinguishable from ordinary browsing. The RAW listener is the
+# one direct transport that needs no port of its own: it rides the deployment's
+# public TCP endpoint.
 DIRECT_PROFILES = [
     {'id': 'vless-reality', 'protocol': 'vless', 'network': 'tcp', 'path': '',
      'security': 'reality', 'tag': 'VLESS · Reality'},
 ]
 
-# Declared for the panel's roadmap view only — never published as a link.
-PLANNED_PROFILES = [
-    {'id': 'vless-grpc', 'protocol': 'vless', 'network': 'grpc', 'path': '/grpc',
-     'security': 'reality', 'tag': 'VLESS · gRPC', 'needs': 'پورت TCP اختصاصی'},
-    {'id': 'vless-xhttp', 'protocol': 'vless', 'network': 'xhttp', 'path': '/xh',
-     'security': 'reality', 'tag': 'VLESS · XHTTP (H2/H3)', 'needs': 'پورت TCP اختصاصی'},
-    {'id': 'vless-httpupgrade', 'protocol': 'vless', 'network': 'httpupgrade', 'path': '/hu',
-     'security': 'reality', 'tag': 'VLESS · HTTPUpgrade', 'needs': 'پورت TCP اختصاصی'},
-    {'id': 'vmess-grpc', 'protocol': 'vmess', 'network': 'grpc', 'path': '/vgrpc',
-     'security': 'reality', 'tag': 'VMess · gRPC', 'needs': 'پورت TCP اختصاصی'},
-    {'id': 'trojan-grpc', 'protocol': 'trojan', 'network': 'grpc', 'path': '/tgrpc',
-     'security': 'reality', 'tag': 'Trojan · gRPC', 'needs': 'پورت TCP اختصاصی'},
-]
+# The advanced transports (XHTTP / gRPC / HTTPUpgrade) live in
+# :mod:`app.subscriptions.obfuscation`: they each bind a public TCP port of their
+# own, so they are declared — and published — there rather than here.
 
 WARP_PROFILE = {'id': 'warp-ws', 'protocol': 'vless', 'network': 'ws', 'path': '/ws/warp',
                 'security': 'tls', 'tag': 'WARP · WS', 'port_setting': 'xray_warp_port'}
@@ -393,6 +379,10 @@ def available_profiles(protocols=None):
         items.append(dict(HY2_PROFILE, group=HY2))
     if direct_endpoint() and reality_keys():
         items.extend(dict(p, group=DIRECT) for p in DIRECT_PROFILES)
+        # The advanced transports are a *published* list, not a declared one: each
+        # one appears only once an admin switched it on and its own public port is
+        # really reachable (app/subscriptions/obfuscation.py).
+        items.extend(obfs.available())
     items.extend(_core_profiles())
     served = _served_profiles
     if served is not None:
@@ -457,7 +447,7 @@ def catalog():
         'ss_method': SS_METHOD,
         'ss_methods': [c['method'] for c in SS_CIPHERS],
         'paths': edge_paths(),
-        'planned': [dict(p, group=DIRECT) for p in PLANNED_PROFILES],
+        'obfuscation': obfs.catalog(),
     }
 
 
@@ -552,7 +542,9 @@ def node_address(node, profile):
 
     A hosted protocol always answers on this deployment's own address and its own
     public port — it cannot ride a Cloudflare node, because a CDN forwards neither
-    a raw TLS connection nor QUIC to an origin.
+    a raw TLS connection nor QUIC to an origin. An advanced transport is the same
+    story with a different number: each one has a port of its own, resolved in
+    :func:`app.subscriptions.obfuscation.public_endpoint`.
     """
     if profile.get('group') == CORE:
         return str(_cores().host() or node.get('server') or ''), int(profile.get('port') or 443)
@@ -560,7 +552,7 @@ def node_address(node, profile):
         hy2 = hysteria_config() or {}
         return str(hy2.get('host') or ''), int(hy2.get('port') or 443)
     if profile['group'] == DIRECT:
-        endpoint = direct_endpoint() or {}
+        endpoint = (profile.get('endpoint') or direct_endpoint() or {})
         return str(endpoint.get('host') or node.get('server') or ''), int(endpoint.get('port') or 443)
     return str(node.get('server') or ''), int(node.get('port') or 443)
 

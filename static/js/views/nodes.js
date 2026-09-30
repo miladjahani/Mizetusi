@@ -243,7 +243,10 @@ export class NodesView {
     const nodes = this.store.get('nodes');
     const matrix = this.store.get('transports') || {};
     const profiles = matrix.profiles || [];
-    const planned = matrix.planned || [];
+    // The advanced transports that are switched on but whose own port is not
+    // reachable yet — the one state that is neither published nor merely off.
+    const pending = ((matrix.obfuscation || {}).profiles || [])
+      .filter((item) => item.enabled && !item.reachable);
     if (!nodes.length) {
       host.innerHTML = `<div class="empty">${ico('nodes', 32)}<div>نودی برای بررسی پوشش نیست</div></div>`;
       return;
@@ -274,7 +277,7 @@ export class NodesView {
             ${badge(!!node.host, 'Host', node.host || 'بدون هدر Host')}
           </div>
         </div>`).join('')}
-      ${planned.length ? `<div class="kv-line" style="margin-top:10px"><span>در انتظار پورت اختصاصی</span><b style="font-size:11px">${planned.map((item) => esc(item.tag)).join(' · ')}</b></div>` : ''}`;
+      ${pending.length ? `<div class="kv-line" style="margin-top:10px"><span>مبهم‌سازی پیشرفته در انتظار پورت</span><b style="font-size:11px">${pending.map((item) => esc(item.tag)).join(' · ')}</b></div>` : ''}`;
   }
 
   /* ------------------------------------------------------------- explorer */

@@ -47,7 +47,16 @@ SETTINGS_SECTIONS = {
              'alert_expiry_days', 'alert_quota_percent'),
     'nodes': ('edge_auto_publish',),
     'advanced': ('hy2_enabled', 'hy2_host', 'hy2_port', 'hy2_sni', 'hy2_obfs',
-                 'hy2_insecure', 'hy2_label', 'trust_client_ip', 'trusted_proxy_cidrs'),
+                 'hy2_insecure', 'hy2_label', 'trust_client_ip', 'trusted_proxy_cidrs',
+                 # Advanced obfuscation: the deployment defaults plus one switch
+                 # per transport (app/subscriptions/obfuscation.py).
+                 'obfs_spider_x', 'obfs_flow', 'obfs_packet_encoding',
+                 'obfs_vless-xhttp', 'obfs_vless-grpc', 'obfs_vless-httpupgrade',
+                 'obfs_vmess-grpc', 'obfs_trojan-grpc',
+                 # What the deployment does not announce about itself
+                 # (app/core/stealth.py).
+                 'stealth_headers', 'stealth_docs', 'stealth_health',
+                 'stealth_sub_headers', 'stealth_server_header'),
     'settings': ('public_base_url', 'session_days', 'ping_interval'),
 }
 

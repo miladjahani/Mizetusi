@@ -729,6 +729,34 @@
           </div>
           <div id="adImportOut"></div>
         </div>
+        <div class="panel glass" data-acc="مبهم‌سازی پیشرفته|انتقال‌های استتاری و پارامترهای لینک|server">
+          <div class="panel-head"><div><h2>مبهم‌سازی پیشرفته</h2><p class="sub">XHTTP، gRPC و HTTPUpgrade پشت Reality — هرکدام روی پورت خودش، به‌علاوهٔ پارامترهای لینک</p></div>
+            <span class="pill" id="obfsTag">—</span></div>
+          <div id="obfsList"></div>
+          <div class="field-grid" style="margin-top:14px">
+            <div><label>مسیر عنکبوتی Reality <span class="hint">spx</span></label><input id="obfsSpider" dir="ltr" placeholder="/"></div>
+            <div><label>flow انتقال <span class="hint">فقط روی Reality</span></label><select id="obfsFlow"></select></div>
+            <div><label>رمزگذاری پکت</label><select id="obfsPkt"></select></div>
+          </div>
+          <div class="actions">
+            <button class="primary" id="obfsSaveDefaults">ذخیرهٔ پیش‌فرض‌ها</button>
+            <button class="secondary" id="obfsReload">بروزرسانی</button>
+          </div>
+          <p class="muted">هر انتقال پیشرفته پورت عمومی خودش را دارد؛ روی Railway بدون <b>TCP Proxy</b> برای همان پورت منتشر نمی‌شود و کارت دلیلش را نشان می‌دهد.</p>
+        </div>
+        <div class="panel glass" data-acc="کم‌ردپا|آنچه این سرویس نباید دربارهٔ خودش بگوید|server">
+          <div class="panel-head"><div><h2>کم‌ردپا</h2><p class="sub">هدرهای معرف، مستندات API و پاسخ عمومی /health</p></div>
+            <span class="pill" id="stealthTag">—</span></div>
+          <div id="stealthList"></div>
+          <div class="field-grid" style="margin-top:12px">
+            <div><label>هدر Server <span class="hint">خالی = حذف کامل</span></label><input id="stealthServer" dir="ltr" placeholder="nginx"></div>
+          </div>
+          <div class="actions">
+            <button class="primary" id="stealthSave">ذخیره</button>
+            <button class="secondary" id="stealthReload">بروزرسانی</button>
+          </div>
+          <p class="muted">مستندات <b>/docs</b> و <b>/openapi.json</b> به‌صورت پیش‌فرض ۴۰۴ هستند؛ روشن‌کردنشان یعنی نقشهٔ کامل مسیرها روی همین آدرس.</p>
+        </div>
         <div class="panel glass" data-acc="ترنسپورت‌های منتشرشده|چه چیزی این هسته واقعاً سرو می‌کند|server">
           <div class="panel-head"><div><h2>ترنسپورت‌های منتشرشده</h2><p class="sub">چه چیزی این هسته واقعاً سرو می‌کند و چه چیزی کنار گذاشته شده است</p></div>
             <button class="secondary compact" id="adProfilesReload">بروزرسانی</button></div>

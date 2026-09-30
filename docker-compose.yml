@@ -11,10 +11,14 @@
 #     (8446), the HTTP web proxy (8448) and the SOCKS5 one (8449). They stay
 #     idle until an admin switches them on in the «پروکسی تلگرام» tab, so the
 #     published ports cost nothing but a closed port is what "the card says
-#     published and nothing connects" looks like.
+#     published and nothing connects" looks like;
+#   * 10101-10106 — the advanced transports (XHTTP, gRPC, HTTPUpgrade) behind
+#     Reality, one port each, published for the same reason: they stay closed
+#     until «مبهم‌سازی پیشرفته» switches one on, and the panel only offers a
+#     link for a port that is really open here.
 #
-# Open them in the firewall (ufw allow 8080,8443,8446,8448,8449/tcp; or the
-# cloud security group) and point a domain (or a Cloudflare-proxied one) at the
+# Open them in the firewall (ufw allow 8080,8443,8446,8448,8449,10101,10102,10104,10105,10106/tcp;
+# or the cloud security group) and point a domain (or a Cloudflare-proxied one) at the
 # host if you want TLS in front of the panel too. NET_ADMIN is only needed by
 # the optional WARP exit.
 services:
@@ -23,11 +27,22 @@ services:
     image: nexus-railway-python-auto
     restart: unless-stopped
     ports:
+      # The panel and the whole WebSocket edge. With the ``tls`` profile running
+      # (the ``edge`` service below) nothing needs this published on the host at
+      # all: replace it with ``'127.0.0.1:8080:8080'`` — or drop the line — and
+      # the panel is reachable only through the proxy, at ``/admin``.
       - '8080:8080'
       - '8443:8443'
       - '8446:8446'   # MTProto proxy (mtg)
       - '8448:8448'   # HTTP web proxy
       - '8449:8449'   # SOCKS5 web proxy
+      # Advanced obfuscation, one port per transport (off until an admin
+      # switches it on in the panel).
+      - '10101:10101' # VLESS · gRPC
+      - '10102:10102' # VLESS · HTTPUpgrade
+      - '10104:10104' # VLESS · XHTTP (H2/H3)
+      - '10105:10105' # VMess · gRPC
+      - '10106:10106' # Trojan · gRPC
     environment:
       PORT: '8080'
       NEXUS_PLATFORM: vps
@@ -54,11 +69,58 @@ services:
       NEXUS_TELEGRAM_SOCKS_PORT: '8449'
     volumes:
       - ./data:/data
+    # Container hardening. The process needs exactly one capability — the WARP
+    # exit is a WireGuard tunnel, which is the only thing here that asks for
+    # NET_ADMIN — so everything else is dropped, and the image cannot gain
+    # privileges it was not started with. A container that can only do what the
+    # panel's job is is a container an intruder cannot make do anything else.
+    cap_drop:
+      - ALL
     cap_add:
       - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      # Nothing is written outside /data (a volume) and /tmp; the root
+      # filesystem is left as the image built it.
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     healthcheck:
       test: ['CMD', 'python', '-c', "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.getenv('PORT','8080')+'/health',timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # ----------------------------------------------------------------- the TLS edge
+  # Opt-in (``docker compose --profile tls up -d``) and the single biggest thing
+  # a VPS deployment can do about being watched: the panel and the whole
+  # WebSocket edge terminate real TLS in front, so nothing about them — not the
+  # login, not a subscription, not a node's upgrade — crosses the network in the
+  # clear, and the origin port (8080) can be bound to loopback alone.
+  #
+  # It needs a real domain pointing at the host (ports 80/443 open) for the
+  # automatic certificate. Set NEXUS_DOMAIN and start it with the profile; the
+  # deployment's main address then opens the panel at ``/admin``. A host that
+  # already runs nginx can use ``deploy/nginx.conf.example`` instead, which
+  # serves the same shape.
+  edge:
+    image: caddy:2-alpine
+    profiles: ['tls']
+    restart: unless-stopped
+    depends_on:
+      - nexus
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'      # HTTP/3, same shape a browser would use
+    environment:
+      NEXUS_DOMAIN: '${NEXUS_DOMAIN:-}'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

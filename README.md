@@ -7,6 +7,79 @@ a dedicated subscription per client.
 
 ## What this release changes
 
+- **The panel is a complete address of its own: `/admin`, opened through the edge.** The whole
+  application is mounted a second time (`PANEL_PREFIX` in `app/main.py`) — the login page, the panel,
+  its API, the static assets and the portal all answer under `/admin`, and the front end rides the
+  same prefix, so a deployment's main address can stop being `/`. That matters for the same reason
+  the low-fingerprint work does: a panel whose admin page *is* the front door of its own domain is
+  one every scanner and every fingerprinting probe already knows, while `/admin` is a path nothing
+  has reason to guess.
+  * **The root is deliberately not taken away.** The Telegram WEB proxy loads `/?bridge=<capability>`
+    in a hidden WebView, and every subscription / status-window link an admin has already handed to
+    a user points at the root — so both keep working exactly as before, and the same app object
+    serves both, with the same session cookie and the same admin header (`tests/test_panel_path.py`).
+  * **A session hop stays on the prefix.** An anonymous `/admin` lands on `/admin/login` instead of
+    being bounced to the root, where the address bar would be showing a different page than the one
+    that was asked for.
+  * **The edge opens that address.** The bundled `Caddyfile` routes `/admin/*` and the client paths
+    through the proxy with HTTP/3 and HSTS, and `deploy/nginx.conf.example` is the same shape for a
+    host that already terminates TLS with nginx. With the proxy up, the app's own port can be bound
+    to loopback (`127.0.0.1:8080:8080`) so nothing reaches the panel except through it.
+
+- **The Docker deployment stops announcing itself, and the panel can be served over real TLS
+  without a CDN in front.** Advanced obfuscation hides the *traffic*; this hides the *service* behind
+  it, because a panel is a fingerprint even when only its owner knows the URL. Four cheap signals
+  went away, each a switch in the new **کم‌ردپا** card rather than a hard-coded rule
+  (`app/core/stealth.py`):
+  * **no `Server` header.** uvicorn sends `Server: uvicorn` on *every* response; the one middleware
+    removes it (and `X-Powered-By` and friends) on the panel, the portal, the subscriptions and the
+    static assets alike, and `--no-server-header` in the `Dockerfile` stops it at the source. An admin
+    who wants a plausible name instead of silence sets one — a header value is validated to be a
+    single short line, because a newline there is a response-splitting primitive, not a typo.
+  * **`/docs` and `/openapi.json` are 404** until switched on. The OpenAPI document is a map of
+    every route this product has — free reconnaissance for anything that can reach the address — and
+    even when the switch is on, the document no longer carries the product's own title.
+  * **`/health` answers `{"ok": true}`** to anyone outside the container. The full body (service
+    name, database, uptime) is still served to a **loopback** caller, which is exactly how a Docker or
+    Render health check asks; a forged `X-Forwarded-For` buys nobody the same thing, so a proxy
+    header is not trusted as proof of anything here.
+  * **the `X-NEXUS-*` subscription headers** stay on by default (they are diagnostics on a route
+    that needs the token) and one switch drops them. The three headers a *client* reads
+    (`profile-update-interval`, `subscription-userinfo`, `profile-web-page-url`) are never touched —
+    hiding those would break the user's own subscription screen.
+  * **The container itself** now drops every Linux capability except `NET_ADMIN` (which only the WARP
+    exit asks for), runs with `no-new-privileges`, a `pids_limit` and a small `noexec` `/tmp`; and an
+    opt-in `edge` service (`docker compose --profile tls up -d`, see the new **`Caddyfile`**) puts
+    real TLS with HTTP/3 and HSTS in front, so the panel and the WebSocket edge stop crossing the
+    network in the clear. See `tests/test_stealth.py`.
+
+- **Advanced obfuscation, as a real capability rather than a roadmap line: XHTTP, gRPC and
+  HTTPUpgrade behind Reality, each on its own public TCP port.** The panel used to *list* those
+  transports as «در انتظار پورت اختصاصی» — declared, never built, never dialable. They are served
+  now (`app/subscriptions/obfuscation.py`): one Xray inbound per transport, one port per transport
+  (10101 gRPC, 10102 HTTPUpgrade, 10104 XHTTP, 10105/10106 the VMess and Trojan gRPC shapes), each
+  published in **every** format — the sharing URI, sing-box, Clash/Mihomo, Xray JSON and the
+  per-node link drawer. Three rules keep it honest rather than impressive, and they are the whole
+  design:
+  * **off until asked.** A deployment that starts answering on five extra public ports nobody
+    requested is a deployment whose address a censor can recognise, so every transport is a switch
+    an admin flips («مبهم‌سازی پیشرفته» in the «پیشرفته» tab).
+  * **published only when *its own* port is really reachable.** On Railway a TCP proxy allocates
+    the public number at random and only `app/ports.py` learns it, so a transport whose proxy is
+    missing is withheld and the card names that one missing step — a link for a port nothing
+    forwards is exactly the failure this feature exists to avoid.
+  * **the plain Reality node is never the casualty.** The advanced half is the newest inbound, so
+    the startup ladder drops *it* first (`_config(advanced=False)`) before WARP, before the Telegram
+    proxies and before the Reality listener itself.
+
+  The same card owns the **link parameters** that make the disguise worth anything: the uTLS
+  fingerprint, Reality's `spx` spider path, packet encoding (`xudp`/`packetaddr`), the per-user
+  fragment length/interval, the TLS-in-TLS fragment mode and the TLS mask — plus **XTLS Vision** on
+  the Reality inbound, off by default and validated against a closed list, because Xray validates a
+  whole config at once and one bad `flow` would take every protocol down with it. `docker-compose.yml`,
+  the `Dockerfile` and `scripts/install-vps.sh` publish the new ports so a VPS can actually reach
+  them. See `tests/test_obfuscation.py` for the three ways the publish rule can be broken.
+
 - **«The panel on the Cloudflare Worker, the app really on Railway» — now true for the links too,
   and the guide says the one thing that decides whether it opens at all.** A saved Worker URL is
   the address a filtered client can actually reach, so every link a user is handed — subscription,

@@ -1,0 +1,62 @@
+# NEXUS · the TLS edge (opt-in: ``docker compose --profile tls up -d``).
+#
+# The panel is served under ``/admin`` (the whole app is mounted a second time
+# there — see ``PANEL_PREFIX`` in ``app/main.py``), and this file is what makes
+# the *main* address of the deployment say exactly that: the domain opens at
+# ``/admin``, where the login page and the panel are, and the paths a client
+# needs keep working at the root.
+#
+# Three deliberate choices:
+#
+#   * **HTTP/3 is enabled** and the H2/H3 transport therefore looks like the
+#     traffic a browser produces rather than a long-lived connection to an
+#     unusual port;
+#   * **no identifying headers are added** (``-Server``) and the ones the app
+#     sets are passed through untouched — the panel's own middleware
+#     (app/core/stealth.py) is what removes them, so the switch in the panel is
+#     the one that decides;
+#   * **HSTS** so a second visit never falls back to plaintext, which is also
+#     what stops an active prober from talking the client back down to HTTP.
+#
+# ``{$NEXUS_DOMAIN}`` is the domain pointing at this host; leave it empty and
+# bring your own ``Caddyfile`` if you terminate TLS somewhere else instead.
+{
+	email {$ACME_EMAIL:admin@example.com}
+}
+
+{$NEXUS_DOMAIN} {
+	encode zstd gzip
+
+	# The panel, its API and the status window: one address, reached through the
+	# nginx/Caddy in front rather than straight from the container's own port.
+	handle /admin/* {
+		reverse_proxy nexus:8080 {
+			flush_interval -1
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# The WebSocket edge (/ws/…, /cdn/…), the subscription and portal links, the
+	# Telegram WEB proxy's carrier and the health probe: everything a client
+	# dials, which by design stays at the root (a subscription link handed to a
+	# user must keep working).
+	handle {
+		reverse_proxy nexus:8080 {
+			flush_interval -1
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	log {
+		# Access logs stay off by default: a panel's own log is a list of who
+		# asked for what. Turn it on only while debugging, and off again after.
+		output discard
+	}
+}

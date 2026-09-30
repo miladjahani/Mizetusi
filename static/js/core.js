@@ -9,8 +9,20 @@
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-export const ico = (name, size = 16) =>
-  `<svg width="${size}" height="${size}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+/* The panel is also served under ``/admin`` (the whole app is mounted a second
+   time there), and everything it fetches rides the same prefix. That keeps the
+   panel's own traffic — its API, its session hop, its logout — on the address
+   the admin actually opened, instead of quietly telling the world that a panel
+   lives at ``/api/…`` on this host. Static assets stay at the root on purpose:
+   one cache entry for them, and the service worker's scope is the root anyway. */
+export const PANEL_PREFIX = '/admin';
+
+export const panelBase = () => {
+  const path = (globalThis.location && globalThis.location.pathname) || '';
+  return path === PANEL_PREFIX || path.startsWith(`${PANEL_PREFIX}/`) ? PANEL_PREFIX : '';
+};
+
+export const ico = (name, size = 16) =>  `<svg width="${size}" height="${size}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
 /** The chevron every collapsible row uses (nav groups, accordions, sublinks). */
 export const chev = (size = 14) => `<svg class="chev" width="${size}" height="${size}" aria-hidden="true"><use href="#i-chevron"/></svg>`;

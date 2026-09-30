@@ -7,7 +7,10 @@
    (cookie → tab token → remembered token), and when the session really is over
    it raises one event instead of letting every poll throw its own error.
    ========================================================================== */
-import { SafeStorage } from './core.js';
+import { SafeStorage, panelBase } from './core.js';
+
+// The panel is also served under /admin, and the liveness probe it uses to
+// decide whether the stored session is still good rides the same prefix.
 
 export class SessionManager {
   static KEY = 'nexus_session';
@@ -85,7 +88,7 @@ export class SessionManager {
   /** Is the HttpOnly cookie enough on its own (no header fallback needed)? */
   async cookieWorks() {
     try {
-      const response = await fetch('/api/nodes', { credentials: 'same-origin', headers: {} });
+      const response = await fetch(`${panelBase()}/api/nodes`, { credentials: 'same-origin', headers: {} });
       return response.status !== 401;
     } catch (error) {
       return false;

@@ -36,6 +36,8 @@ from app import feedback as feedback_service
 from app.edge import packs as edge_packs
 from app.edge import sources as edge_sources
 from app.subscriptions import transports
+from app.subscriptions import obfuscation as obfs
+from app.core import stealth
 from app.subscriptions import scope as node_scope
 from app.subscriptions import flags as sub_flags
 from app.telegram import mtproto as tg_mtproto
@@ -72,6 +74,91 @@ def _audit(action, detail=''):
 
 def _flags_on():
     return (_setting('flags_enabled') or '1') != '0'
+
+
+# ------------------------------------------------------------------ low footprint
+@router.get('/api/stealth')
+def get_stealth(request: Request):
+    """What the deployment currently announces about itself, and what it does not.
+
+    The counterpart of the advanced-obfuscation card: that one hides the
+    *traffic*, this one hides the *service*. Each switch is reported with what it
+    changes, so a panel that suddenly answers ``/openapi.json`` is a switch
+    somebody flipped, not a mystery.
+    """
+    _auth(request)
+    return stealth.catalog()
+
+
+@router.post('/api/stealth')
+async def save_stealth(request: Request):
+    """Turn the self-naming surfaces off, or set a plausible ``Server`` header."""
+    _auth(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(400, 'invalid payload')
+    try:
+        changed = stealth.save(body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if changed:
+        _audit('stealth.update', ','.join(changed))
+    return {'success': True, 'changed': changed, 'stealth': stealth.catalog()}
+
+
+# ------------------------------------------------------------ advanced obfuscation
+@router.get('/api/obfuscation')
+def get_obfuscation(request: Request):
+    """Every advanced transport with its switch, its port and why it is withheld.
+
+    The card behind this endpoint is the admin's whole view of «مبهم‌سازی
+    پیشرفته»: a transport that is off says so, and one that cannot be published
+    names the single thing it is missing (a TCP proxy on Railway, a public
+    endpoint anywhere) rather than offering a link that dead-ends.
+    """
+    _auth(request)
+    return obfs.catalog()
+
+
+@router.post('/api/obfuscation')
+async def save_obfuscation(request: Request):
+    """Switch an advanced transport on/off, or set the deployment's link defaults.
+
+    Turning one on does not make it reachable — :func:`obfs.public_endpoint` is
+    the one that decides, on every read — so a switch is safe to flip on a host
+    whose ports are not forwarded yet: the card simply keeps saying what is
+    missing.
+    """
+    _auth(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(400, 'invalid payload')
+    changed = []
+    if 'enabled' in body:
+        item = obfs.profile(body.get('id'))
+        if not item:
+            raise HTTPException(400, 'انتقال پیشرفته ناشناخته است')
+        on = str(body.get('enabled')).strip().lower() in ('1', 'true', 'on', 'yes')
+        obfs.set_enabled(item['id'], on)
+        changed.append(obfs.switch_key(item['id']))
+    try:
+        changed += ['obfs_' + name for name in obfs.save(body)]
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if changed:
+        _audit('obfuscation.update', ','.join(changed))
+    # The listener set just changed, so the engine has to be rebuilt before a
+    # link for a newly switched transport can be published.
+    from app import xray
+    engine = await xray.start_or_reload(force=True)
+    return {'success': True, 'changed': changed, 'obfuscation': obfs.catalog(),
+            'xray': xray.status(), 'engine': engine}
 
 
 # --------------------------------------------------------------- user feedback

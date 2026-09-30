@@ -31,13 +31,17 @@ export class AdvancedView {
       this.api.get('/api/edge'),
       this.api.get('/api/cores'),
       this.api.get('/api/system/autoconfig'),
+      this.api.get('/api/obfuscation'),
+      this.api.get('/api/stealth'),
     ]);
-    const [hy2, packs, transports, edge, cores, autoconfig] = results.map((item) => (item.status === 'fulfilled' ? item.value : null));
+    const [hy2, packs, transports, edge, cores, autoconfig, obfuscation, stealth] = results.map((item) => (item.status === 'fulfilled' ? item.value : null));
     if (hy2) this.store.set('hysteria', hy2);
     if (packs) this.store.set('packs', packs);
     if (transports) this.store.set('transports', transports);
     if (cores) this.store.set('cores', cores);
     if (autoconfig) this.store.set('autoconfig', autoconfig);
+    if (obfuscation) this.store.set('obfuscation', obfuscation);
+    if (stealth) this.store.set('stealth', stealth);
     if (edge) {
       this.store.set('edge', edge);
       const select = $('#adImportProvider');
@@ -55,6 +59,8 @@ export class AdvancedView {
     this.renderAuto();
     this.renderHy2();
     this.renderPacks();
+    this.renderObfuscation();
+    this.renderStealth();
     this.renderProfiles();
     this.renderCores();
   }
@@ -280,7 +286,126 @@ export class AdvancedView {
       <div class="kv-line"><span>WARP</span><b>${data.warp ? 'فعال' : 'خاموش'}</b></div>
       <div class="kv-line"><span>Hysteria2</span><b>${data.hysteria2?.configured ? 'فعال' : 'خاموش'}</b></div>
       <div class="kv-line"><span>کنار گذاشته‌شده</span><b dir="ltr" style="white-space:normal">${withheld.length ? esc(withheld.join(' · ')) : (served === null ? 'نامعلوم' : 'هیچ')}</b></div>
-      <div class="kv-line"><span>مسیرهای اجباری برنامه‌ریزی‌شده</span><b dir="ltr" style="white-space:normal">${esc((data.planned || []).map((item) => item.id).join(' · ') || '—')}</b></div>`;
+      <div class="kv-line"><span>مبهم‌سازی پیشرفته</span><b dir="ltr" style="white-space:normal">${esc(((data.obfuscation || {}).profiles || []).filter((item) => item.enabled).map((item) => item.id).join(' · ') || '—')}</b></div>`;
+  }
+
+  /* ------------------------------------------------- advanced obfuscation */
+  /* The advanced transports (XHTTP / gRPC / HTTPUpgrade) each bind a public TCP
+     port of their own, so each row says three things: whether it is switched on,
+     where a client would dial it, and — when it cannot be published — the one
+     thing missing (a TCP proxy on Railway, any public endpoint at all). A row is
+     never shown as ready when its port is not forwarded. */
+  renderObfuscation() {
+    const data = this.store.get('obfuscation');
+    const host = $('#obfsList');
+    const tag = $('#obfsTag');
+    if (!data) {
+      if (tag) { tag.className = 'pill'; tag.textContent = '—'; }
+      return;
+    }
+    const rows = data.profiles || [];
+    const on = rows.filter((item) => item.enabled).length;
+    const live = rows.filter((item) => item.enabled && item.reachable).length;
+    if (tag) {
+      tag.className = `pill ${live ? 'ok' : 'warn'}`;
+      tag.innerHTML = `<i class="dot"></i> ${Fmt.num(live)} فعال${on > live ? ` · ${Fmt.num(on - live)} در انتظار پورت` : ''}`;
+    }
+    if (host) {
+      host.innerHTML = rows.length
+        ? `<div class="table-wrap"><table><thead><tr><th>انتقال</th><th>پورت داخلی</th><th>آدرس قابل اتصال</th><th>وضعیت</th><th></th></tr></thead><tbody>
+            ${rows.map((item) => `<tr>
+              <td><b style="font-size:12px">${esc(item.tag)}</b><div class="muted" style="font-size:10px">${esc(item.note || '')}</div></td>
+              <td class="mono" dir="ltr">${Fmt.num(item.listen_port || 0)}</td>
+              <td class="mono" dir="ltr">${item.reachable ? `${esc(item.host)}:${Fmt.num(item.public_port)}` : '—'}</td>
+              <td>${item.enabled
+                ? (item.reachable ? '<span class="pill ok"><i class="dot"></i> منتشر شده</span>'
+                  : `<span class="pill warn" title="${esc(item.reason || '')}">در انتظار پورت</span>`)
+                : '<span class="pill">خاموش</span>'}</td>
+              <td><button class="secondary compact" data-obfs="${esc(item.id)}" data-on="${item.enabled ? '0' : '1'}">${item.enabled ? 'غیرفعال' : 'فعال‌سازی'}</button></td>
+            </tr>`).join('')}
+          </tbody></table></div>`
+        : '<div class="empty">انتقال پیشرفته‌ای تعریف نشده است.</div>';
+      $$('[data-obfs]', host).forEach((button) => {
+        button.onclick = () => this.app.safe(() => this.toggleObfuscation(button.dataset.obfs, button.dataset.on === '1'));
+      });
+    }
+    const defaults = data.defaults || {};
+    const spider = $('#obfsSpider');
+    if (spider) spider.value = defaults.spider_x || '/';
+    this._fill('#obfsFlow', defaults.flows || [], defaults.flow || '', 'بدون flow');
+    this._fill('#obfsPkt', defaults.packet_encodings || [], defaults.packet_encoding || '', 'بدون رمزگذاری پکت');
+  }
+
+  _fill(selector, options, current, empty) {
+    const select = $(selector);
+    if (!select) return;
+    const values = ['', ...options];
+    select.innerHTML = values.map((value) => `<option value="${esc(value)}"${value === current ? ' selected' : ''}>${esc(value || empty)}</option>`).join('');
+  }
+
+  async toggleObfuscation(id, on) {
+    const data = await this.api.post('/api/obfuscation', { id, enabled: on ? '1' : '0' });
+    this.store.set('obfuscation', data.obfuscation);
+    this.renderObfuscation();
+    const item = (data.obfuscation?.profiles || []).find((row) => row.id === id);
+    if (on && item && !item.reachable) {
+      (this.toasts.info)(`${item.tag} روشن شد — ${item.reason || 'پورت عمومی ندارد'}`, 7000);
+    } else {
+      (on ? this.toasts.ok : this.toasts.info)(on ? 'انتقال پیشرفته فعال شد' : 'انتقال پیشرفته غیرفعال شد', 2500);
+    }
+    await this.app.loadSettings();
+  }
+
+  async saveObfuscationDefaults() {
+    const data = await this.api.post('/api/obfuscation', {
+      spider_x: $('#obfsSpider')?.value.trim() || '/',
+      flow: $('#obfsFlow')?.value || '',
+      packet_encoding: $('#obfsPkt')?.value || '',
+    });
+    this.store.set('obfuscation', data.obfuscation);
+    this.renderObfuscation();
+    this.toasts.ok('پیش‌فرض‌های مبهم‌سازی ذخیره شد');
+  }
+
+  /* ------------------------------------------------------- low footprint */
+  /* The transport disguises the traffic; this hides the *service* behind it —
+     the headers that name the stack, the published API schema and the health
+     body. Each switch says what it changes, so an admin can turn one back on
+     knowing what it costs. */
+  renderStealth() {
+    const data = this.store.get('stealth');
+    const host = $('#stealthList');
+    const tag = $('#stealthTag');
+    if (!data) {
+      if (tag) { tag.className = 'pill'; tag.textContent = '—'; }
+      return;
+    }
+    const quiet = (data.switches || []).filter((item) => item.key !== 'stealth_sub_headers' && item.on).length;
+    if (tag) {
+      tag.className = `pill ${quiet >= 3 ? 'ok' : 'warn'}`;
+      tag.innerHTML = `<i class="dot"></i> ${Fmt.num(quiet)} سکوت فعال`;
+    }
+    if (host) {
+      host.innerHTML = `<div class="table-wrap"><table><thead><tr><th>سطح</th><th>پیش‌فرض</th><th>وضعیت</th></tr></thead><tbody>
+        ${(data.switches || []).map((item) => `<tr>
+          <td><b style="font-size:12px">${esc(item.label)}</b><div class="muted mono" dir="ltr" style="font-size:10px">${esc(item.key)}</div></td>
+          <td>${item.default === '1' ? '<span class="pill">روشن</span>' : '<span class="pill">خاموش</span>'}</td>
+          <td><button class="secondary compact" data-stealth="${esc(item.key)}" data-on="${item.on ? '0' : '1'}">${item.on ? 'خاموش‌کردن' : 'روشن‌کردن'}</button></td>
+        </tr>`).join('')}
+      </tbody></table></div>`;
+      $$('[data-stealth]', host).forEach((button) => {
+        button.onclick = () => this.app.safe(() => this.saveStealth({ [button.dataset.stealth]: button.dataset.on }));
+      });
+    }
+    const server = $('#stealthServer');
+    if (server) server.value = data.server_header || '';
+  }
+
+  async saveStealth(payload) {
+    const data = await this.api.post('/api/stealth', payload);
+    this.store.set('stealth', data.stealth);
+    this.renderStealth();
+    this.toasts.ok('تنظیمات کم‌ردپا ذخیره شد');
   }
 
   async installPack(id) {
@@ -434,6 +559,16 @@ export class AdvancedView {
       this.toasts.ok(`کلید ${Fmt.num((data.rotated || []).length)} روش شادوساکس چرخید`);
       await this.load();
     });
+    const obfsReload = $('#obfsReload');
+    if (obfsReload) obfsReload.onclick = () => this.app.safe(async () => { await this.load(); this.toasts.info('بروزرسانی شد', 1600); });
+    const stealthReload = $('#stealthReload');
+    if (stealthReload) stealthReload.onclick = () => this.app.safe(async () => { await this.load(); this.toasts.info('بروزرسانی شد', 1600); });
+    const stealthSave = $('#stealthSave');
+    if (stealthSave) stealthSave.onclick = () => this.app.safe(() => this.saveStealth({
+      stealth_server_header: $('#stealthServer')?.value.trim() || '',
+    }));
+    const obfsSave = $('#obfsSaveDefaults');
+    if (obfsSave) obfsSave.onclick = () => this.app.safe(() => this.saveObfuscationDefaults());
     const sync = $('#adSyncNodes');
     if (sync) sync.onclick = () => this.app.safe(async () => {
       await this.api.post('/api/nodes/sync', {});

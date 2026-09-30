@@ -15,6 +15,7 @@ from app.db import rows
 from app.subscriptions.clients import CLIENT_FORMATS, FORMATS
 from app.subscriptions import transports as tp
 from app.subscriptions import scope as scopes
+from app.subscriptions import obfuscation as obfs
 from app.subscriptions import yamlout
 
 # Every client format NEXUS can emit, plus one target per known client id so a
@@ -125,6 +126,28 @@ def _reality_query(node, profile, user):
     }
     if user.get('frag_len'):
         query['fragment'] = user['frag_len']
+    flow = obfs.user_flow(profile)
+    if flow:
+        # XTLS Vision is a one-way TLS derivative: the client must send it and
+        # the server must be configured to expect it, so the link asks the same
+        # question the inbound was built from (``obfs.user_flow``), never a
+        # second, independent one.
+        query['flow'] = flow
+    return query
+
+
+def _advanced_query(profile, user):
+    """The advanced transports' own query (XHTTP / gRPC / HTTPUpgrade).
+
+    They share Reality's credentials with the plain node, so this starts from the
+    Reality query and replaces only the transport half — a link that carries the
+    right public key on the wrong path is worse than no link at all.
+    """
+    query = _reality_query({}, profile, user)
+    # ``headerType`` describes a TCP camouflage header, and these transports are
+    # not TCP: a client that reads it as one would dial the wrong thing.
+    query.pop('headerType', None)
+    query.update(obfs.link_params(profile, user))
     return query
 
 
@@ -147,6 +170,8 @@ def _ws_query(node, profile, user):
 
 def profile_query(node, profile, user):
     """The share-link query string for one profile."""
+    if obfs.profile(profile.get('id')):
+        return _advanced_query(profile, user)
     if profile.get('security') == 'reality':
         return _reality_query(node, profile, user)
     return _ws_query(node, profile, user)
@@ -244,11 +269,14 @@ def vmess_uri(user, node, profile, prefix=''):
     """VMess has no parameterised URI: it is one base64 JSON blob."""
     address, port = tp.node_address(node, profile)
     reality = profile.get('security') == 'reality'
+    advanced = obfs.profile(profile.get('id'))
     keys = tp.reality_keys() or {}
+    query = _advanced_query(profile, user) if advanced else None
     payload = {
         'v': '2', 'ps': label(user, node, profile, prefix), 'add': address, 'port': str(port),
         'id': user['uuid'], 'aid': '0', 'scy': 'auto', 'type': 'none',
-        'net': 'tcp' if reality else 'ws', 'host': tp.node_host_header(node) if not reality else '',
+        'net': (profile.get('network') or ('tcp' if reality else 'ws')),
+        'host': tp.node_host_header(node) if not reality else '',
         'path': '' if reality else profile['path'],
         'tls': 'reality' if reality else 'tls',
         'sni': tp.REALITY_SNI if reality else tp.node_sni(node),
@@ -259,6 +287,14 @@ def vmess_uri(user, node, profile, prefix=''):
         payload['sid'] = keys.get('short_id', '')
     if user.get('frag_len'):
         payload['fragment'] = user['frag_len']
+    if query:
+        # The advanced transports use VMess's own spelling, not the VLESS query:
+        # ``net``/``path``/``host`` carry the transport, ``serviceName`` the gRPC
+        # one, and a VMess link has no ``encryption``/``flow`` to speak of.
+        for key in ('mode', 'serviceName', 'spx', 'packetEncoding', 'fragmentInterval',
+                    'advancedFragment', 'tlsMask'):
+            if query.get(key):
+                payload[key] = query[key]
     return 'vmess://' + base64.b64encode(json.dumps(payload, ensure_ascii=False).encode()).decode()
 
 
@@ -277,10 +313,11 @@ def uri(user, node, profile, prefix=''):
 def _tls_block(node, profile, user):
     if profile.get('security') == 'reality':
         keys = tp.reality_keys() or {}
-        return {'enabled': True, 'server_name': tp.REALITY_SNI, 'insecure': False,
-                'utls': {'enabled': True, 'fingerprint': user.get('fingerprint') or 'chrome'},
-                'reality': {'enabled': True, 'public_key': keys.get('public_key', ''),
-                            'short_id': keys.get('short_id', '')}}
+        block = {'enabled': True, 'server_name': tp.REALITY_SNI, 'insecure': False,
+                 'utls': {'enabled': True, 'fingerprint': user.get('fingerprint') or 'chrome'},
+                 'reality': {'enabled': True, 'public_key': keys.get('public_key', ''),
+                             'short_id': keys.get('short_id', '')}}
+        return block
     return {'enabled': bool(node.get('tls')), 'server_name': tp.node_sni(node), 'insecure': False,
             'utls': {'enabled': True, 'fingerprint': user.get('fingerprint') or 'chrome'}}
 
@@ -290,11 +327,14 @@ def _transport(node, profile):
     if network == 'ws':
         return {'type': 'ws', 'path': profile['path'], 'headers': {'Host': tp.node_host_header(node)}}
     if network == 'grpc':
-        return {'type': 'grpc', 'service_name': profile['path'].lstrip('/')}
+        return {'type': 'grpc', 'service_name': profile['path'].lstrip('/'),
+                'multi_mode': profile.get('mode') == 'multi'}
     if network == 'httpupgrade':
-        return {'type': 'httpupgrade', 'path': profile['path'], 'host': tp.node_host_header(node)}
+        return {'type': 'httpupgrade', 'path': profile['path'],
+                'host': profile.get('host') or tp.REALITY_SNI}
     if network == 'xhttp':
-        return {'type': 'xhttp', 'path': profile['path'], 'mode': 'auto'}
+        return {'type': 'xhttp', 'path': profile['path'], 'mode': profile.get('mode') or 'auto',
+                'host': profile.get('host') or tp.REALITY_SNI}
     return None
 
 
@@ -341,7 +381,7 @@ def singbox(user, node, profile, prefix=''):
     if transport:
         entry['transport'] = transport
     if protocol == 'vless':
-        entry.update({'type': 'vless', 'uuid': user['uuid'], 'flow': ''})
+        entry.update({'type': 'vless', 'uuid': user['uuid'], 'flow': obfs.user_flow(profile)})
     elif protocol == 'vmess':
         entry.update({'type': 'vmess', 'uuid': user['uuid'], 'alter_id': 0, 'security': 'auto'})
     elif protocol == 'trojan':
@@ -393,6 +433,15 @@ def clash(user, node, profile, prefix=''):
     if reality:
         entry.update({'tls': True, 'servername': tp.REALITY_SNI, 'network': profile['network'],
                       'reality-opts': {'public-key': keys.get('public_key', ''), 'short-id': keys.get('short_id', '')}})
+        network = profile['network']
+        if network == 'grpc':
+            entry['grpc-opts'] = {'grpc-service-name': profile['path'].lstrip('/')}
+        elif network == 'xhttp':
+            entry['xhttp-opts'] = {'path': profile['path'], 'mode': profile.get('mode') or 'auto',
+                                   'host': profile.get('host') or tp.REALITY_SNI}
+        elif network == 'httpupgrade':
+            entry['http-upgrade-opts'] = {'path': profile['path'],
+                                          'host': profile.get('host') or tp.REALITY_SNI}
     else:
         entry.update({'tls': bool(node.get('tls')), 'servername': tp.node_sni(node),
                       'network': 'ws', 'ws-opts': {'path': profile['path'],
@@ -400,6 +449,9 @@ def clash(user, node, profile, prefix=''):
     protocol = profile['protocol']
     if protocol == 'vless':
         entry.update({'type': 'vless', 'uuid': user['uuid']})
+        flow = obfs.user_flow(profile)
+        if flow:
+            entry['flow'] = flow
     elif protocol == 'vmess':
         entry.update({'type': 'vmess', 'uuid': user['uuid'], 'alterId': 0, 'cipher': 'auto'})
     elif protocol == 'trojan':
@@ -575,8 +627,9 @@ def xray(user, node, profile, prefix=''):
         # emitting a line every Xray client would reject.
         raise ValueError('xray cannot express hysteria2')
     if protocol == 'vless':
+        flow = obfs.user_flow(profile)
         settings = {'vnext': [{'address': address, 'port': port, 'users': [
-            {'id': user['uuid'], 'encryption': 'none', 'flow': '', 'level': 0}]}]}
+            {'id': user['uuid'], 'encryption': 'none', 'flow': flow, 'level': 0}]}]}
     elif protocol == 'vmess':
         settings = {'vnext': [{'address': address, 'port': port, 'users': [
             {'id': user['uuid'], 'alterId': 0, 'security': 'auto', 'level': 0}]}]}
@@ -596,16 +649,20 @@ def xray(user, node, profile, prefix=''):
         stream['wsSettings'] = transport and {'path': profile['path'],
                                              'headers': {'Host': tp.node_host_header(node)}}
     elif profile['network'] == 'grpc':
-        stream['grpcSettings'] = {'serviceName': profile['path'].lstrip('/')}
+        stream['grpcSettings'] = {'serviceName': profile['path'].lstrip('/'),
+                                  'multiMode': profile.get('mode') == 'multi'}
     elif profile['network'] == 'httpupgrade':
-        stream['httpupgradeSettings'] = {'path': profile['path'], 'host': tp.node_host_header(node)}
+        stream['httpupgradeSettings'] = {'path': profile['path'],
+                                          'host': profile.get('host') or tp.REALITY_SNI}
     elif profile['network'] == 'xhttp':
-        stream['xhttpSettings'] = {'path': profile['path'], 'mode': 'auto'}
+        stream['xhttpSettings'] = {'path': profile['path'], 'mode': profile.get('mode') or 'auto',
+                                   'host': profile.get('host') or tp.REALITY_SNI}
     if profile.get('security') == 'reality':
         keys = tp.reality_keys() or {}
         stream['realitySettings'] = {'serverName': tp.REALITY_SNI, 'publicKey': keys.get('public_key', ''),
                                      'shortId': keys.get('short_id', ''),
-                                     'fingerprint': user.get('fingerprint') or 'chrome', 'spiderX': '/'}
+                                     'fingerprint': user.get('fingerprint') or 'chrome',
+                                     'spiderX': obfs.spider_x()}
     elif node.get('tls'):
         stream['tlsSettings'] = {'serverName': tp.node_sni(node), 'allowInsecure': False,
                                  'fingerprint': user.get('fingerprint') or 'chrome'}

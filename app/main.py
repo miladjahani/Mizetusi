@@ -35,6 +35,7 @@ from app.panel_extras import router as panel_extras_router
 from app import runtime
 from app import feedback as feedback_service
 from app.core.settings_store import store
+from app.core import stealth
 from app.core.security import SessionManager, LoginThrottle
 from app.core.clientip import client_ip as resolve_client_ip
 from app.cores import service as cores
@@ -227,6 +228,29 @@ def public_base(request:Request):
     host=request.headers.get('x-forwarded-host') or request.headers.get('host')
     return f'{proto}://{host}' if host else 'https://example.invalid'
 
+# The prefix the panel is also served under. The whole application is mounted a
+# second time here, so ``/admin`` is a complete address of its own: the login
+# page, the panel, its API, the static assets, the portal and the subscription
+# routes all answer under it, exactly as they do at the root.
+PANEL_PREFIX = '/admin'
+
+
+def panel_root(request:Request):
+    """Which mount this request came through (``''`` or ``'/admin'``).
+
+    Starlette records the matched mount in ``root_path``, so the panel's own
+    redirects can stay on the address the admin actually opened — a session hop
+    from ``/admin`` must not throw the browser back to the root. The exact
+    ``/admin`` path is served by its own route rather than by the mount, so there
+    is no ``root_path`` to read there and the path itself is the answer.
+    """
+    root = str((request.scope or {}).get('root_path') or '').rstrip('/')
+    if root.endswith(PANEL_PREFIX):
+        return PANEL_PREFIX
+    path = str(request.url.path or '')
+    return PANEL_PREFIX if path == PANEL_PREFIX or path.startswith(PANEL_PREFIX + '/') else ''
+
+
 def public_url(request:Request):
     """The address every user-facing link is built from.
 
@@ -356,7 +380,11 @@ async def lifespan(app:FastAPI):
         except Exception: pass
         try: await xray._stop()
         except Exception: pass
-app=FastAPI(title=settings.app_name,version=APP_VERSION,lifespan=lifespan)
+app=FastAPI(title=settings.app_name,version=APP_VERSION,lifespan=lifespan,
+            # The API docs are served by explicit routes below, behind a switch:
+            # ``/openapi.json`` names every route this product has, which is free
+            # reconnaissance for anything scanning the address (app/core/stealth.py).
+            docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(CORSMiddleware,allow_origins=[],allow_methods=['GET','POST','PUT','DELETE','OPTIONS'],allow_headers=['Content-Type','X-Admin-Password','X-Nexus-Session'])
 @app.middleware('http')
 async def security_headers(request:Request,call_next):
@@ -371,7 +399,24 @@ async def security_headers(request:Request,call_next):
     response.headers.setdefault('X-Content-Type-Options','nosniff')
     response.headers.setdefault('Referrer-Policy','no-referrer')
     response.headers.setdefault('Permissions-Policy','geolocation=(), microphone=(), camera=()')
-    return response
+    # Then everything that would otherwise name the stack, on every response.
+    return stealth.scrub(response)
+@app.get('/openapi.json',include_in_schema=False)
+async def openapi_document():
+    """The OpenAPI document, only while an admin has it switched on.
+
+    Off by default: a published schema is a map of the whole product, and the
+    panel's own title is in it besides.
+    """
+    if not stealth.docs_enabled(): raise HTTPException(404,'Not Found')
+    document=app.openapi()
+    document['info']['title']='API'
+    return JSONResponse(document)
+@app.get('/docs',include_in_schema=False)
+async def api_docs():
+    if not stealth.docs_enabled(): raise HTTPException(404,'Not Found')
+    from fastapi.openapi.docs import get_swagger_ui_html
+    return get_swagger_ui_html(openapi_url='/openapi.json',title='API')
 templates=Jinja2Templates(directory=os.path.join(BASE_DIR,'templates'))
 app.mount('/static',StaticFiles(directory=os.path.join(BASE_DIR,'static')),name='static')
 # The newer capability endpoints (customization, Hysteria2, location packs, the
@@ -388,10 +433,19 @@ app.include_router(telegram_web.router)
 # Desktop's own WebView, not by a panel session, so it owns its own router too.
 app.include_router(telegram_webrelay.router)
 @app.get('/health')
-def health():
+def health(request:Request):
+    """Liveness for the platform's health check — and nothing more, publicly.
+
+    The full body names this service, its database and its uptime, which is a
+    fingerprint for anything that can reach the route. A loopback caller (the
+    container's own health check) and the panel's own diagnostics still get it;
+    everyone else gets ``{"ok": true}`` (app/core/stealth.py).
+    """
     try:
-        row('SELECT 1'); return {'ok':True,'service':'nexus-python','database':'ok','uptime_seconds':int(time.time()-_started),'time':int(time.time())}
+        row('SELECT 1')
+        full={'ok':True,'service':'nexus-python','database':'ok','uptime_seconds':int(time.time()-_started),'time':int(time.time())}
     except Exception as exc: raise HTTPException(503,f'database unavailable: {type(exc).__name__}')
+    return full if stealth.is_internal(request) else stealth.public_health(full)
 @app.get('/',response_class=HTMLResponse)
 async def home(request:Request,token:str=''):
     # Telegram Desktop's WEB proxy loads https://<this-domain>/?bridge=<capability>
@@ -405,7 +459,10 @@ async def home(request:Request,token:str=''):
         # Session bootstrap for clients whose browser refuses the session cookie
         # (embedded preview panes): a valid token renders the panel directly and
         # the front-end keeps using it as the X-Nexus-Session header.
-        if not _valid_token(token): return RedirectResponse('/login',303)
+        # The login hop stays on whichever mount this request arrived through, so
+        # a panel opened at /admin lands on /admin/login rather than being bounced
+        # to the root address.
+        if not _valid_token(token): return RedirectResponse(f'{panel_root(request)}/login',303)
     _ensure_catalog(request)
     return templates.TemplateResponse(request,'index.html',{'users':len(list_users()),'proxies':len(list_proxies()),'nodes':len(active_nodes()),'brand':_brand()})
 @app.get('/login',response_class=HTMLResponse)
@@ -1616,7 +1673,7 @@ def core_status(request:Request):
             'protocols':sorted({p['protocol'].upper() for p in profiles}),
             'endpoints':[p['path'] for p in profiles if p['network']=='ws'],
             'profiles':[{'id':p['id'],'tag':p['tag'],'protocol':p['protocol'],'network':p['network'],'group':p['group']} for p in profiles],
-            'planned':transports.catalog()['planned'],
+            'obfuscation':transports.catalog()['obfuscation'],
             'features':['Xray protocol engine','VLESS · VMess · Trojan · Shadowsocks over WebSocket','Reality on a direct TCP port','live user config reload','Railway TLS/WebSocket edge']}
 
 @app.get('/api/client-config/{username}')
@@ -1935,6 +1992,30 @@ def service_worker():
 
 @app.get('/api/version')
 def version(): return {'version':APP_VERSION,'build':BUILD_TOKEN,'python':os.sys.version.split()[0]}
+
+# ------------------------------------------------------------------ /admin mount
+# The whole application, mounted a second time under ``/admin``. This is what
+# makes the panel's address *not* ``/``: a deployment whose admin page is the
+# front door of its own domain is one every scanner and every fingerprinting
+# probe already knows, while ``/admin`` is a path nothing has reason to guess.
+#
+# Everything answers under it unchanged — the login page, the panel itself, its
+# API, the static assets, the portal and the subscription routes — because it is
+# the *same* app object rather than a second surface with its own rules. The
+# routes above stay where they are on purpose:
+#
+#   * the Telegram WEB proxy loads ``/?bridge=<capability>`` in a hidden WebView,
+#     and that carrier must stay at the root;
+#   * a link a client was already handed (a subscription, a status window) keeps
+#     working, so nothing an admin has published breaks the day this is turned on.
+#
+# The exact ``/admin`` path is registered *before* the mount so it is answered by
+# the panel rather than by the mount's trailing-slash redirect.
+@app.get(PANEL_PREFIX,include_in_schema=False)
+async def panel_root_route(request:Request):
+    return await home(request)
+app.mount(PANEL_PREFIX,app)
+
 
 @app.exception_handler(Exception)
 async def unhandled_error(request:Request,exc:Exception):

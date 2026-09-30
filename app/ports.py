@@ -190,6 +190,19 @@ def proxied(application_port):
 CATALOG = (
     {'id': 'reality', 'label': 'Reality (مسیر مستقیم)', 'port_key': None,
      'default_port': 'xray_reality_port', 'switch': None},
+    # The advanced transports each own a public port, so they are listed one by
+    # one with the switch that decides whether they are worth a proxy at all —
+    # a TCP proxy in front of a listener nothing binds answers nothing.
+    {'id': 'vless-xhttp', 'label': 'VLESS · XHTTP (H2/H3)', 'port_key': None,
+     'default_port': 'xray_fallback_xhttp_port', 'switch': 'obfs_vless-xhttp'},
+    {'id': 'vless-grpc', 'label': 'VLESS · gRPC', 'port_key': None,
+     'default_port': 'xray_fallback_grpc_port', 'switch': 'obfs_vless-grpc'},
+    {'id': 'vless-httpupgrade', 'label': 'VLESS · HTTPUpgrade', 'port_key': None,
+     'default_port': 'xray_fallback_httpupgrade_port', 'switch': 'obfs_vless-httpupgrade'},
+    {'id': 'vmess-grpc', 'label': 'VMess · gRPC', 'port_key': None,
+     'default_port': 'xray_fallback_vmess_grpc_port', 'switch': 'obfs_vmess-grpc'},
+    {'id': 'trojan-grpc', 'label': 'Trojan · gRPC', 'port_key': None,
+     'default_port': 'xray_fallback_trojan_grpc_port', 'switch': 'obfs_trojan-grpc'},
     {'id': 'anytls', 'label': 'AnyTLS', 'port_key': 'core_anytls_port',
      'default_port': 'core_anytls_port', 'switch': 'core_anytls_enabled'},
     {'id': 'mtproto', 'label': 'MTProto', 'port_key': 'tg_mtproto_port',

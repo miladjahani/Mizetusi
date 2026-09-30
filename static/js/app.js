@@ -10,7 +10,7 @@
      a phone — a 401 is now reported once, polling stops and an in-panel
      re-login overlay keeps the page alive.
    ========================================================================== */
-import { $, $$, ico, esc, chev, Fmt, EventBus, ToastCenter } from './core.js';
+import { $, $$, ico, esc, chev, Fmt, EventBus, ToastCenter, panelBase } from './core.js';
 import { ModalManager, collapsePanels } from './ui.js';
 import { SessionManager } from './session.js';
 import { ApiClient } from './api.js';
@@ -618,7 +618,7 @@ export class NexusApp {
       submit.disabled = true;
       submit.innerHTML = '<span class="spin-inline"></span> در حال ورود…';
       try {
-        const response = await fetch('/api/login', {
+        const response = await fetch(`${panelBase()}/api/login`, {
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
@@ -648,7 +648,7 @@ export class NexusApp {
   async logout() {
     try { await this.api.post('/api/logout', {}); } catch (error) { /* already gone */ }
     this.session.clear();
-    location.href = '/login';
+    location.href = `${panelBase()}/login`;
   }
 
   /* ----------------------------------------------------------------- events */

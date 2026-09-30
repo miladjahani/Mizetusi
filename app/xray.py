@@ -23,6 +23,7 @@ import asyncio, hashlib, json, os, re, secrets, subprocess
 from app.config import settings
 from app.db import rows, row, execute
 from app.subscriptions import transports as tp
+from app.subscriptions import obfuscation as obfs
 
 _proc = None
 _last_hash = None
@@ -64,7 +65,9 @@ def _clients_for(protocol, profile=None):
         return []
     users = _users_for(protocol)
     if protocol == 'vless':
-        return [{'id': u['uuid'], 'email': _email(u), 'level': 0, 'flow': ''} for u in users]
+        flow = obfs.user_flow(profile) if profile else obfs.user_flow(
+            {'protocol': 'vless', 'network': 'tcp', 'security': 'reality'})
+        return [{'id': u['uuid'], 'email': _email(u), 'level': 0, 'flow': flow} for u in users]
     if protocol == 'vmess':
         return [{'id': u['uuid'], 'email': _email(u), 'level': 0, 'alterId': 0} for u in users]
     if protocol == 'trojan':
@@ -106,11 +109,15 @@ def _transport_block(profile):
     if network == 'ws':
         stream['wsSettings'] = {'path': path}
     elif network == 'grpc':
-        stream['grpcSettings'] = {'serviceName': path.lstrip('/')}
+        # gRPC is an HTTP/2 request with a service name in the path, so that
+        # name is part of the disguise and not a label: the advanced gRPC
+        # transports carry the one their profile declares.
+        stream['grpcSettings'] = {'serviceName': path.lstrip('/'),
+                                  'multiMode': profile.get('mode') == 'multi'}
     elif network == 'httpupgrade':
         stream['httpupgradeSettings'] = {'path': path}
     elif network == 'xhttp':
-        stream['xhttpSettings'] = {'path': path, 'mode': 'auto'}
+        stream['xhttpSettings'] = {'path': path, 'mode': profile.get('mode') or 'auto'}
     return stream
 
 
@@ -170,7 +177,25 @@ def _reality_settings():
     }
 
 
-def direct_inbounds():
+def _advanced_inbounds(reality):
+    """One listener per enabled advanced transport, on its own public port.
+
+    These are the transports that were a roadmap list: XHTTP, gRPC and
+    HTTPUpgrade behind Reality. Each one binds a different port, so the
+    deployment's Reality listener is untouched, and each is published only when
+    that port is really reachable (app/subscriptions/obfuscation.py).
+    """
+    out = []
+    for item in obfs.available():
+        inbound = _inbound(item, obfs.listen_port(item), listen='0.0.0.0')
+        stream = _transport_block(item)
+        stream['realitySettings'] = reality
+        inbound['streamSettings'] = stream
+        out.append(inbound)
+    return out
+
+
+def direct_inbounds(advanced=True):
     """The Reality listener, built only when a raw TCP endpoint exists.
 
     Reality does its own TLS with the certificate of a real site, so the node is
@@ -183,7 +208,7 @@ def direct_inbounds():
     parent['streamSettings'] = {
         'network': 'tcp', 'security': 'reality', 'realitySettings': reality, 'tcpSettings': {},
     }
-    return [parent]
+    return [parent] + (_advanced_inbounds(reality) if advanced else [])
 
 
 # -------------------------------------------------------------------- outbounds
@@ -216,13 +241,13 @@ def routing():
     return {'domainStrategy': 'AsIs', 'rules': rules}
 
 
-def _config(edge=None, with_warp=True, with_direct=True, with_telegram=True):
+def _config(edge=None, with_warp=True, with_direct=True, with_telegram=True, advanced=True):
     """The engine config.
 
-    ``edge``/``with_warp``/``with_direct``/``with_telegram`` exist so a transport the
-    installed Xray build refuses (or a Telegram web proxy it rejects) can be
-    dropped **without** taking the whole engine down: the candidates in
-    :func:`_candidate_configs` are tried richest-first.
+    ``edge``/``with_warp``/``with_direct``/``with_telegram``/``advanced`` exist so
+    a transport the installed Xray build refuses (or a Telegram web proxy it
+    rejects) can be dropped **without** taking the whole engine down: the
+    candidates in :func:`_candidate_configs` are tried richest-first.
     """
     inbounds = list(edge_inbounds() if edge is None else edge)
     if not with_warp:
@@ -230,7 +255,7 @@ def _config(edge=None, with_warp=True, with_direct=True, with_telegram=True):
     if with_telegram:
         inbounds += telegram_inbounds()
     if with_direct:
-        inbounds += direct_inbounds()
+        inbounds += direct_inbounds(advanced=advanced)
     outs = [item for item in outbounds() if with_warp or item.get('tag') != 'warp']
     rules = routing()['rules'] if with_warp else []
     return {
@@ -278,6 +303,13 @@ def _candidate_configs():
 
     full = _config()
     yield full, served(full), ''
+    # The advanced transports (XHTTP/gRPC/HTTPUpgrade) are the newest inbounds
+    # here, so they are the first thing dropped when the engine refuses a config
+    # it cannot serve: the plain Reality node must never be the casualty of an
+    # extra disguise one admin switched on.
+    lean = _config(advanced=False)
+    if len(lean['inbounds']) < len(full['inbounds']):
+        yield lean, served(lean), 'انتقال‌های پیشرفته حذف شد'
     trimmed = _config(edge=edge_inbounds(), with_warp=False, with_direct=False)
     yield trimmed, served(trimmed), 'WARP/Reality حذف شد'
     # A Telegram web proxy is the newest inbound here, so it is the first thing
@@ -459,6 +491,7 @@ def status():
             'shadowsocks_methods': [c['method'] for c in tp.SS_CIPHERS],
             'warp_listener': settings.xray_warp_port if tp.warp_config() else None,
             'reality_listener': settings.xray_reality_port if tp.direct_endpoint() else None,
+            'obfuscation': obfs.catalog(),
             'transports': [p['id'] for p in profiles],
             'transport_tags': [p['tag'] for p in profiles],
             'warning': _last_warning or None}

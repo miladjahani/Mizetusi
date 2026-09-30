@@ -6,6 +6,8 @@
    a 401 is reported once (never as a toast storm from every polling view).
    ========================================================================== */
 
+import { panelBase } from './core.js';
+
 export class ApiError extends Error {
   constructor(message, { status = 0, detail = '' } = {}) {
     super(message);
@@ -23,6 +25,8 @@ export class ApiClient {
   }
 
   async request(url, { method = 'GET', body, headers = {}, timeout } = {}) {
+    // Served under /admin? Then the panel's own calls go there too (core.js).
+    const target = url.startsWith('/api') ? `${panelBase()}${url}` : url;
     const controller = new AbortController();
     const limit = timeout || this.timeout;
     const timer = setTimeout(() => controller.abort(), limit);
@@ -39,7 +43,7 @@ export class ApiClient {
 
     let response;
     try {
-      response = await fetch(url, init);
+      response = await fetch(target, init);
     } catch (error) {
       clearTimeout(timer);
       if (error?.name === 'AbortError') throw new ApiError('پاسخی از سرور نیامد (تایم‌اوت)', { status: 0 });
