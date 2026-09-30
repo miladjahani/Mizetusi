@@ -14,8 +14,7 @@ from app.users.service import (list_users, get_user, get_by_token, create_user, 
 from app.subscriptions.generator import (render, active_nodes, node_links, normalize_target, profiles_for,
     entry_pairs, TRANSPORT_TARGETS as SUB_TRANSPORT_TARGETS, TARGETS as SUB_TARGETS)
 from app.subscriptions.clients import (CLIENTS, PRESETS, FAMILIES, FORMAT_LABELS, DEFAULT_PRESET, catalog as client_catalog,
-    client_links, client_groups, download_overrides, preset as get_preset, subscription_url as client_subscription_url,
-    CLIENT_FORMATS)
+    client_links, client_groups, download_overrides, preset as get_preset, subscription_url as client_subscription_url)
 from app.subscriptions import transports as transports
 from app.subscriptions import scope as node_scope
 from app.subscriptions import flags as sub_flags
@@ -31,16 +30,11 @@ from app.edge import sources as edge_sources
 from app.edge import samples as edge_samples
 from app.edge import packs as edge_packs
 from app.api_extra import router as extra_router
-from app.panel_extras import router as panel_extras_router
 from app import runtime
-from app import feedback as feedback_service
 from app.core.settings_store import store
 from app.core.security import SessionManager, LoginThrottle
 from app.core.clientip import client_ip as resolve_client_ip
 from app.cores import service as cores
-from app import autoconfig as auto_config
-from app.telegram import service as telegram_proxies
-from app.telegram import webapp as telegram_web
 from app.services.audit import AuditLog
 from app import xray
 import websockets
@@ -55,10 +49,6 @@ sessions=SessionManager(secret_provider=lambda: store.get('jwt_secret') or setti
                         ttl_provider=lambda: _session_days()*86400,
                         default_ttl=settings.session_ttl)
 throttle=LoginThrottle(limit=10,window=300)
-# Feedback is written from the public status window, so it carries its own
-# limiter: a generous hourly ceiling per address (a real user sending a few
-# notes is never blocked) that still stops a script from filling the inbox.
-feedback_throttle=LoginThrottle(limit=12,window=3600)  # public feedback limiter
 audit=AuditLog(actor='admin')
 BASE_DIR=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERAL_SETTING_KEYS=('public_base_url','sub_prefix','default_protocol','default_limit_gb','default_expiry_days','default_ip_limit','session_days','ping_interval','accent','accent_secondary','app_name',
@@ -75,13 +65,7 @@ GENERAL_SETTING_KEYS=('public_base_url','sub_prefix','default_protocol','default
                      'hy2_enabled','hy2_host','hy2_port','hy2_sni','hy2_obfs','hy2_insecure','hy2_label',
                      # Which address the panel believes a request came from — see
                      # app/core/clientip.py and «شبکه و لبه → IP واقعی کاربر».
-                     'trust_client_ip','trusted_proxy_cidrs',
-                     # Whether a scanned edge node is published on its own (auto) or
-                     # waits as a candidate an admin selects by hand (the default).
-                     'edge_auto_publish',
-                     # Advanced-subscription alert thresholds (app/subscriptions/reports.py):
-                     # warn this many days before expiry, and at this share of quota.
-                     'alert_expiry_days','alert_quota_percent')
+                     'trust_client_ip','trusted_proxy_cidrs')
 # Subscription shapes the status window offers as its four main buttons. The
 # matching validation lives next to the endpoints that own them
 # (``app/api_extra.py``), so nothing is declared twice here.
@@ -89,7 +73,7 @@ PWA_ICONS={'192':'/static/icons/icon-192.png','512':'/static/icons/icon-512.png'
 # One label per accepted target: subscription formats plus client ids.
 SUB_LABELS={**FORMAT_LABELS, **{c['id']:f"{c['name']} · {c['platform']}" for c in CLIENTS}}
 WORKER_PATH=os.path.join(BASE_DIR,'cloudflare-worker','worker.js')
-APP_VERSION='9.8.0'  # nexus
+APP_VERSION='9.2.0'
 
 def _asset_fingerprint():
     """Content hash of the shipped front-end.
@@ -214,32 +198,11 @@ def set_session(request:Request,response,token=None):
     """
     return sessions.apply(request,response,token)
 def public_base(request:Request):
-    """Where this deployment really runs — the origin, not the public address.
-
-    It is what the origin node, the clean-IP catalog and the Worker's own
-    ``ORIGIN_FALLBACK`` are built from, so it must keep naming the platform this
-    process is on. Links a user is handed are built from ``public_url`` instead.
-    """
     override=(_setting('public_base_url') or settings.public_base_url or '').strip()
     if override: return override.rstrip('/')
     proto=request.headers.get('x-forwarded-proto','https').split(',')[0].strip()
     host=request.headers.get('x-forwarded-host') or request.headers.get('host')
     return f'{proto}://{host}' if host else 'https://example.invalid'
-
-def public_url(request:Request):
-    """The address every user-facing link is built from.
-
-    «The panel on the Worker, the app really on Railway» is one address split in
-    two: a saved Worker URL is the edge a client actually reaches, so it is the
-    host a subscription, a status window or a download link must name — the
-    Railway origin is precisely the address a filtered network cannot open. It
-    therefore outranks ``public_base_url``, which describes where the app runs
-    (and stays in charge of the origin node, the clean-IP catalog and the
-    Worker's own prefilled ``ORIGIN_FALLBACK``, or the Worker would be pointed
-    at itself).
-    """
-    worker=(_setting('cloudflare_worker_url') or '').strip()
-    return worker.rstrip('/') if worker else public_base(request)
 async def maintenance():
     while True:
         try: reset_due()
@@ -315,24 +278,14 @@ async def bootstrap_nodes_full():
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     init_db(); bootstrap(); ensure_nodes(); bootstrap_nodes()
-    # The one-time pass (see app/autoconfig.py): it creates the Railway TCP proxies
-    # an admin's own switches need and flips no switch of its own — the panel's own
-    # domain is what carries the Telegram WEB proxy, and a domain that serves that
-    # traffic is the domain a network blocks. It still runs before the Telegram
-    # reconcile below, so a relay an admin turned on starts with this boot.
-    auto_config.apply()
     await xray.start_or_reload(force=True)
     # The second engines (AnyTLS/TUIC) reconcile themselves, then keep doing so:
     # an admin switch is picked up without a restart.
     await cores.sync(force=True)
-    # The Telegram proxies: the web-proxy inbounds are in the Xray config Xray
-    # itself just rendered above, so this reconciles the MTProto process and only
-    # restarts Xray if the Telegram inbounds really changed its config.
-    await telegram_proxies.reconcile(force=False)
-    task=asyncio.create_task(maintenance()); cf_task=asyncio.create_task(cf_loop(settings.cf_probe_interval)); xray_task=asyncio.create_task(xray.loop()); ping_task=asyncio.create_task(ping_loop(settings.cf_probe_interval,_ping_interval)); auto_task=asyncio.create_task(bootstrap_nodes_full()); cat_task=asyncio.create_task(catalog_loop()); cores_task=asyncio.create_task(cores.loop()); tg_task=asyncio.create_task(telegram_proxies.loop())
+    task=asyncio.create_task(maintenance()); cf_task=asyncio.create_task(cf_loop(settings.cf_probe_interval)); xray_task=asyncio.create_task(xray.loop()); ping_task=asyncio.create_task(ping_loop(settings.cf_probe_interval,_ping_interval)); auto_task=asyncio.create_task(bootstrap_nodes_full()); cat_task=asyncio.create_task(catalog_loop()); cores_task=asyncio.create_task(cores.loop())
     try: yield
     finally:
-        task.cancel(); cf_task.cancel(); xray_task.cancel(); ping_task.cancel(); auto_task.cancel(); cat_task.cancel(); cores_task.cancel(); tg_task.cancel()
+        task.cancel(); cf_task.cancel(); xray_task.cancel(); ping_task.cancel(); auto_task.cancel(); cat_task.cancel(); cores_task.cancel()
         try: await task
         except asyncio.CancelledError: pass
         try: await cf_task
@@ -347,49 +300,24 @@ async def lifespan(app:FastAPI):
         except asyncio.CancelledError: pass
         try: await cores_task
         except asyncio.CancelledError: pass
-        try: await tg_task
-        except asyncio.CancelledError: pass
-        try: await telegram_proxies.stop_all()
-        except Exception: pass
         try: await cores.stop_all()
         except Exception: pass
         try: await xray._stop()
         except Exception: pass
 app=FastAPI(title=settings.app_name,version=APP_VERSION,lifespan=lifespan)
-app.add_middleware(CORSMiddleware,allow_origins=[],allow_methods=['GET','POST','PUT','DELETE','OPTIONS'],allow_headers=['Content-Type','X-Admin-Password','X-Nexus-Session'])
-@app.middleware('http')
-async def security_headers(request:Request,call_next):
-    """Baseline response headers for a panel served on a public URL.
-
-    Deliberately no ``X-Frame-Options``: the panel is legitimately opened inside
-    an embedded preview pane on another origin, and denying that would break the
-    admin's own login instead of an attacker. The three below cost nothing and
-    stop MIME sniffing, referrer leakage and device-API probing from any page.
-    """
-    response=await call_next(request)
-    response.headers.setdefault('X-Content-Type-Options','nosniff')
-    response.headers.setdefault('Referrer-Policy','no-referrer')
-    response.headers.setdefault('Permissions-Policy','geolocation=(), microphone=(), camera=()')
-    return response
+app.add_middleware(CORSMiddleware,allow_origins=[],allow_methods=['GET','POST','PUT','DELETE','OPTIONS'],allow_headers=['Content-Type','X-Admin-Password'])
 templates=Jinja2Templates(directory=os.path.join(BASE_DIR,'templates'))
 app.mount('/static',StaticFiles(directory=os.path.join(BASE_DIR,'static')),name='static')
 # The newer capability endpoints (customization, Hysteria2, location packs, the
 # network tools) live in their own router so this module keeps owning the core.
 app.include_router(extra_router)
-# Manual node selection, per-tab settings reset and the advanced subscription
-# surface are self-contained too — see ``app/panel_extras.py``.
-app.include_router(panel_extras_router)
-# The Telegram Web proxy is a public path on this domain (``/tg/…``), so it owns
-# its own router: the admin API lives in the extra router, this one is reached by
-# whoever opens the Telegram web app from a blocked network.
-app.include_router(telegram_web.router)
 @app.get('/health')
 def health():
     try:
         row('SELECT 1'); return {'ok':True,'service':'nexus-python','database':'ok','uptime_seconds':int(time.time()-_started),'time':int(time.time())}
     except Exception as exc: raise HTTPException(503,f'database unavailable: {type(exc).__name__}')
 @app.get('/',response_class=HTMLResponse)
-async def home(request:Request,token:str=''):
+def home(request:Request,token:str=''):
     try: auth(request)
     except HTTPException:
         # Session bootstrap for clients whose browser refuses the session cookie
@@ -517,7 +445,7 @@ def _protocol_catalog():
 
 def _share_payload(request:Request,u,node=''):
     """Everything an end user needs: status window, per-client subs, formats."""
-    base=public_url(request); token=urllib.parse.quote(u['uuid'],safe='')
+    base=public_base(request); token=urllib.parse.quote(u['uuid'],safe='')
     transport_protocols=transports.user_protocols(u)
     return {
         'base_url':base,
@@ -734,44 +662,16 @@ def subscription(request:Request,token:str,target:str='auto',node:str='',locatio
     # The Hysteria2 endpoint and the hosted protocols belong to the whole
     # subscription, not to one node, so a per-node address (``?node=``) leaves
     # them out.
-    base=public_url(request)
-    try: text=render(u,base,target,nodes,_sub_prefix(),include_extras=not node)
+    try: text=render(u,public_base(request),target,nodes,_sub_prefix(),include_extras=not node)
     except ValueError as e: raise HTTPException(400,str(e))
     cap=transports.user_max_configs(u)
-    # What the body really is, told to the client rather than guessed: a Clash
-    # profile is YAML (so neither ``singbox`` nor ``lines`` describes it), and a
-    # client that resolves to the Clash family always gets one.
-    resolved_target=normalize_target(target)
-    if text.lstrip().startswith('{'): wire='singbox'
-    elif CLIENT_FORMATS.get(resolved_target,resolved_target)=='clash': wire='clash'
-    else: wire='lines'
     headers={'Cache-Control':'no-store, max-age=0','X-Content-Type-Options':'nosniff',
-             'X-NEXUS-Node-Count':str(len(nodes)),'X-NEXUS-Target':resolved_target,
-             'X-NEXUS-Format':wire,
+             'X-NEXUS-Node-Count':str(len(nodes)),'X-NEXUS-Target':normalize_target(target),
+             'X-NEXUS-Format':'singbox' if text.lstrip().startswith('{') else 'lines',
              'X-NEXUS-Max-Configs':str(cap),'X-NEXUS-Flags':'1' if _flags_on() else '0',
              'X-NEXUS-Transports':str(len(transports.available_profiles()))}
     if location: headers['X-NEXUS-Location']=str(location)
     headers['X-NEXUS-Scope']=wanted_scope
-    # ---------------------------------------------------- the client's own screen
-    # These three are read by the *client app*, not by us, and they are what
-    # turns a plain link into a manageable subscription:
-    #
-    # * ``profile-update-interval`` — how many hours until the client re-fetches
-    #   this URL on its own. Without it a user has to remember to press
-    #   «update» after every change; with it, «update» happens for them.
-    # * ``subscription-userinfo`` — the traffic line a client paints under the
-    #   profile (upload/download/total/expiry). We meter one combined counter, so
-    #   the whole usage is reported as ``download`` and ``upload`` stays 0 rather
-    #   than inventing a split; ``total=0`` means unlimited and ``expire=0`` means
-    #   «no expiry», which is exactly how clients render those two.
-    # * ``profile-web-page-url`` — the «open web page» button that takes the user
-    #   to this deployment's own status window from inside the client.
-    used_bytes=int(round(float(u.get('used_gb') or 0)*1024**3))
-    limit_bytes=int(round(float(u['limit_gb'])*1024**3)) if u.get('limit_gb') else 0
-    headers['profile-update-interval']='12'
-    headers['subscription-userinfo']=(f'upload=0; download={used_bytes}; '
-                                      f'total={limit_bytes}; expire={int(u.get("expires_at") or 0)}')
-    headers['profile-web-page-url']=_portal_url(base,u['uuid'])
     return PlainTextResponse(text,headers=headers)
 @app.get('/sub/{token}/{node_name}')
 def subscription_node(request:Request,token:str,node_name:str,target:str='auto'):
@@ -943,7 +843,7 @@ def _core_subs(base,token,node=''):
 
 def _portal_data(request:Request,u):
     """Public payload behind the subscription status window (no admin auth)."""
-    base=public_url(request); token=urllib.parse.quote(u['uuid'],safe='')
+    base=public_base(request); token=urllib.parse.quote(u['uuid'],safe='')
     ok,reason=allowed(u)
     now=int(time.time()); used=float(u.get('used_gb') or 0); limit=u.get('limit_gb')
     protocols=transports.user_protocols(u)
@@ -1010,10 +910,6 @@ def _portal_data(request:Request,u):
                   for item in node_scope.options(catalog_nodes,user_scope)],
         # Deployment-wide extras an end user should still see.
         'hysteria':transports.catalog()['hysteria2'],
-        # The Telegram proxies this user may use: their own web-proxy lines (their
-        # username and credential), the shared MTProto link and the web address.
-        # Empty when nothing is published, so the window grows no empty section.
-        'telegram':telegram_proxies.portal_payload(base,u),
         # Which of the four core sublinks the status window highlights, and whether
         # node names carry their country flag.
         'default_format':_brand()['default_format'],
@@ -1033,27 +929,6 @@ def portal_json(request:Request,token:str):
     u=get_by_token(urllib.parse.unquote(token))
     if not u: raise HTTPException(404,'subscription not found')
     return _portal_data(request,u)
-
-@app.post('/api/feedback')
-async def submit_feedback(request:Request):
-    """Public: an end user sends a note from their own status window.
-
-    No login, because the caller is an end user rather than the admin — the
-    subscription token in the body is what proves they are a real user of this
-    deployment, and the per-IP limiter (``feedback_throttle``) is what keeps the
-    inbox from being filled by a script.
-    """
-    ip=_client_ip(request)
-    if feedback_throttle.blocked(ip): raise HTTPException(429,'بازخورد زیادی از این نشانی ثبت شد؛ کمی بعد دوباره تلاش کنید')
-    b=await _optional_json(request)
-    u=get_by_token(urllib.parse.unquote(str(b.get('token') or '').strip()))
-    if not u: raise HTTPException(404,'subscription not found')
-    try: item=feedback_service.submit(u,b.get('kind'),b.get('message'),b.get('rating'),b.get('contact'),ip)
-    except ValueError as e:
-        feedback_throttle.fail(ip); raise HTTPException(400,str(e))
-    feedback_throttle.fail(ip)
-    _audit('feedback.submit',f"{u['username']} · {item['kind']}")
-    return {'success':True,'kind':item['kind'],'kind_label':item['kind_label']}
 
 @app.get('/status/{username}',response_class=HTMLResponse)
 def status(request:Request,username:str):
@@ -1125,19 +1000,7 @@ async def save_worker_settings(request:Request):
     if key: execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',('cloudflare_worker_key',key))
     sync_from_sources(public_base(request), url or None)
     _audit('cloudflare.worker',url or 'disabled')
-    # A saved address is the address the panel, its subscriptions and its node
-    # links are rebuilt around, so a hostname that a filtered network cannot
-    # reach is a dead end the admin only discovers by testing from inside that
-    # network. ``workers.dev`` is filtered in Iran as a *suffix* (any name under
-    # it), so the warning is about the suffix, not one particular Worker.
-    host=(urllib.parse.urlparse(url).hostname or '') if url else ''
-    warning=''
-    if host.endswith('.workers.dev'):
-        warning=('آدرس workers.dev در ایران فیلتر است و پنل با آن فقط با فیلترشکن باز می‌شود؛ '
-                 'به Worker یک دامنهٔ سفارشی وصل کنید (Settings → Domains & Routes → Add custom domain) '
-                 'و همان را ذخیره کنید تا پنل بدون VPN بالا بیاید.')
-    return {'success':True,'configured':bool(url),'host':host,'warning':warning,
-            'nodes':[_node_payload(n) for n in list_nodes()]}
+    return {'success':True,'configured':bool(url),'nodes':[_node_payload(n) for n in list_nodes()]}
 
 def _node_payload(node):  # noqa: D401
     """A node row plus the edge-source view (its location, provider, last probe)."""
@@ -1519,24 +1382,13 @@ async def edge_toggle_source(request:Request,source_id:str):
             'nodes':[_node_payload(n) for n in list_nodes()]}
 
 def _worker_steps():
-    """The Worker deployment guide, worded for the platform this runs on.
-
-    Step 4 is the one that decides whether the panel opens at all in a filtered
-    network. A Worker answers on ``*.workers.dev`` until it is given a custom
-    domain, and that whole suffix is filtered in Iran — so a Worker left on its
-    default hostname is a *second* address that only opens through a VPN, which
-    is the exact failure this section exists to fix. The guide therefore asks
-    for the custom domain before it asks for the URL, and ``save_worker_settings``
-    warns when a ``workers.dev`` one is saved anyway.
-    """
+    """The Worker deployment guide, worded for the platform this runs on."""
     where=runtime.label()
     return [
         f'کد زیر را کپی یا دانلود کنید؛ آدرس همین سرویس ({where}) از قبل داخلش قرار گرفته است.',
         'در Cloudflare → Workers & Pages → Create Worker کد را جایگزین و Deploy کنید.',
         f'اختیاری: در Settings → Variables متغیری با نام NEXUS_ORIGIN و مقدار آدرس {where} بسازید.',
-        'در همان Worker به Settings → Domains & Routes بروید و «Add custom domain» را بزنید و یک زیردامنه از دامنه‌ای که در کلودفلر دارید وصل کنید (مثلاً panel.example.com)؛ کلودفلر گواهی‌اش را خودش می‌سازد.',
-        'آدرس workers.dev را ذخیره نکنید: خودِ workers.dev هم در ایران فیلتر است و پنل با آن فقط با فیلترشکن باز می‌شود. همان دامنهٔ سفارشی مرحلهٔ قبل تنها آدرسی است که بدون VPN بالا می‌آید.',
-        'آدرس Worker را در فیلد همین بخش ذخیره کنید تا لوکیشن کلودفلر ساخته و پینگ شود؛ از آن به بعد پنل و همهٔ لینک‌های کاربر (سابلینک، پنجرهٔ وضعیت، دانلود) روی همین آدرس ساخته می‌شوند نه روی آدرس رِیلوی.',
+        'آدرس Worker را در فیلد همین بخش ذخیره کنید تا لوکیشن کلودفلر ساخته و پینگ شود.',
         'روی «پینگ همه نودها» بزنید؛ نودها به ترتیب کمترین پینگ در سابلینک‌ها می‌آیند.',
         'برای لوکیشن‌های بیشتر (Fastly، آروان، دامنهٔ تمیز و…) از بخش «منابع لبه و لوکیشن‌ها» استفاده کنید.',
     ]
@@ -1615,7 +1467,7 @@ def client_config(request:Request,username:str,target:str='singbox'):
     if not u: raise HTTPException(404,'user not found')
     ok,reason=allowed(u)
     if not ok: raise HTTPException(403,reason)
-    return {'username':username,'target':target,'subscription':public_url(request)+'/sub/'+urllib.parse.quote(u['uuid'],safe='')+'?target='+urllib.parse.quote(target),'nodes':active_nodes()}
+    return {'username':username,'target':target,'subscription':public_base(request)+'/sub/'+urllib.parse.quote(u['uuid'],safe='')+'?target='+urllib.parse.quote(target),'nodes':active_nodes()}
 
 @app.get('/api/metrics')
 def metrics(request:Request,hours:int=24):
@@ -1678,7 +1530,7 @@ def user_links(request:Request,username:str,node:str=''):
     auth(request); u=get_user(username)
     if not u: raise HTTPException(404,'user not found')
     ok,reason=allowed(u)
-    base=public_url(request); prefix=_sub_prefix()
+    base=public_base(request); prefix=_sub_prefix()
     token=urllib.parse.quote(u['uuid'],safe='')
     nodes=_sub_nodes(node) or active_nodes()
     def sub(target,name='',location=''):

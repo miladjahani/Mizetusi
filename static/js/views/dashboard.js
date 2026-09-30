@@ -2,7 +2,7 @@
    NEXUS · view — dashboard. Pure rendering: it reads the store and paints,
    all loading happens in the app shell so every view shares the same data.
    ========================================================================== */
-import { $, $$, ico, esc, Fmt } from '../core.js';
+import { $, ico, esc, Fmt } from '../core.js';
 import { Charts, StatusKit } from '../ui.js';
 
 export class DashboardView {
@@ -22,7 +22,6 @@ export class DashboardView {
     this.coreCard();
     this.cloudflareSummary();
     this.recentLogs();
-    this.feedback();
   }
 
   heroChips() {
@@ -217,36 +216,6 @@ export class DashboardView {
     host.innerHTML = `<div class="kv-list">${rows.map(([key, value]) => `<div class="kv-line"><span>${esc(key)}</span><b>${esc(value)}</b></div>`).join('')}</div>`;
   }
 
-  feedback() {
-    const host = $('#feedbackList');
-    if (!host) return;
-    const data = this.store.get('feedback');
-    const pill = $('#feedbackPill');
-    const empty = (message) => { host.innerHTML = `<div class="empty">${ico('activity', 30)}<div>${esc(message)}</div></div>`; };
-    if (!data) {
-      if (pill) { pill.className = 'pill'; pill.textContent = '—'; }
-      empty('در انتظار بارگذاری');
-      return;
-    }
-    const items = data.items || [];
-    if (pill) {
-      pill.className = `pill ${data.new ? 'warn' : 'ok'}`;
-      pill.innerHTML = data.total ? `<i class="dot"></i> ${Fmt.num(data.new)} تازه از ${Fmt.num(data.total)}` : 'خالی';
-    }
-    if (!items.length) { empty('هنوز بازخوردی نفرستاده‌اند'); return; }
-    host.innerHTML = items.map((item) => {
-      const text = String(item.message || '').replace(/\s+/g, ' ');
-      return `
-      <div class="rank" data-fid="${item.id}">
-        <span class="who"><b>${esc(item.username || 'کاربر')}</b>
-          <span>${esc(item.kind_label || '')}${item.rating ? ` · ${Fmt.num(item.rating)}★` : ''} · ${esc(Fmt.ago(item.created_at))}</span></span>
-        <span class="amt" title="${esc(text)}" style="flex:1;text-align:start">${esc(Fmt.truncate(text, 44))}</span>
-        <button class="tbtn${item.status === 'done' ? ' done' : ''}" data-fb-done="${item.id}">${item.status === 'done' ? 'انجام شد' : 'انجام'}</button>
-        <button class="tbtn" data-fb-del="${item.id}">حذف</button>
-      </div>`;
-    }).join('');
-  }
-
   recentLogs() {
     const host = $('#recentLogs');
     if (!host) return;
@@ -261,35 +230,6 @@ export class DashboardView {
   }
 
   bindEvents() {
-    $$('#feedbackList [data-fb-done]').forEach((button) => {
-      button.onclick = async () => {
-        const id = button.dataset.fbDone;
-        const current = (this.store.get('feedback')?.items || []).find((item) => String(item.id) === String(id));
-        const next = current?.status === 'done' ? 'read' : 'done';
-        try {
-          await this.app.api.post(`/api/feedback/${id}`, { status: next });
-          await this.app.loadFeedback();
-          this.feedback();
-          this.bindEvents();
-          this.app.toasts.ok(next === 'done' ? 'به‌عنوان انجام‌شده ثبت شد' : 'به حالت خوانده‌نشده برگشت');
-        } catch (error) {
-          this.app.toasts.err(error.message || 'ثبت نشد');
-        }
-      };
-    });
-    $$('#feedbackList [data-fb-del]').forEach((button) => {
-      button.onclick = async () => {
-        try {
-          await this.app.api.delete(`/api/feedback/${button.dataset.fbDel}`);
-          await this.app.loadFeedback();
-          this.feedback();
-          this.bindEvents();
-          this.app.toasts.ok('بازخورد حذف شد');
-        } catch (error) {
-          this.app.toasts.err(error.message || 'حذف نشد');
-        }
-      };
-    });
     document.querySelectorAll('#trafficSeg button').forEach((button) => {
       button.onclick = () => {
         this.store.set('trafficRange', Number(button.dataset.range));

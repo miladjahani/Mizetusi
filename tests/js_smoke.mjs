@@ -74,7 +74,7 @@ process.on('unhandledRejection', (error) => failures.push(`unhandled: ${error.me
 // ES-module syntax in .js files), so this needs no build step and no copy.
 const BASE = new URL('../static/js/', import.meta.url);
 const mods = ['core', 'ui', 'session', 'api', 'store', 'pwa', 'views/dashboard', 'views/nodes', 'views/users',
-  'views/system', 'views/customize', 'views/tools', 'views/telegram', 'views/advanced', 'views/guide'];
+  'views/system', 'views/customize', 'views/tools', 'views/advanced', 'views/guide'];
 const loaded = {};
 for (const name of mods) {
   loaded[name] = await import(new URL(`${name}.js`, BASE));
@@ -90,9 +90,9 @@ const checks = [
   [loaded.ui.Charts.bars !== undefined && loaded.ui.Charts.area !== undefined, 'Charts API'],
   [typeof loaded.session.SessionManager === 'function', 'SessionManager'],
   [typeof loaded.api.ApiClient === 'function', 'ApiClient'],
-  [loaded.store.SECTIONS.length === 10, 'SECTIONS'],
+  [loaded.store.SECTIONS.length === 8, 'SECTIONS'],
   [loaded.store.SECTIONS.map((item) => item.id).join(',') ===
-    'dashboard,users,subs,nodes,cloudflare,tools,telegram,customize,advanced,settings', 'SECTIONS order'],
+    'dashboard,users,nodes,cloudflare,tools,customize,advanced,settings', 'SECTIONS order'],
   // The sidebar is five collapsible groups, and every section belongs to one of
   // them — a section left out of a group would be unreachable in the UI.
   [loaded.store.NAV_GROUPS.length === 5, 'nav groups'],
@@ -120,11 +120,6 @@ const checks = [
   [typeof loaded['views/tools'].ToolsView.prototype.scan === 'function', 'CDN scanner action'],
   [typeof loaded['views/tools'].ToolsView.prototype.renderClientIp === 'function', 'real client-ip card'],
   [typeof loaded['views/tools'].ToolsView.prototype.saveClientIp === 'function', 'trusted-proxy save'],
-  [typeof loaded['views/telegram'].TelegramView === 'function', 'TelegramView'],
-  [typeof loaded['views/telegram'].TelegramView.prototype.load === 'function', 'telegram loader'],
-  [typeof loaded['views/telegram'].TelegramView.prototype.rotate === 'function', 'mtproto secret rotation'],
-  [typeof loaded['views/telegram'].TelegramView.prototype.probe === 'function', 'telegram web probe'],
-  [typeof loaded['views/telegram'].TelegramView.prototype.payload === 'function', 'telegram form payload'],
   [typeof loaded['views/advanced'].AdvancedView === 'function', 'AdvancedView'],
   [typeof loaded['views/advanced'].AdvancedView.prototype.saveHysteria === 'function', 'hysteria2 form'],
   [typeof loaded['views/guide'].GuideView === 'function', 'GuideView'],
@@ -139,9 +134,8 @@ const checks = [
   // bar — empty on every load.
   [(elements.get('navGroups')?.innerHTML.match(/class="nav-group[ "]/g) || []).length === 5,
     'the grouped navigation must render five groups'],
-  [(elements.get('navGroups')?.innerHTML.match(/data-section=/g) || []).length === 10,
+  [(elements.get('navGroups')?.innerHTML.match(/data-section=/g) || []).length === 8,
     'the grouped navigation must offer every section'],
-  [typeof window.nexus?.updatePanel === 'function', 'guarded GitHub update action'],
   [typeof window.nexus?.handleSessionLost === 'function', 'session recovery hook'],
 ];
 for (const [ok, label] of checks) {
@@ -638,71 +632,6 @@ try {
   }
 } catch (error) {
   failures.push(`the cores card threw: ${error.message}`);
-}
-
-// The automatic-configuration card. A deploy with no admin in the loop must leave
-// a working panel, so the card has to say what the boot pass switched on, which
-// Railway TCP proxies really exist — their public port is random and is the one a
-// link has to carry — and, for everything that stayed off, what is missing.
-try {
-  const view = window.nexus.advanced;
-  window.nexus.store.set('autoconfig', {
-    allowed: true, done: true, ran_at: Math.floor(Date.now() / 1000) - 120,
-    applied: ['railway'], candidates: [],
-    railway: {
-      api: { configured: true, missing: [], endpoint: 'https://backboard.railway.com/graphql/v2' },
-      done: true, ran_at: 1, created: [8443, 8446],
-      proxies: { catalog: [
-        { id: 'reality', label: 'Reality (مسیر مستقیم)', port: 8443, enabled: true, proxied: true,
-          public_host: 'roundhouse.proxy.rlwy.net', public_port: 23177, switch: null },
-        { id: 'mtproto', label: 'MTProto', port: 8446, enabled: true, proxied: false,
-          public_host: '', public_port: 0, switch: 'tg_mtproto_enabled' },
-        { id: 'http', label: 'وب‌پروکسی HTTP', port: 8448, enabled: false, proxied: false,
-          public_host: '', public_port: 0, switch: 'tg_web_http_enabled' },
-      ], count: 1 },
-    },
-  });
-  view.renderAuto();
-  const rows = String(elements.get('adAutoCandidates')?.innerHTML || '');
-  // The forwarded port is the one a link carries, and it is not the listen port:
-  // Railway allocates it at random, so showing 8,443 here would be a wrong link.
-  const forwarded = loaded.core.Fmt.num(23177);
-  const listen = loaded.core.Fmt.num(8443);
-  if (!rows.includes(`roundhouse.proxy.rlwy.net:${forwarded}`)) {
-    failures.push('the automatic-configuration card must show the public port a link is built from');
-  }
-  if (forwarded === listen) failures.push('the forwarded port must be distinguishable from the listen port');
-  if (!rows.includes('بدون فوروارد') || !rows.includes('خاموش')) {
-    failures.push('a raw-port capability with no proxy must say so instead of looking published');
-  }
-  if (rows.includes('undefined')) failures.push('the automatic-configuration card rendered undefined');
-  const info = String(elements.get('adAutoInfo')?.innerHTML || '');
-  if (!info.includes('railway')) failures.push('the card must name what the boot pass created');
-  if (String(elements.get('adAutoTag')?.innerHTML || '').includes('اجرا نشده')) {
-    failures.push('a pass that ran must not read as «اجرا نشده»');
-  }
-  // A host without a Railway token: nothing can be created, and the card names
-  // the variables rather than pretending the ports exist.
-  window.nexus.store.set('autoconfig', {
-    allowed: true, done: false, ran_at: 0, applied: [], candidates: [],
-    railway: { api: { configured: false, missing: ['RAILWAY_API_TOKEN', 'RAILWAY_ENVIRONMENT_ID'],
-      guide: ['توکن را با نام RAILWAY_API_TOKEN در Variables ذخیره کنید'] },
-      done: false, ran_at: 0, created: [], proxies: { catalog: [], count: 0 } },
-  });
-  view.renderAuto();
-  if (!String(elements.get('adAutoInfo')?.innerHTML || '').includes('RAILWAY_API_TOKEN')) {
-    failures.push('a host without a Railway token must name the missing variables');
-  }
-  // Naming a variable is not the same as saying where its value comes from: an
-  // admin with only the project id has to be told the token is what unblocks it.
-  if (!String(elements.get('adAutoInfo')?.innerHTML || '').includes('مقدارها از کجا')) {
-    failures.push('the card must say where each Railway value comes from, not only its name');
-  }
-  if (!String(elements.get('adAutoCandidates')?.innerHTML || '').includes('empty')) {
-    failures.push('an empty port catalog must render an empty state');
-  }
-} catch (error) {
-  failures.push(`the automatic-configuration card threw: ${error.message}`);
 }
 
 await new Promise((resolve) => setTimeout(resolve, 50));
