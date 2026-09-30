@@ -6,20 +6,20 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 import jwt
-from app.config import SUPPORT_CHANNEL, settings
+from app.config import settings
 from app.db import init_db, row, rows, execute
 from app.core.models import UserCreate, TrafficEvent, PROTOCOL_LIST
 from app.users.service import (list_users, get_user, get_by_token, create_user, delete_user, toggle_user,
     reset_user, track, allowed, reset_due, set_metadata_value)
 from app.subscriptions.generator import (render, active_nodes, node_links, normalize_target, profiles_for,
-    entry_pairs, TRANSPORT_TARGETS as SUB_TRANSPORT_TARGETS, TARGETS as SUB_TARGETS)
+    entry_pairs, TARGETS as SUB_TARGETS)
 from app.subscriptions.clients import (CLIENTS, PRESETS, FAMILIES, FORMAT_LABELS, DEFAULT_PRESET, catalog as client_catalog,
     client_links, client_groups, download_overrides, preset as get_preset, subscription_url as client_subscription_url)
 from app.subscriptions import transports as transports
 from app.subscriptions import scope as node_scope
 from app.subscriptions import flags as sub_flags
 from app import warp as warp_service
-from app.proxy.manager import add as add_proxy, list_all as list_proxies, check as check_proxy, parse as parse_proxy
+from app.proxy.manager import add as add_proxy, list_all as list_proxies, check as check_proxy
 from app.dns.service import doh
 from app.services.backup import export_all
 from app.cloudflare.monitor import seed_ips, probe_all, best, loop as cf_loop
@@ -33,8 +33,6 @@ from app.api_extra import router as extra_router
 from app import runtime
 from app.core.settings_store import store
 from app.core.security import SessionManager, LoginThrottle
-from app.core.clientip import client_ip as resolve_client_ip
-from app.cores import service as cores
 from app.services.audit import AuditLog
 from app import xray
 import websockets
@@ -54,18 +52,12 @@ BASE_DIR=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERAL_SETTING_KEYS=('public_base_url','sub_prefix','default_protocol','default_limit_gb','default_expiry_days','default_ip_limit','session_days','ping_interval','accent','accent_secondary','app_name',
                      # Customization (the «شخصی‌سازی» tab) and the new defaults.
                      'portal_banner','support_url','flags_enabled','default_format','default_max_configs',
-                     # Whether a location's country is measured from its addresses
-                     # (app/edge/geo.py) or kept as typed.
-                     'geo_lookup',
                      # Node scope of a quick-created user (all / multi-location only /
                      # this server only / a country) — see app/subscriptions/scope.py.
                      'default_scope',
                      # Hysteria2 endpoint (the password is deliberately absent: it is
                      # never echoed back to the panel, only its presence is reported).
-                     'hy2_enabled','hy2_host','hy2_port','hy2_sni','hy2_obfs','hy2_insecure','hy2_label',
-                     # Which address the panel believes a request came from — see
-                     # app/core/clientip.py and «شبکه و لبه → IP واقعی کاربر».
-                     'trust_client_ip','trusted_proxy_cidrs')
+                     'hy2_enabled','hy2_host','hy2_port','hy2_sni','hy2_obfs','hy2_insecure','hy2_label')
 # Subscription shapes the status window offers as its four main buttons. The
 # matching validation lives next to the endpoints that own them
 # (``app/api_extra.py``), so nothing is declared twice here.
@@ -112,22 +104,6 @@ def _flags_on():
     return (_setting('flags_enabled') or '1') != '0'
 
 
-def _trust_cdn_headers():
-    """Whether CDN/proxy headers may be believed for the client address."""
-    return (_setting('trust_client_ip') or '1') != '0'
-
-
-def _client_ip(request:Request):
-    """The real client address of a request (app/core/clientip.py).
-
-    Never ``request.client.host`` directly: behind Railway/Cloudflare that is the
-    proxy, and the raw header is client-controlled. The login throttle and the
-    audit log both key on this value.
-    """
-    return resolve_client_ip(request,extra_trusted=_setting('trusted_proxy_cidrs') or '',
-                             trust_headers=_trust_cdn_headers())
-
-
 def _brand():
     """Panel identity: also feeds the PWA manifest so the icon name matches."""
     return {'app_name':(_setting('app_name') or 'NEXUS').strip()[:24] or 'NEXUS',
@@ -136,9 +112,7 @@ def _brand():
             # The status window is skinned from these, so a rebrand reaches the
             # end user without touching the template.
             'banner':(_setting('portal_banner') or '').strip(),
-            # An admin's own support link always wins; with nothing configured the
-            # built-in channel is used, so «پشتیبانی» is never a dead button.
-            'support_url':(_setting('support_url') or '').strip() or SUPPORT_CHANNEL,
+            'support_url':(_setting('support_url') or '').strip(),
             'flags':_flags_on(),
             'default_format':(_setting('default_format') or 'auto').strip().lower(),
             'logo':PWA_ICONS['logo'],'icons':PWA_ICONS,'short_name':'NEXUS'}
@@ -279,13 +253,10 @@ async def bootstrap_nodes_full():
 async def lifespan(app:FastAPI):
     init_db(); bootstrap(); ensure_nodes(); bootstrap_nodes()
     await xray.start_or_reload(force=True)
-    # The second engines (AnyTLS/TUIC) reconcile themselves, then keep doing so:
-    # an admin switch is picked up without a restart.
-    await cores.sync(force=True)
-    task=asyncio.create_task(maintenance()); cf_task=asyncio.create_task(cf_loop(settings.cf_probe_interval)); xray_task=asyncio.create_task(xray.loop()); ping_task=asyncio.create_task(ping_loop(settings.cf_probe_interval,_ping_interval)); auto_task=asyncio.create_task(bootstrap_nodes_full()); cat_task=asyncio.create_task(catalog_loop()); cores_task=asyncio.create_task(cores.loop())
+    task=asyncio.create_task(maintenance()); cf_task=asyncio.create_task(cf_loop(settings.cf_probe_interval)); xray_task=asyncio.create_task(xray.loop()); ping_task=asyncio.create_task(ping_loop(settings.cf_probe_interval,_ping_interval)); auto_task=asyncio.create_task(bootstrap_nodes_full()); cat_task=asyncio.create_task(catalog_loop())
     try: yield
     finally:
-        task.cancel(); cf_task.cancel(); xray_task.cancel(); ping_task.cancel(); auto_task.cancel(); cat_task.cancel(); cores_task.cancel()
+        task.cancel(); cf_task.cancel(); xray_task.cancel(); ping_task.cancel(); auto_task.cancel(); cat_task.cancel()
         try: await task
         except asyncio.CancelledError: pass
         try: await cf_task
@@ -298,10 +269,6 @@ async def lifespan(app:FastAPI):
         except asyncio.CancelledError: pass
         try: await cat_task
         except asyncio.CancelledError: pass
-        try: await cores_task
-        except asyncio.CancelledError: pass
-        try: await cores.stop_all()
-        except Exception: pass
         try: await xray._stop()
         except Exception: pass
 app=FastAPI(title=settings.app_name,version=APP_VERSION,lifespan=lifespan)
@@ -330,7 +297,7 @@ def home(request:Request,token:str=''):
 def login_page(request:Request): return templates.TemplateResponse(request,'login.html',{'brand':_brand()})
 @app.post('/api/login')
 async def login(request:Request):
-    ip=_client_ip(request)
+    ip=request.client.host if request.client else 'unknown'
     if throttle.blocked(ip): raise HTTPException(429,'too many login attempts')
     try: body=await request.json()
     except Exception: body=None
@@ -392,23 +359,6 @@ def _target_label(target):
     profile=transports.find(target)
     return profile['tag'] if profile else SUB_LABELS.get(target,target)
 
-def _target_offerable(target,protocols):
-    """Whether a target has anything to publish for this user at all.
-
-    Two gates: a protocol the user was not given, and a transport this
-    deployment has not published (Reality with no dedicated TCP port, WARP not
-    registered). Both raise a *clear* 400 when a link is opened — but a link the
-    panel never should have offered in the first place: the drawer listed every
-    target and handed out rows that were wrong the moment they were tapped.
-    Format and client targets always resolve, so they are always offered.
-    """
-    if target in transports.PROTOCOLS:
-        return target in protocols
-    if target in SUB_TRANSPORT_TARGETS:
-        try: return bool(profiles_for(target,protocols))
-        except Exception: return False
-    return True
-
 def _transport_targets(protocols=None):
     """One subscription URL per published transport profile.
 
@@ -446,7 +396,6 @@ def _protocol_catalog():
 def _share_payload(request:Request,u,node=''):
     """Everything an end user needs: status window, per-client subs, formats."""
     base=public_base(request); token=urllib.parse.quote(u['uuid'],safe='')
-    transport_protocols=transports.user_protocols(u)
     return {
         'base_url':base,
         'portal_url':_portal_url(base,token),
@@ -455,8 +404,7 @@ def _share_payload(request:Request,u,node=''):
         'transports':_transport_targets(),
         'node_scope':transports.user_scope(u),'node_scope_label':node_scope.label(transports.user_scope(u)),
         'scopes':_scope_options(base,token,u),
-        'targets':[{'target':t,'label':_target_label(t),'url':client_subscription_url(base,token,t,node)}
-                   for t in SUB_TARGETS if _target_offerable(t,transport_protocols)],
+        'targets':[{'target':t,'label':_target_label(t),'url':client_subscription_url(base,token,t,node)} for t in SUB_TARGETS],
     }
 
 def _scope_options(base,token,u):
@@ -583,11 +531,7 @@ def update(request:Request,username:str,body:dict):
     auth(request); u=get_user(username)
     if not u: raise HTTPException(404,'user not found')
     if body.get('toggle_only'): return _user_payload(toggle_user(username))
-    if body.get('reset_action'):
-        # An unknown action is the caller's mistake, so it answers 400 with the
-        # reason instead of escaping as a ValueError and a 500.
-        try: return _user_payload(reset_user(username,str(body['reset_action'])))
-        except ValueError as exc: raise HTTPException(400,str(exc))
+    if body.get('reset_action'): return _user_payload(reset_user(username,body['reset_action']))
     allowed_keys={'protocol','limit_gb','expiry_days','limit_req','ip_limit','is_active','ips','port','sni','host','fingerprint','tls','user_proxy','frag_len','frag_int','advanced_frag','cipher_suites','tls_mask','block_ads','block_porn','auto_rotate_ip','rotate_time','ip_operator','ip_count'}
     payload=dict(body)
     # The config cap is not a column: it lives in the user's metadata JSON, so it
@@ -622,12 +566,7 @@ def update(request:Request,username:str,body:dict):
     return _user_payload(get_user(username))
 @app.delete('/api/users/{username}')
 def delete(request:Request,username:str):
-    auth(request)
-    # ``execute`` returns ``lastrowid`` on SQLite, which is None for a DELETE, so
-    # a real deletion used to answer ``success: false``. Existence is the honest
-    # answer for the caller (and it keeps working the same way on Postgres).
-    existed=bool(get_user(username)); delete_user(username)
-    _audit('user.delete',username); return {'success':existed}
+    auth(request); removed=bool(delete_user(username)); _audit('user.delete',username); return {'success':removed}
 @app.post('/api/traffic/{username}')
 def traffic(request:Request,username:str,e:TrafficEvent):
     auth(request); result=track(username,e.bytes,e.requests,e.ip)
@@ -659,10 +598,9 @@ def subscription(request:Request,token:str,target:str='auto',node:str='',locatio
     # Generate from the live Node Catalog on every request. This means a client
     # refresh automatically receives the current origin node plus every healthy
     # clean IP / clean domain of every configured location.
-    # The Hysteria2 endpoint and the hosted protocols belong to the whole
-    # subscription, not to one node, so a per-node address (``?node=``) leaves
-    # them out.
-    try: text=render(u,public_base(request),target,nodes,_sub_prefix(),include_extras=not node)
+    # The Hysteria2 entry belongs to the whole subscription, not to one node, so a
+    # per-node address (``?node=``) leaves it out.
+    try: text=render(u,public_base(request),target,nodes,_sub_prefix(),include_hy2=not node)
     except ValueError as e: raise HTTPException(400,str(e))
     cap=transports.user_max_configs(u)
     headers={'Cache-Control':'no-store, max-age=0','X-Content-Type-Options':'nosniff',
@@ -938,32 +876,14 @@ def status(request:Request,username:str):
     return templates.TemplateResponse(request,'portal.html',{'p':_portal_data(request,u),'brand':_brand()})
 @app.get('/api/proxies')
 def proxies(request:Request): auth(request); return list_proxies()
-async def _optional_json(request:Request):
-    """The request body as a dict: a missing or malformed one is simply empty.
-
-    Subscripting ``await request.json()`` directly turned a body-less call into a
-    ``KeyError`` and a 500, which reads as a broken feature rather than as «the
-    value you sent is wrong».
-    """
-    try: body=await request.json()
-    except Exception: body=None
-    return body if isinstance(body,dict) else {}
-
 @app.post('/api/proxies')
 async def proxy_create(request:Request):
-    auth(request); b=await _optional_json(request)
-    proxy=str(b.get('proxy') or '').strip()
-    if not proxy: raise HTTPException(400,'آدرس پروکسی لازم است (مثل socks5://user:pass@host:1080)')
-    try: add_proxy(proxy,b.get('country'))
+    auth(request); b=await request.json()
+    try: add_proxy(b['proxy'],b.get('country'))
     except Exception as e: raise HTTPException(400,str(e))
     return {'success':True}
 @app.post('/api/test-proxy')
-async def proxy_test(request:Request):
-    auth(request); b=await _optional_json(request)
-    proxy=str(b.get('proxy') or '').strip()
-    if not proxy: raise HTTPException(400,'آدرس پروکسی لازم است (مثل socks5://user:pass@host:1080)')
-    if not parse_proxy(proxy): raise HTTPException(400,'آدرس پروکسی قابل خواندن نیست — شکل درست: socks5://user:pass@host:1080')
-    return check_proxy(proxy)
+async def proxy_test(request:Request): auth(request); b=await request.json(); return check_proxy(b['proxy'])
 @app.get('/api/dns')
 async def dns(request:Request,name:str): auth(request); return await doh(name)
 @app.get('/api/backup')
@@ -1010,13 +930,6 @@ def _node_payload(node):  # noqa: D401
     item['location']=transports.node_location(node)
     item['provider']=transports.node_provider(node)
     item['source_id']=str(meta.get('source_id') or '')
-    # Where the address really is, when it has been measured: the panel shows the
-    # country next to the location label so a mismatch is visible instead of being
-    # silently trusted (a wrong country in a client's flag is exactly the bug this
-    # answers).
-    item['geo']={'country':str(meta.get('geo_cc') or ''),
-                 'declared':str(meta.get('declared_location') or ''),
-                 'measured':bool(meta.get('geo_cc'))}
     # The panel shows *why* a node has no latency (TLS refused, port closed), so
     # the verdict travels with the row instead of only living in the metadata.
     item['probe']={'ok':bool(meta.get('ping_ok')),'tls':bool(meta.get('ping_tls')),
@@ -1152,21 +1065,6 @@ def _edge_sync(request:Request):
     except Exception:
         return 0
 
-async def _edge_geo(limit=12,timeout=3.0,budget=8.0):
-    """Measure where the published addresses really are, then fix the labels.
-
-    Every location carries a country, and a client's flag comes from that one
-    field — so it is *measured* (three geo databases, majority vote) instead of
-    inherited from the range the location was built from. A location whose
-    addresses answer with another country is re-labelled here, because the flag,
-    the node names (``us-cloudflare-01``) and the per-country sublink slug all
-    read the same field. This is the fix for «پرچم کانادا زده، آی‌پی می‌زند
-    آمریکا»; see ``app/edge/geo.py`` for the measurements behind it.
-    """
-    result=await edge_sources.measure_async(limit=limit,timeout=timeout,budget=budget)
-    changes=edge_sources.align_labels()
-    return {**result,'changes':changes}
-
 def _edge_node_names(source_id='',provider_id='',only_pending=False):
     """Node names of one location (or one provider), for a scoped probe."""
     names=[]
@@ -1206,37 +1104,7 @@ def edge_status(request:Request):
     # admin-triggered, small and visible instead of hundreds of connects at boot.
     payload['probing']={'enabled':bool(settings.outbound_probe_enabled),'scan_on_boot':bool(settings.scan_on_boot),
                         'limit':int(settings.cf_probe_limit),'concurrency':int(settings.cf_probe_concurrency)}
-    # Whether a location's country is measured from its addresses (the panel
-    # switch in «شخصی‌سازی») — without it a location keeps the label it was made
-    # with instead of being corrected.
-    payload['geo']={**(payload.get('geo') or {}),'setting_on':(_setting('geo_lookup') or '1')!='0'}
     return payload
-
-@app.post('/api/edge/geo')
-async def edge_geo(request:Request):
-    """Measure the country of the published addresses and align the labels.
-
-    The honest answer to «چرا روی این آی‌پی پرچم کشور دیگری است؟»: every address of
-    every location is put to three independent geo databases, the majority answer
-    becomes the location's country, and a label the data contradicts is corrected
-    (its nodes are rebuilt from the new country, so the flag, the node names and
-    the per-country sublink all agree). Bounded: at most ``limit`` addresses that
-    have never been measured, and every answer is cached for good.
-    """
-    auth(request)
-    try: body=await request.json()
-    except Exception: body=None
-    body=body if isinstance(body,dict) else {}
-    try: limit=min(max(int(body.get('limit') or 24),1),96)
-    except (TypeError,ValueError): limit=24
-    result=await _edge_geo(limit=limit)
-    synced=_edge_sync(request)
-    status_payload=edge_sources.status()
-    _audit('edge.geo',f"{result['checked']} measured · {len(result['changes'])} labels aligned")
-    return {'success':True,'synced':synced,**result,
-            'stats':status_payload.get('geo') or {},
-            'sources':status_payload['sources'],
-            'nodes':[_node_payload(n) for n in list_nodes()]}
 
 @app.get('/api/edge/providers')
 def edge_providers(request:Request):
@@ -1264,16 +1132,11 @@ async def edge_scan(request:Request):
         detail='; '.join(str(r.get('error')) for r in results if r.get('error'))
         raise HTTPException(502,f'لیست هیچ provider دریافت نشد: {detail[:300]}')
     probed=await probe_all(limit=min(limit*2,192),provider_id=provider_id or None)
-    # A scan is where addresses are born, so it is also the moment to ask where
-    # they are: a location built from a fresh pool gets its real country here
-    # instead of publishing whichever country the range suggested.
-    geo_result=await _edge_geo(limit=8)
     synced=_edge_sync(request)
     ping=await _ping_edge_nodes(provider_id=provider_id,only_pending=True,timeout=2.5,limit=40)
     _audit('edge.scan',f"{provider_id or 'all'} · +{found} ips · {ping['healthy']}/{ping['probed']} ping")
     return {'success':True,'results':results,'found':found,'probed':len(probed),'synced':synced,'ping':ping,
-            'geo':geo_result,'providers':edge_sources.provider_summary(),
-            'nodes':[_node_payload(n) for n in list_nodes()]}
+            'providers':edge_sources.provider_summary(),'nodes':[_node_payload(n) for n in list_nodes()]}
 
 @app.get('/api/edge/ips')
 def edge_ips(request:Request,provider:str='',limit:int=200):
@@ -1314,15 +1177,6 @@ async def edge_save_source(request:Request):
     try: body=await request.json()
     except Exception: body=None
     body=body if isinstance(body,dict) else {}
-    # An admin who corrects a location by hand means it: auto-aligning the label
-    # to the measured country would silently undo the correction on the next
-    # pass, so an explicit change pins this location.
-    existing=next((item for item in edge_sources.sources()
-                   if item['id']==str(body.get('id') or '').strip()),None)
-    pinned=str(body.get('location') or '').strip().lower()
-    if (existing and pinned and 'autolabel' not in body
-            and pinned!=str(existing.get('location') or '').strip().lower()):
-        body['autolabel']=0
     try:
         source,items=edge_sources.save_source(body,str(body.get('id') or '').strip())
     except ValueError as exc:
@@ -1331,7 +1185,6 @@ async def edge_save_source(request:Request):
     if source.get('ips'):
         edge_sources.add_ips(source['ips'],source.get('provider') or edge_sources.MANUAL_PROVIDER)
     await probe_all(limit=settings.cf_probe_limit)
-    geo_result=await _edge_geo(limit=4)
     synced=_edge_sync(request)
     # The location is measured in the same request, so the panel (and the toast)
     # can say how many of its addresses really answer instead of leaving it at
@@ -1340,7 +1193,7 @@ async def edge_save_source(request:Request):
     items=edge_sources.status()['sources']
     _audit('edge.source.save',f"{source['id']} · {source['kind']} · {ping['healthy']}/{ping['probed']} ping")
     return {'success':True,'source':next((s for s in items if s['id']==source['id']),source),
-            'sources':items,'synced':synced,'ping':ping,'geo':geo_result,
+            'sources':items,'synced':synced,'ping':ping,
             'nodes':[_node_payload(n) for n in list_nodes()]}
 
 @app.post('/api/edge/sources/{source_id}/ping')
@@ -1353,12 +1206,11 @@ async def edge_ping_source(request:Request,source_id:str):
     auth(request)
     current=next((item for item in edge_sources.sources() if item['id']==source_id),None)
     if not current: raise HTTPException(404,'منبع پیدا نشد')
-    geo_result=await _edge_geo(limit=6)
     synced=_edge_sync(request)
     ping=await _ping_edge_nodes(source_id=source_id,timeout=4.0,limit=60)
     _audit('edge.source.ping',f"{source_id} · {ping['healthy']}/{ping['probed']} reachable")
     items=edge_sources.status()['sources']
-    return {'success':True,'synced':synced,**ping,'geo':geo_result,
+    return {'success':True,'synced':synced,**ping,
             'source':next((s for s in items if s['id']==source_id),current),'sources':items,
             'nodes':[_node_payload(n) for n in list_nodes()],
             'providers':edge_sources.provider_summary()}
@@ -1570,11 +1422,7 @@ def user_links(request:Request,username:str,node:str=''):
         'portal_url':_portal_url(base,token),
         'subscription':sub(_user_target(u)),
         'smart_url':sub('auto'),
-        # Only the targets this user can actually open (see _target_offerable):
-        # «vmess» for a vless+trojan user, or Reality/WARP on a deployment that
-        # does not publish them, used to be listed and answered 400 on tap.
-        'subscriptions':[{'target':t,'label':_target_label(t),'url':sub(t)} for t in SUB_TARGETS
-                         if _target_offerable(t,protocol_set)],
+        'subscriptions':[{'target':t,'label':_target_label(t),'url':sub(t)} for t in SUB_TARGETS],
         'protocol_set':sorted(enabled_protocols,key=transports.PROTOCOLS.index),
         'locations':locations,
         'location_subscriptions':[{'location':loc,'label':f'{loc.upper()} · فقط همین لوکیشن',

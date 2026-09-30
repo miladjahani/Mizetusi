@@ -233,7 +233,7 @@ def test_hysteria2_stays_out_until_it_is_configured_and_then_reaches_every_forma
 
     # It is one shared external endpoint, so a per-node subscription leaves it out
     # and Xray (which has no hysteria2 outbound) never carries it.
-    assert 'hysteria2://' not in render(user, 'https://panel.example.com', 'auto', include_extras=False)
+    assert 'hysteria2://' not in render(user, 'https://panel.example.com', 'auto', include_hy2=False)
     assert 'hysteria2' not in render(user, 'https://panel.example.com', 'xray')
 
     off = client.post('/api/hysteria', headers=h(), json={'action': 'disable'}).json()
@@ -305,15 +305,7 @@ def test_the_status_window_groups_the_client_sublinks_by_engine_and_reports_the_
                for item in data['transports'])
 
     assert data['config_count'] == 6 and data['config_limit'] == 6
-    # The admin's support link always wins; with nothing configured the window
-    # falls back to the built-in support channel instead of dropping the button.
-    from app.config import SUPPORT_CHANNEL
-    assert data['banner'] == 'تمدید از پشتیبانی' and data['support_url'] == SUPPORT_CHANNEL
-    client.post('/api/customization', headers=h(), json={'support_url': 'https://t.me/my_desk'})
-    try:
-        assert client.get(f"/portal/{user['uuid']}/json").json()['support_url'] == 'https://t.me/my_desk'
-    finally:
-        client.post('/api/customization', headers=h(), json={'support_url': ''})
+    assert data['banner'] == 'تمدید از پشتیبانی' and data['support_url'] == ''
     assert data['flags'] is True
     # The admin's preferred shape is what the window marks as recommended.
     assert data['default_format'] == 'clash'

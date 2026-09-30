@@ -69,10 +69,7 @@
         <div class="z"><span id="clockUtc">UTC --:--</span><span id="clockUptime">UP 0s</span></div>
       </div>
       <div class="online-pill"><i class="dot" id="sysDot"></i><span id="sysText">در حال اتصال…</span></div>
-      <a class="online-pill support-pill" href="{{ brand.support_url }}" target="_blank" rel="noopener"
-         title="کانال پشتیبانی: {{ brand.support_url }}"><svg width="13" height="13"><use href="#i-link"/></svg><span>کانال پشتیبانی</span></a>
       <button class="logout" id="logout">خروج از حساب</button>
-      <div class="brand-version" id="brandVersion">—</div>
     </div>
   </aside>
 
@@ -299,7 +296,6 @@
         <div class="panel-head">
           <div><h2>منابع لبه و لوکیشن‌ها</h2><p class="sub">آی‌پی تمیز از هر CDN، لیست دستی و دامنه‌های تمیز — هر منبع یک لوکیشن</p></div>
           <div class="actions" style="margin:0">
-            <button class="secondary compact" id="btnEdgeGeo" title="کشور هر لوکیشن از روی خودِ آدرس‌هایش اندازه‌گیری می‌شود (چند دیتابیس، رأی اکثریت)">تشخیص کشور آی‌پی‌ها</button>
             <button class="secondary compact" id="btnEdgeScan">اسکن همه providerها</button>
             <button class="secondary compact" id="btnEdgeReload">بروزرسانی</button>
           </div>
@@ -345,8 +341,8 @@
           <div class="panel-head"><div><h2>ظاهر و متن پنجرهٔ وضعیت</h2><p class="sub">هر چیزی که کاربر نهایی می‌بیند: بنر، لینک پشتیبانی، پرچم کشورها و سابلینک پیشنهادی</p></div><span class="pill" id="czTag">—</span></div>
           <label>متن بنر بالای پنجرهٔ وضعیت <span class="hint">خالی = بدون بنر</span></label>
           <input id="czBanner" placeholder="مثال: تمدید اشتراک از طریق پشتیبانی تلگرام" maxlength="200">
-          <label>لینک پشتیبانی <span class="hint">خالی = کانال پیش‌فرض ({{ brand.support_url }})</span></label>
-          <input id="czSupport" dir="ltr" placeholder="{{ brand.support_url }}">
+          <label>لینک پشتیبانی</label>
+          <input id="czSupport" dir="ltr" placeholder="https://t.me/your_support">
           <div class="field-grid">
             <div><label>نام برنامه <span class="hint">روی آیکون نصب‌شده و عنوان پنل</span></label><input id="czAppName" dir="ltr" placeholder="NEXUS"></div>
             <div><label>فرمت پیشنهادی <span class="hint">خانوادهٔ همان کلاینت در پنجرهٔ وضعیت برجسته می‌شود</span></label>
@@ -358,8 +354,6 @@
           </div>
           <div class="switch-row"><div class="txt"><b>پرچم کشور روی نام نودها</b><span>نام هر نود در سابلینک با پرچم کشورش می‌آید (🇩🇪 آلمان · ...)</span></div>
             <div class="switch on" id="czFlags"></div></div>
-          <div class="switch-row"><div class="txt"><b>اندازه‌گیری کشور از روی آی‌پی</b><span>کشور هر لوکیشن از خودِ آدرس‌هایش پرسیده می‌شود (سه دیتابیس جغرافیایی، رأی اکثریت) و برچسبی که با داده نمی‌خواند اصلاح می‌شود — تا روی آی‌پی آمریکا پرچم کانادا نیفتد. خاموش = برچسب‌ها همان‌طور که وارد کرده‌اید می‌مانند.</span></div>
-            <div class="switch on" id="czGeo"></div></div>
           <div class="actions">
             <button class="primary" id="czSave">ذخیره شخصی‌سازی</button>
             <button class="secondary" id="czReload">بازخوانی</button>
@@ -426,23 +420,6 @@
         </div>
       </div>
 
-      <div class="panel glass" style="margin-top:13px" data-acc="IP واقعی کاربر|چه آدرسی پشت CDN و پروکسی‌ها دیده می‌شود و کدام هدرها قابل‌اعتمادند|shield">
-        <div class="panel-head">
-          <div><h2>IP واقعی کاربر</h2><p class="sub">همان کاری که real_ip در nginx می‌کند: فقط هدر پروکسی‌های مورداعتماد خوانده می‌شود، پس یک IP جعل‌شده نه در لاگ می‌نشیند و نه سقف تلاش ورود را دور می‌زند</p></div>
-          <span class="pill" id="tlIpTag">—</span>
-        </div>
-        <div class="stats" style="margin-top:0" id="tlIpStats"></div>
-        <div class="switch-row"><div class="txt"><b>اعتماد به هدرهای CDN</b><span>خاموش = فقط آدرس مستقیم اتصال گزارش می‌شود؛ مناسب سروری که خودش روی اینترنت است</span></div>
-          <div class="switch" id="tlIpTrust"></div></div>
-        <label>پروکسی‌های مورداعتماد <span class="hint">CIDR با کاما — لوپ‌بک و شبکه‌های داخلی همیشه مورداعتمادند</span></label>
-        <input id="tlIpCidrs" dir="ltr" placeholder="203.0.113.0/24, 198.51.100.7">
-        <div class="actions">
-          <button class="primary" id="tlIpSave">ذخیره</button>
-          <button class="secondary" id="tlIpRefresh">بررسی دوباره</button>
-        </div>
-        <div class="kv-list" id="tlIpOut"></div>
-      </div>
-
       <div class="panel glass" style="margin-top:13px" data-acc="تحلیل سابلینک|هاست‌ها و پرچم کشورها را جدا می‌کند و به لوکیشن تبدیل می‌کند|search">
         <div class="panel-head">
           <div><h2>تحلیل سابلینک</h2><p class="sub">متن کانفیگ‌ها یا آدرس سابلینک را بدهید: پروتکل‌ها، هاست‌ها و پرچم کشورها را جدا می‌کند و در صورت خواستن، به لوکیشن تبدیل می‌کند</p></div>
@@ -491,24 +468,6 @@
           <label>دامنه‌های جایگزین / Host-SNI <span class="hint">اختیاری برای بسته‌های دامنه‌محور — برای بستهٔ کلودفلر دامنهٔ Worker یا دامنهٔ پنل (هر خط/کاما یک دامنه، به ترتیب روی لوکیشن‌ها می‌نشیند)</span></label>
           <input id="adPackHosts" dir="ltr" placeholder="worker.example.workers.dev">
         </div>
-      </div>
-
-      <div class="panel glass" style="margin-top:13px" data-acc="هسته‌های دوم (sing-box · mihomo)|پروتکل‌هایی که Xray ندارد: AnyTLS و TUIC v5 — هر کدام با یک پورت و یک موتور|zap">
-        <div class="panel-head">
-          <div><h2>هسته‌های دوم (sing-box · mihomo)</h2><p class="sub">AnyTLS و TUIC v5 در Xray اینباند ندارند؛ روی همین سرور با sing-box یا mihomo سرو می‌شوند و مثل بقیهٔ نودها در همهٔ سابلینک‌ها منتشر می‌شوند — هر کاربر یک اعتبار جدا دارد</p></div>
-          <span class="pill" id="coTag">—</span>
-        </div>
-        <div class="stats" style="margin-top:0" id="coStats"></div>
-        <div id="coProfiles"></div>
-        <div class="field-grid">
-          <div><label>نام SNI گواهی <span class="hint">گواهی خودامضا برای همین نام صادر می‌شود؛ لینک‌ها insecure هستند</span></label><input id="coSni" dir="ltr" placeholder="www.cloudflare.com"></div>
-        </div>
-        <div class="actions">
-          <button class="primary" id="coSave">ذخیره و انتشار</button>
-          <button class="secondary" id="coReload">راه‌اندازی مجدد موتورها</button>
-        </div>
-        <div class="kv-list" id="coEngines"></div>
-        <div class="kv-list" id="coNotes"></div>
       </div>
 
       <div class="grid-2b" style="margin-top:13px">

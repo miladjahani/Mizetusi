@@ -24,8 +24,6 @@ import urllib.parse
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.core import clientip
-from app.cores import service as core_service
 from app.core.settings_store import store
 from app.db import execute
 from app.edge import packs as edge_packs
@@ -77,14 +75,8 @@ async def _measure(request, source_ids):
     if not ids:
         return {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': 0}
     main = _main()
-    # A pack/import writes locations from ranges and remarks, so their countries
-    # are guesses until the addresses themselves are measured — measure them
-    # before publishing, then correct any label the data contradicts (a Canadian
-    # flag on an American address is what users see otherwise).
-    geo_result = await main._edge_geo(limit=16)
     main._edge_sync(request)
-    totals = {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': len(ids),
-              'geo': geo_result, 'results': []}
+    totals = {'probed': 0, 'healthy': 0, 'failed': 0, 'locations': len(ids), 'results': []}
     for source_id in ids:
         result = await main._ping_edge_nodes(source_id=source_id, timeout=2.5, limit=40)
         totals['probed'] += result['probed']
@@ -103,9 +95,6 @@ def _customization():
         'portal_banner': _setting('portal_banner') or '',
         'support_url': _setting('support_url') or '',
         'flags': _flags_on(),
-        # Whether a location's country is measured from its addresses (and its
-        # label corrected when the data disagrees).
-        'geo_lookup': (_setting('geo_lookup') or '1') != '0',
         'default_format': (_setting('default_format') or 'auto').strip().lower(),
         'default_max_configs': _setting('default_max_configs') or '',
         'default_scope': node_scope.normalize(_setting('default_scope') or 'all'),
@@ -145,10 +134,6 @@ async def save_customization(request: Request):
         value = str(body['flags_enabled']).strip().lower()
         _set('flags_enabled', '0' if value in ('0', 'false', 'off', 'no') else '1')
         changed.append('flags_enabled')
-    if 'geo_lookup' in body:
-        value = str(body['geo_lookup']).strip().lower()
-        _set('geo_lookup', '0' if value in ('0', 'false', 'off', 'no') else '1')
-        changed.append('geo_lookup')
     if 'default_format' in body:
         value = str(body['default_format'] or 'auto').strip().lower()
         if value not in CORE_FORMATS:
@@ -485,112 +470,6 @@ async def _json_body(request):
     return body if isinstance(body, dict) else {}
 
 
-# ------------------------------------------------------------------ client ip
-def _trust_cdn_headers():
-    return (_setting('trust_client_ip') or '1') != '0'
-
-
-def _client_ip_state(request, state=None):
-    """What the panel believes this request's address is, and the evidence.
-
-    The panel renders every field — the raw peer, the forwarded chain and which
-    rule won — because a trust decision nobody can inspect is a trust decision
-    nobody can fix. The default trusted ranges are listed too, so it is obvious
-    that a same-host nginx or the platform's own proxy is already covered.
-    """
-    extra = _setting('trusted_proxy_cidrs') or ''
-    resolved = state or clientip.resolve(request, extra_trusted=extra,
-                                         trust_headers=_trust_cdn_headers())
-    return {
-        **resolved,
-        'trust_cdn_headers': _trust_cdn_headers(),
-        'trusted_proxy_cidrs': extra,
-        'default_trusted': list(clientip.DEFAULT_TRUSTED),
-        'cloudflare_ranges': len(clientip.CLOUDFLARE),
-    }
-
-
-@router.get('/api/net/client-ip')
-def get_client_ip(request: Request):
-    """The address behind the proxies, the way nginx ``real_ip`` resolves it."""
-    _auth(request)
-    return {'success': True, **_client_ip_state(request)}
-
-
-@router.post('/api/net/client-ip')
-async def save_client_ip(request: Request):
-    """Store the trusted-proxy rule (the panel's ``set_real_ip_from``).
-
-    An unusable CIDR is a 400 instead of a silently dropped token: an operator
-    who typed a range has to know whether it took effect.
-    """
-    _auth(request)
-    body = await _json_body(request)
-    changed = []
-    if 'trust_client_ip' in body:
-        value = str(body['trust_client_ip']).strip().lower()
-        _set('trust_client_ip', '0' if value in ('0', 'false', 'off', 'no') else '1')
-        changed.append('trust_client_ip')
-    if 'trusted_proxy_cidrs' in body:
-        raw = str(body['trusted_proxy_cidrs'] or '').strip()
-        unusable = clientip.invalid_cidrs(raw)
-        if unusable:
-            raise HTTPException(400, 'این مقدارها آی‌پی یا CIDR معتبر نیستند: ' + ', '.join(unusable[:6]))
-        _set('trusted_proxy_cidrs', raw)
-        changed.append('trusted_proxy_cidrs')
-    if changed:
-        _audit('settings.client_ip', ','.join(changed))
-    return {'success': True, 'changed': changed, **_client_ip_state(request)}
-
-
-# ---------------------------------------------------------------------- cores
-def _sync_summary(result):
-    """Just enough of a sync result to show on the card after saving."""
-    return {engine: {'running': bool(item.get('running')), 'profiles': item.get('profiles') or [],
-                     'reason': item.get('reason') or ''}
-            for engine, item in (result or {}).items()}
-
-
-@router.get('/api/cores')
-def get_cores(request: Request):
-    """The second engines: what each one serves and what is actually published."""
-    _auth(request)
-    return {'success': True, **core_service.catalog()}
-
-
-@router.post('/api/cores')
-async def save_cores(request: Request):
-    """Store the switch, public port and hosting engine of every hosted protocol.
-
-    The engines are reconciled before the answer goes out, so the panel shows the
-    real result of the change (a port the host cannot expose is reported as
-    withheld, not as published).
-    """
-    _auth(request)
-    body = await _json_body(request)
-    updates = dict(body.get('profiles') or {}) if isinstance(body.get('profiles'), dict) else {}
-    if 'sni' in body:
-        updates['sni'] = body['sni']
-    try:
-        changed = core_service.save(updates)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    result = await core_service.sync(force=True)
-    if changed:
-        _audit('cores.update', ','.join(changed))
-    return {'success': True, 'changed': changed, 'sync': _sync_summary(result), **core_service.catalog()}
-
-
-@router.post('/api/cores/reload')
-async def reload_cores(request: Request):
-    """Bring the engines to the state the settings ask for, right now."""
-    _auth(request)
-    result = await core_service.sync(force=True)
-    _audit('cores.reload', ' '.join(f"{engine}:{'up' if item.get('running') else 'down'}"
-                                    for engine, item in result.items()) or 'nothing enabled')
-    return {'success': True, 'sync': _sync_summary(result), **core_service.catalog()}
-
-
 # --------------------------------------------------------------------- scopes
 @router.get('/api/scopes')
 def get_scopes(request: Request, username: str = ''):
@@ -714,9 +593,6 @@ def _guide_state(request):
         links = {'smart': main._sub_url(base, token, main._user_target(newest)),
                  'portal': main._portal_url(base, token), 'username': newest['username']}
     return {'steps': steps, 'links': links, 'tips': SECTION_TIPS,
-            # The channel an admin (or an end user asking for a renewal) should
-            # reach: what the admin configured, else the built-in channel.
-            'support': brand.get('support_url') or '',
             'score': round(100 * sum(1 for step in steps if step['done']) / len(steps)),
             'next': next((step['id'] for step in steps if not step['done']), ''),
             'catalog_total': len(nodes), 'locations': locations}

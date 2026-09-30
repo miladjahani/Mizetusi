@@ -69,30 +69,6 @@ def test_stylesheet_keeps_the_layout_inside_a_phone_viewport():
     assert 'max-width:900px' in css
 
 
-def test_support_channel_is_the_default_support_link():
-    # Out of the box every install points at the support channel, and an admin's
-    # own link in «شخصی‌سازی» still wins over it.
-    from app.config import SUPPORT_CHANNEL
-    from app.main import _brand
-    assert _brand()['support_url'] == SUPPORT_CHANNEL
-    _set('support_url', 'https://t.me/my_own_desk')
-    try:
-        assert _brand()['support_url'] == 'https://t.me/my_own_desk'
-    finally:
-        _set('support_url', '')
-
-
-def test_support_channel_is_reachable_from_the_panel_login_and_guide():
-    # An admin who cannot get in (or an end user asking for a renewal) needs the
-    # channel on the login screen too, and on a phone the live guide is the only
-    # place the link stays reachable — the sidebar footer is hidden there.
-    from app.config import SUPPORT_CHANNEL
-    for page in (client.get('/login'), client.get('/', headers=h())):
-        assert page.status_code == 200
-        assert f'href="{SUPPORT_CHANNEL}"' in page.text
-    assert client.get('/api/guide', headers=h()).json()['support'] == SUPPORT_CHANNEL
-
-
 def test_phone_bottom_bar_does_not_clip_its_group_sheet():
     # On a phone the sidebar *is* the fixed bottom bar, and the desktop rule
     # clips it to its rounded corners. That ``overflow:hidden`` also swallowed
@@ -632,9 +608,7 @@ def test_a_user_is_provisioned_on_every_inbound_by_default():
     _seed_nodes()
     execute('DELETE FROM users')
     created = client.post('/api/users', headers=h(), json={'username': 'allproto'}).json()
-    # Every protocol this deployment knows, which is the Xray set plus the ones a
-    # second engine hosts (AnyTLS, TUIC) — see ``app/cores``.
-    assert created['protocols'] == ['vless', 'vmess', 'trojan', 'ss', 'anytls', 'tuic']
+    assert created['protocols'] == ['vless', 'vmess', 'trojan', 'ss']
     assert 'همه' in created['protocol_label']
 
     for protocol in ('vless', 'vmess', 'trojan'):
@@ -668,13 +642,10 @@ def test_protocol_selection_can_be_all_or_a_subset():
     execute('DELETE FROM users')
     client.post('/api/users', headers=h(), json={'username': 'multi'})
 
-    # All protocols selected at once (what the default form submits), asked for
-    # from the panel's own catalog so a new protocol cannot quietly fall out.
-    settings_payload = client.get('/api/settings', headers=h()).json()
-    catalog = [item['id'] for item in settings_payload['subscription']['protocol_catalog']['protocols']]
-    assert catalog, 'the panel must publish its own protocol catalog'
-    every = client.put('/api/users/multi', headers=h(), json={'protocol': catalog}).json()
-    assert every['protocols'] == catalog
+    # All protocols selected at once (what the default form submits).
+    every = client.put('/api/users/multi', headers=h(),
+                       json={'protocol': ['vless', 'vmess', 'trojan', 'ss']}).json()
+    assert sorted(every['protocols']) == ['ss', 'trojan', 'vless', 'vmess']
     assert every['protocol_value'] == 'all'
 
     # A real subset only offers what was selected.
@@ -697,7 +668,7 @@ def test_protocol_selection_can_be_all_or_a_subset():
     # out of every inbound.
     assert client.put('/api/users/multi', headers=h(), json={'protocol': 'vless,trojan'}).json()['protocols'] == ['vless', 'trojan']
     assert client.post('/api/users', headers=h(), json={'username': 'bad', 'protocol': 'wireguard'}).status_code == 422
-    assert client.put('/api/users/multi', headers=h(), json={'protocol': []}).json()['protocols'] == catalog
+    assert client.put('/api/users/multi', headers=h(), json={'protocol': []}).json()['protocols'] == ['vless', 'vmess', 'trojan', 'ss']
 
     # Legacy single-value rows keep meaning "the whole matrix".
     execute("UPDATE users SET protocol='vless' WHERE username='multi'")
@@ -871,12 +842,6 @@ def test_public_status_window_lists_links_clients_and_nodes():
     assert {c['id'] for c in data['clients']} >= {'bettbox', 'exclusive', 'nekoboxplus'}
     assert data['nodes_total'] == len(data['nodes']) == 2
     assert data['portal_url'].endswith('/portal/' + user['uuid'])
-
-    # The support channel is the default target, so «پشتیبانی» is never a dead
-    # button in a fresh install's status window.
-    from app.config import SUPPORT_CHANNEL
-    assert data['support_url'] == SUPPORT_CHANNEL
-    assert f'href="{SUPPORT_CHANNEL}"' in page.text
 
     # Username lookup works too, and the legacy admin URL renders the same window.
     assert anonymous.get(f"/portal/{user['username']}").status_code == 200
