@@ -15,6 +15,23 @@ token, so a standalone deployment never touches it.
 
 ## What this release changes
 
+- **A panel that runs on Cloudflare's free plan, with no server of any kind.**
+  Every Cloudflare shape above asks for something: `cloudflare-worker/` is a pure
+  proxy with no app behind it, and the root `wrangler.jsonc` puts this Python
+  panel in a Container, which exists only on Workers Paid. `worker-panel/` asks
+  for nothing — the panel *is* the Worker, its state is **KV** (settings) and
+  **D1** (users), and the proxy is JavaScript: **VLESS over WebSocket + TLS**,
+  terminated inside the Worker through `cloudflare:sockets`. A Worker can only
+  speak what JavaScript can, so this deployment serves that one transport and
+  nothing that needs a raw port of its own — the trade that makes it free. It is
+  a real proxy rather than a proxy to something else: a user's bytes cross the
+  Worker and reach the destination, and `used_bytes` is measured as they do
+  (batched into D1, and reported to the client's own screen through
+  `subscription-userinfo`). Deploy with `npm run deploy:panel` — the
+  `--config` is in the script because wrangler searches *upward* and would
+  otherwise find the root config and fail on `@cloudflare/containers`. See
+  `worker-panel/README.md` and **[docs/WORKER-PANEL-FA.md](docs/WORKER-PANEL-FA.md)**.
+
 - **The panel is a complete address of its own: `/admin`, opened through the edge.** The whole
   application is mounted a second time (`PANEL_PREFIX` in `app/main.py`) — the login page, the panel,
   its API, the static assets and the portal all answer under `/admin`, and the front end rides the

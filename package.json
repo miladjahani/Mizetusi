@@ -9,7 +9,11 @@
     "build": "node tests/container_smoke.mjs",
     "dev": "node cloudflare-containers/dev.mjs",
     "containers": "wrangler containers list",
-    "logs": "wrangler tail"
+    "logs": "wrangler tail",
+    "deploy:panel": "wrangler deploy --config worker-panel/wrangler.jsonc",
+    "schema:panel": "wrangler d1 execute db --remote --file=worker-panel/schema.sql --config worker-panel/wrangler.jsonc",
+    "test:panel": "node tests/worker_panel_smoke.mjs",
+    "check": "node tests/container_smoke.mjs && node tests/worker_smoke.mjs && node tests/worker_panel_smoke.mjs && node tests/js_smoke.mjs"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7"

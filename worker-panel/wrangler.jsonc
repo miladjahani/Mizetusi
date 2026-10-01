@@ -1,0 +1,33 @@
+{
+  // The Worker-only NEXUS panel.
+  //
+  // The other two Cloudflare shapes in this repository need something else to
+  // run: `cloudflare-worker/` is a pure proxy with no app behind it, and the
+  // root `wrangler.jsonc` puts the real Python panel inside a Cloudflare
+  // Container — which only exists on the Workers Paid plan. This one is a
+  // complete product on the free plan: the panel *is* the Worker, its state is
+  // KV + D1, and the proxy is JavaScript (VLESS over WebSocket) rather than a
+  // process, so there is no origin to reach and no plan to upgrade.
+  //
+  // That is the whole trade: a Worker can only terminate what a Worker can
+  // speak, so this deployment serves the WebSocket transports (VLESS, reached
+  // through any Cloudflare address) and nothing that needs a raw TCP or UDP
+  // port of its own — no Reality, no TUIC, no MTProto.
+  "name": "mizetusi-panel",
+  "main": "src/index.js",
+  "compatibility_date": "2025-01-01",
+  "observability": { "enabled": true },
+  "kv_namespaces": [
+    // The panel's own settings (admin password hash, session secret, the hosts
+    // config links are built from) — small, read on every request, written
+    // rarely, which is exactly what KV is for.
+    { "binding": "NEXUS_KV", "id": "4d4d7086a05248ab9c6df4c77383ed1b" }
+  ],
+  "d1_databases": [
+    // The users, in a real table: the proxy asks D1 for the connecting UUID on
+    // every single WebSocket open, and a row has to be queryable, countable and
+    // updatable. The table is prefixed `nexus_` because this database is shared
+    // with the account's other (empty) Cloudflare projects — see README.
+    { "binding": "NEXUS_DB", "database_name": "db", "database_id": "6c89686c-97cc-4ea5-a053-7e6acd5b9051" }
+  ]
+}
