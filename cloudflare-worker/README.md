@@ -42,6 +42,35 @@ There are two, and this pair of files is the first one:
    accepted but answered with a warning, because that hostname is not reachable from a
    filtered network either.
 
+### Deploying it with wrangler instead of pasting
+
+The `wrangler.toml` beside this file describes the same Worker for the CLI:
+
+```bash
+cd cloudflare-worker
+npx wrangler deploy --config wrangler.toml
+```
+
+The `--config` flag is **not optional**, and the reason is worth knowing. wrangler searches
+*upward* from the working directory and prefers a `wrangler.jsonc` wherever it finds one, so from
+inside this folder it picks up the repository root's `wrangler.jsonc` — the **container**
+deployment — and tries to bundle `cloudflare-containers/worker.js` instead. The error it produces
+is misleading in exactly the way that costs an afternoon:
+
+```
+✘ [ERROR] Could not resolve "@cloudflare/containers"
+    cloudflare-containers/worker.js:50:26
+```
+
+It names a file most people deploying this edge Worker have never opened, and a package they
+did not install. Passing `--config wrangler.toml` pins the local config and the upload is 9.75 KiB
+with no build step at all.
+
+Put `NEXUS_ORIGIN` in the `[vars]` block before deploying, or leave it empty and set it in the
+dashboard afterwards — the variable there wins either way. Without it the Worker is deployed and
+healthy but answers `503` on the panel routes, which `/health` reports as
+`"origin": null, "panel": false`.
+
 ## The hostname is what decides reachability
 
 A Worker answers on `https://<name>.<subdomain>.workers.dev` until it is given a custom domain,
