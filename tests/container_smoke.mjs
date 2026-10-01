@@ -127,6 +127,26 @@ check(/export default edge/.test(containerSource),
 check(/containerStub\(env\) \? 'container:' \+ CONTAINER_NAME/.test(workerSource),
   'worker.js must report which upstream it resolved');
 
+// ------------------------------------------------------- the dev-script trap
+// A `dev` script is what a provider's autoconfig is most likely to pick up as a
+// *build* command, and `wrangler dev` never exits: the build then ends on
+// «Ready on http://localhost:8787» and the deploy step is never reached, with the
+// image already built. So the script has to refuse to be a build step.
+{
+  const pkg = JSON.parse(read('package.json'));
+  const dev = (pkg.scripts && pkg.scripts.dev) || '';
+  check(!/^\s*(npx\s+)?wrangler\s+dev\b/.test(dev),
+    'the dev script must not be a bare `wrangler dev` — a build command that runs it never finishes');
+  check(/dev\.mjs/.test(dev), 'the dev script must run the guard in cloudflare-containers/dev.mjs');
+  check(existsSync(join(ROOT, 'cloudflare-containers/dev.mjs')),
+    'cloudflare-containers/dev.mjs is missing');
+  const guard = read('cloudflare-containers/dev.mjs');
+  check(/WORKERS_CI/.test(guard) && /process\.exit\(0\)/.test(guard),
+    'the guard must exit successfully in a build environment so the deploy still runs');
+  check(/spawnSync\(\s*'npx',\s*\[\s*'wrangler',\s*'dev'/.test(guard),
+    'the guard must still start wrangler dev locally');
+}
+
 if (failures.length) {
   console.error('FAILED');
   failures.forEach((line) => console.error(' -', line));

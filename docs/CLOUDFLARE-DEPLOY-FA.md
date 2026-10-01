@@ -19,18 +19,29 @@
 1. Cloudflare Dashboard → **Workers & Pages** → **Create application** → کنار **Import a repository** روی **Get started** بزن.
 2. حساب GitHub را وصل کن و مخزن `miladjahani/Mizetusi` را انتخاب کن.
 3. نام Worker **باید** `nexus-panel` باشد — دقیقاً همان نامی که در `wrangler.jsonc` نوشته شده. (کلودفلر صریح گفته: اگر نام Worker در داشبورد با نام داخل فایل تنظیمات یکی نباشد، build شکست می‌خورد.)
-4. تنظیمات build را دست نزن:
+4. تنظیمات build را **دقیقاً** این‌طور بگذار:
 
    | تنظیم | مقدار |
    |---|---|
    | Production branch | `main` |
    | Root directory | `/` (ریشهٔ مخزن) |
-   | Build command | خالی — وابستگی‌ها خودکار نصب می‌شوند |
+   | **Build command** | **کاملاً خالی** — اگر کلودفلر خودش چیزی مثل `bun run dev` یا `npm run dev` گذاشته، پاکش کن |
    | Deploy command | `npx wrangler deploy` (پیش‌فرض) |
+
+   > **چرا Build command باید خالی باشد:** `bun run dev` یا `npm run dev` معنی‌اش `wrangler dev` است — یک سرور محلی که **هیچ‌وقت تمام نمی‌شود**. بعد از آن کلودفلر منتظر می‌ماند تا build تمام شود، پس هیچ‌وقت به مرحلهٔ deploy نمی‌رسد؛ حتی وقتی تصویر Docker با موفقیت ساخته شده است. نشانه‌اش هم این خط در انتهای build است: `Ready on http://localhost:8787`.
+   >
+   > **ولی از این به بعد یک اشتباه در این خانه deploy را نمی‌خورد:** اسکریپت `dev` در پروژه به `cloudflare-containers/dev.mjs` وصل است و در محیط build (که `WORKERS_CI` ست شده) خودش را رد می‌کند و با موفقیت خارج می‌شود، پس مرحلهٔ deploy همان‌جا اجرا می‌شود. پاک‌کردن Build command هنوز درست‌تر و سریع‌تر است (چون دیگر یک build بی‌دلیل هم راه نمی‌افتد).
 
 5. **Save and Deploy**.
 
-همین. اولین build چند دقیقه طول می‌کشد (ایمیج ساخته و به رجیستری کلودفلر push می‌شود، بعد نمونه‌های Container بالا می‌آیند). بعد از آن، از **Deployments → View build history** وضعیت و لاگ build را می‌بینی.
+همین. اولین build چند دقیقه طول می‌کشد: کلودفلر ایمیج را **در محیط build خودش** می‌سازد (نه روی کامپیوتر تو) و بعد به رجیستری خودش push می‌کند. روی استقرار موفق، لاگ build را با این خط‌ها می‌بینی:
+
+```
+Installing project dependencies: npm clean-install
+⎔ Container image(s) ready
+```
+
+بعد از آن، از **Deployments → View build history** وضعیت و لاگ build را می‌بینی. اگر build با شکست تمام شد یا تمام نشد، جدول بخش **۱۲** را ببین.
 
 ### چرا «بدون هیچ سکرت» واقعاً بدون سکرت است
 
@@ -253,6 +264,7 @@ npm run deploy
 | خطای حجم تصویر | instance type کوچک است | `instance_type` را در `wrangler.jsonc` یک درجه بالا ببرید |
 | خطای architecture در build | روی مک Apple Silicon ایمیج باید amd64 باشد | در Docker Desktop گزینهٔ Rosetta/`linux/amd64` را فعال کنید |
 | build در کلودفلر با خطای نام شکست می‌خورد | نام Worker در داشبورد با `name` داخل `wrangler.jsonc` یکی نیست | Worker را دقیقاً `nexus-panel` نام‌گذاری کن (بخش ۰) |
+| build تمام نمی‌شود و آخرین خطش `Ready on http://localhost:8787` است | Build command روی `bun run dev` / `npm run dev` مانده — یک dev server که هیچ‌وقت خارج نمی‌شود | Settings → Builds → Build command را خالی کن، Deploy command را `npx wrangler deploy` بگذار، ذخیره و Retry |
 | build روی نصب وابستگی‌ها شکست می‌خورد | نسخهٔ Node محیط build قدیمی است | در Settings → Builds نسخهٔ Node را ۲۰ یا بالاتر بگذار؛ `package-lock.json` در مخزن هست تا نصب قطعی باشد |
 | preview روی شاخه‌های غیر `main` کار نمی‌کند | Workerای که Durable Object/Container دارد Version URL نمی‌گیرد | Preview command را `npx wrangler versions upload` بگذار، یا فقط روی `main` کار کن |
 | سهمیهٔ تصاویر پر شده | هر build یک ایمیج جدید می‌سازد (سقف هر حساب ۵۰ گیگ) | `npx wrangler containers images list` و بعد `npx wrangler containers delete` |
