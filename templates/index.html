@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=yes">
 <meta name="theme-color" content="#05080f">
-<meta name="description" content="مرکز کنترل NEXUS: کاربران، نودهای Railway و Cloudflare، هسته Xray و سابلینک‌های اختصاصی.">
+<meta name="description" content="مرکز کنترل NEXUS: کاربران، نودهای مستقیم و Cloudflare، هسته Xray و سابلینک‌های اختصاصی.">
 <meta name="color-scheme" content="dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -59,7 +59,7 @@
   <aside class="sidebar glass">
     <div class="brand">
       <div class="brand-mark"><img src="/static/icons/nexus.svg" alt="{{ brand.app_name or 'NEXUS' }}" width="34" height="34"></div>
-      <div><b id="brandName">{{ brand.app_name or 'NEXUS' }}</b><span>RAILWAY CONTROL</span></div>
+      <div><b id="brandName">{{ brand.app_name or 'NEXUS' }}</b><span>{{ brand.platform_short|upper }}</span></div>
     </div>
     <nav id="nav"><div class="nav-groups" id="navGroups"></div></nav>
     <div class="sidebar-bottom">
@@ -97,8 +97,8 @@
       <div class="hero glass">
         <div>
           <div class="mini-label">REAL-TIME NETWORK CONTROL</div>
-          <h2>مرکز کنترل زیرساخت پروکسی روی Railway</h2>
-          <p>کاربران، نودهای Railway و Cloudflare، هسته Xray و سابلینک‌ها را زنده و از یک‌جا مدیریت کنید. همه نمودارها و شمارنده‌ها بدون نیاز به رفرش صفحه بروزرسانی می‌شوند.</p>
+          <h2>مرکز کنترل زیرساخت پروکسی</h2>
+          <p>کاربران، نودهای مستقیم و Cloudflare، هسته Xray و سابلینک‌ها را زنده و از یک‌جا مدیریت کنید. همه نمودارها و شمارنده‌ها بدون نیاز به رفرش صفحه بروزرسانی می‌شوند.</p>
           <div class="chips" id="heroChips"></div>
         </div>
         <div class="pulse-wrap">
@@ -568,13 +568,13 @@
 
       <div class="panel glass" style="margin-top:13px" data-acc="پروکسی WEB (tg://webproxy)|تلگرام دسکتاپ ۷.۱+؛ روی همین دامنه و پورت ۴۴۳، بدون هیچ TCP Proxy|globe" data-acc-open="1">
         <div class="panel-head">
-          <div><h2>پروکسی WEB (تلگرام دسکتاپ ۷.۱+)</h2><p class="sub">MTProto داخل یک صفحهٔ HTTPS معمولی و یک WebSocket هم‌منبع حمل می‌شود؛ کلاینت هیچ سوکت خامی باز نمی‌کند، پس روی Railway بدون هیچ TCP Proxy و حتی از پشت Cloudflare کار می‌کند</p></div>
+          <div><h2>پروکسی WEB (تلگرام دسکتاپ ۷.۱+)</h2><p class="sub">MTProto داخل یک صفحهٔ HTTPS معمولی و یک WebSocket هم‌منبع حمل می‌شود؛ کلاینت هیچ سوکت خامی باز نمی‌کند، پس بدون هیچ پورت خام و حتی از پشت Cloudflare کار می‌کند</p></div>
           <span class="pill" id="tgRelayTag">—</span>
         </div>
         <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>تا وقتی relay و صفحه‌اش بالا نیامده باشد هیچ لینکی منتشر نمی‌شود</span></div>
           <div class="switch" id="tgRelayEnabled"></div></div>
         <div class="field-grid">
-          <div><label>دامنهٔ عمومی <span class="hint">خالی بگذارید تا دامنهٔ خود پنل استفاده شود</span></label><input id="tgRelayDomain" dir="ltr" placeholder="nexus.up.railway.app"></div>
+          <div><label>دامنهٔ عمومی <span class="hint">خالی بگذارید تا دامنهٔ خود پنل استفاده شود</span></label><input id="tgRelayDomain" dir="ltr" placeholder="panel.example.com"></div>
           <div><label>نشست هم‌زمان <span class="hint">۱ تا ۶۴</span></label><input id="tgRelaySessions" type="number" min="1" max="64" dir="ltr" value="6"></div>
           <div><label>استریم هر نشست <span class="hint">۱ تا ۲۵۶</span></label><input id="tgRelayStreams" type="number" min="1" max="256" dir="ltr" value="32"></div>
           <!-- The sponsored row Telegram puts at the top of a chat list is not something
@@ -604,7 +604,7 @@
           <div class="switch-row"><div class="txt"><b>فعال باشد</b><span>تا فعال نشود هیچ لینکی منتشر نمی‌شود</span></div>
             <div class="switch" id="tgMtEnabled"></div></div>
           <div class="field-grid">
-            <div><label>پورت عمومی <span class="hint">روی Railway برای این پورت هم TCP Proxy بسازید</span></label><input id="tgMtPort" type="number" min="1" max="65535" dir="ltr" value="8446"></div>
+            <div><label>پورت عمومی <span class="hint">روی Railway یک TCP Proxy، روی سرور خودتان خودِ این پورت را باز کنید</span></label><input id="tgMtPort" type="number" min="1" max="65535" dir="ltr" value="8446"></div>
             <div><label>دامنهٔ fronting (SNI) <span class="hint">داخل secret ذخیره می‌شود؛ تغییرش لینک را تازه می‌کند</span></label><input id="tgMtDomain" dir="ltr" placeholder="www.cloudflare.com"></div>
             <div><label>حداکثر اتصال همزمان</label><input id="tgMtConcurrency" type="number" min="1" max="100000" dir="ltr" value="8192"></div>
             <div><label>DoH برای حل نام</label><input id="tgMtDns" dir="ltr" placeholder="https://1.1.1.1"></div>
@@ -742,7 +742,7 @@
             <button class="primary" id="obfsSaveDefaults">ذخیرهٔ پیش‌فرض‌ها</button>
             <button class="secondary" id="obfsReload">بروزرسانی</button>
           </div>
-          <p class="muted">هر انتقال پیشرفته پورت عمومی خودش را دارد؛ روی Railway بدون <b>TCP Proxy</b> برای همان پورت منتشر نمی‌شود و کارت دلیلش را نشان می‌دهد.</p>
+          <p class="muted">هر انتقال پیشرفته پورت عمومی خودش را دارد؛ تا وقتی پورت عمومی آن واقعاً باز نباشد (روی Railway یک <b>TCP Proxy</b>، روی سرور خودتان خود پورت) منتشر نمی‌شود و کارت دلیلش را نشان می‌دهد.</p>
         </div>
         <div class="panel glass" data-acc="کم‌ردپا|آنچه این سرویس نباید دربارهٔ خودش بگوید|server">
           <div class="panel-head"><div><h2>کم‌ردپا</h2><p class="sub">هدرهای معرف، مستندات API و پاسخ عمومی /health</p></div>
@@ -789,8 +789,8 @@
         </div>
         <div class="panel glass">
           <div class="panel-head"><div><h2>سابلینک و پیش‌فرض‌ها</h2><p class="sub">آدرس پایه، پیشوند برچسب و مقادیر پیش‌فرض ساخت کاربر</p></div></div>
-          <label>آدرس پایه اشتراک <span class="hint">— خالی یعنی تشخیص خودکار از دامنه Railway</span></label>
-          <input id="setBaseUrl" placeholder="https://nexus-production.up.railway.app" dir="ltr">
+          <label>آدرس پایه اشتراک <span class="hint">— خالی یعنی تشخیص خودکار از دامنهٔ همین سرویس</span></label>
+          <input id="setBaseUrl" placeholder="https://panel.example.com" dir="ltr">
           <label>پیشوند برچسب لینک</label>
           <input id="setPrefix" placeholder="NEXUS" dir="ltr">
           <div class="field-grid">
@@ -877,7 +877,7 @@
         </div>
         <div class="panel glass" data-acc="پشتیبان‌گیری و رویدادها|خروجی کامل کاربران، نودها و تنظیمات|download">
           <div class="panel-head"><div><h2>پشتیبان‌گیری</h2><p class="sub">خروجی کامل کاربران، نودها و تنظیمات</p></div></div>
-          <p class="muted">فایل JSON شامل جدول کاربران، پروکسی‌ها و تنظیمات است. برای بازگردانی، مقادیر را در دیتابیس Railway ایمپورت کنید.</p>
+          <p class="muted">فایل JSON شامل جدول کاربران، پروکسی‌ها و تنظیمات است. برای بازگردانی، مقادیر را در دیتابیس همین سرویس ایمپورت کنید.</p>
           <div class="actions">
             <button class="secondary" id="btnBackup"><svg width="14" height="14"><use href="#i-download"/></svg> دانلود پشتیبان</button>
             <button class="secondary" id="btnLogsRefresh">بروزرسانی رویدادها</button>

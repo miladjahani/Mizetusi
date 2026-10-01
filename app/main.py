@@ -159,6 +159,15 @@ def _brand():
             'support_url':(_setting('support_url') or '').strip() or SUPPORT_CHANNEL,
             'flags':_flags_on(),
             'default_format':(_setting('default_format') or 'auto').strip().lower(),
+            # Where this deployment actually runs: "VPS / Docker", "Railway",
+            # "Cloudflare Tunnel (self-hosted)". The panel used to name Railway in
+            # its own header, hero and end-user status window regardless of host,
+            # which is simply untrue on a VPS, in a container or behind a tunnel —
+            # and a panel that narrates the wrong platform is one an admin
+            # misconfigures (it sends them looking for a TCP-proxy screen that
+            # does not exist on their host). `platform_short` is the chip-sized
+            # form, so a long label does not overflow the header.
+            'platform':runtime.label(),'platform_short':runtime.label().split('(')[0].strip()[:18],
             'logo':PWA_ICONS['logo'],'icons':PWA_ICONS,'short_name':'NEXUS'}
 
 def _ping_interval():

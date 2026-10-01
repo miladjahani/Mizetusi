@@ -33,7 +33,7 @@ export class DashboardView {
     if (!host) return;
     host.innerHTML = [
       `<span class="chip">${ico('users', 13)} ${Fmt.num(t.users)} کاربر · ${Fmt.num(t.active_users)} فعال</span>`,
-      `<span class="chip">${ico('nodes', 13)} ${Fmt.num(t.railway_nodes)} نود Railway · ${Fmt.num(t.cloudflare_nodes)} نود CF</span>`,
+      `<span class="chip">${ico('nodes', 13)} ${Fmt.num(t.railway_nodes)} نود مستقیم · ${Fmt.num(t.cloudflare_nodes)} نود CF</span>`,
       `<span class="chip">${ico('zap', 13)} ${Fmt.num(t.requests)} درخواست ثبت‌شده</span>`,
       `<span class="chip">${ico('shield', 13)} ${Fmt.num(t.cf_ips_ok)} IP سالم Cloudflare</span>`,
       `<span class="chip">${ico('clock', 13)} آپ‌تایم ${Fmt.until(metrics.uptime_seconds)}</span>`,
@@ -48,7 +48,7 @@ export class DashboardView {
     const cards = [
       { k: 'users', label: 'کل کاربران', value: t.users, ico: 'users', cls: '', foot: `${Fmt.num(t.active_users)} فعال · ${Fmt.num(t.disabled_users)} غیرفعال` },
       { k: 'usage', label: 'مصرف کل', value: t.used_gb, digits: 2, unit: Fmt.size(t.used_gb).u, ico: 'activity', cls: 'a-violet', foot: `مجموع عمر: ${Fmt.sizeText(t.lifetime_gb)}`, series: trend, color: '#b7e77a' },
-      { k: 'nodes', label: 'نودهای فعال', value: t.nodes_enabled, ico: 'nodes', cls: 'a-ok', foot: `${Fmt.num(t.cloudflare_nodes)} CF · ${Fmt.num(t.railway_nodes)} Railway` },
+      { k: 'nodes', label: 'نودهای فعال', value: t.nodes_enabled, ico: 'nodes', cls: 'a-ok', foot: `${Fmt.num(t.cloudflare_nodes)} CF · ${Fmt.num(t.railway_nodes)} مستقیم` },
       { k: 'ips', label: 'IP سالم Cloudflare', value: t.cf_ips_ok, ico: 'globe', cls: 'a-warn', foot: `از ${Fmt.num(t.cf_ips_total)} IP اسکن‌شده` },
       { k: 'req', label: 'درخواست‌ها', value: t.requests, ico: 'zap', cls: '', foot: `${Fmt.num(t.active_ips_1h)} IP فعال در ساعت اخیر` },
       { k: 'up', label: 'آپ‌تایم سرویس', value: 0, ico: 'clock', cls: 'a-ok', foot: `شروع: ${Fmt.dateTime(metrics.started_at)}`, uptime: true },
@@ -119,7 +119,7 @@ export class DashboardView {
     if (!metrics) return;
     const t = metrics.totals;
     const segments = [
-      { label: 'نود Railway', value: t.railway_nodes, color: '#c9f24c' },
+      { label: 'نود مستقیم', value: t.railway_nodes, color: '#c9f24c' },
       { label: 'نود Cloudflare', value: t.cloudflare_nodes, color: '#ffc85c' },
       { label: 'نود غیرفعال', value: Math.max(0, t.nodes - t.nodes_enabled), color: '#5fce62' },
       { label: 'IP سالم CF', value: t.cf_ips_ok, color: '#8ce07a' },
@@ -205,10 +205,10 @@ export class DashboardView {
     if (pill) {
       if (worker?.configured) { pill.className = 'pill ok'; pill.innerHTML = '<i class="dot"></i> Worker فعال'; }
       else if (cfNodes > 0) { pill.className = 'pill ok'; pill.innerHTML = '<i class="dot"></i> حالت خودکار'; }
-      else { pill.className = 'pill warn'; pill.innerHTML = 'Railway-only'; }
+      else { pill.className = 'pill warn'; pill.innerHTML = 'بدون لبه'; }
     }
     const rows = [
-      ['حالت لبه', worker?.configured ? 'Worker' : cfNodes > 0 ? 'خودکار (دامنه پشت Cloudflare)' : 'فقط Railway'],
+      ['حالت لبه', worker?.configured ? 'Worker' : cfNodes > 0 ? 'خودکار (دامنه پشت Cloudflare)' : 'فقط مستقیم'],
       ['آدرس Worker', worker?.url ? worker.url.replace(/^https?:\/\//, '') : '—'],
       ['IP سالم', totals ? `${Fmt.num(totals.cf_ips_ok)} از ${Fmt.num(totals.cf_ips_total)}` : '—'],
       ['نود CF منتشرشده', totals ? `${Fmt.num(Math.max(totals.cloudflare_nodes, cfNodes))}` : '—'],

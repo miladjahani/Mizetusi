@@ -1,9 +1,17 @@
 # NEXUS · Xray control plane v9
 
-NEXUS is a Python/FastAPI + Xray-core control plane that runs on Railway. It creates real
-Xray users, publishes subscribable nodes (Railway direct + healthy Cloudflare clean IPs),
-measures every node with a real probe, and gives each end user a public status window with
-a dedicated subscription per client.
+NEXUS is a Python/FastAPI + Xray-core control plane. It creates real Xray users, publishes
+subscribable nodes (the deployment's own direct node + healthy Cloudflare clean IPs), measures
+every node with a real probe, and gives each end user a public status window with a dedicated
+subscription per client.
+
+It runs anywhere the image runs, and none of those places is privileged: a VPS or any Docker
+host, a PaaS (Railway, Render, Fly, Koyeb, Heroku), a Cloudflare Container behind a Worker, or a
+machine you already own behind a Cloudflare Tunnel. `app/runtime.py` is what adapts it to each
+one — which raw ports exist, which hostname clients should reach, and where data can be written —
+and the panel names the platform it is actually on rather than the one it was first built for.
+The Railway-specific code (`app/railway.py`, the TCP-proxy pass) is inert without a Railway API
+token, so a standalone deployment never touches it.
 
 ## What this release changes
 

@@ -366,7 +366,7 @@
           <b>{% if p.flags and n.flag %}<span class="flag">{{ n.flag }}</span> {% endif %}{{ n.name }}</b>
           <span>{{ n.server }}:{{ n.port }}</span>
         </div>
-        <span class="kind {% if n.kind == 'cloudflare' %}cf{% else %}rw{% endif %}">{% if n.location %}{{ n.location|upper }} · {% endif %}{{ 'Cloudflare IP' if n.kind == 'cloudflare' else ('Edge' if n.kind == 'edge' else 'Railway') }}</span>
+        <span class="kind {% if n.kind == 'cloudflare' %}cf{% else %}rw{% endif %}">{% if n.location %}{{ n.location|upper }} · {% endif %}{{ 'Cloudflare IP' if n.kind == 'cloudflare' else ('Edge' if n.kind == 'edge' else brand.platform_short) }}</span>
         <span class="lat {% if not n.online %}off{% elif n.latency_ms < 120 %}good{% elif n.latency_ms < 320 %}mid{% else %}bad{% endif %}" data-latency="{{ n.name }}">
           {% if n.online %}{{ '%.0f'|format(n.latency_ms) }} ms{% else %}قطع{% endif %}
         </span>

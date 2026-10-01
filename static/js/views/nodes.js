@@ -415,18 +415,18 @@ export class NodesView {
       title: isEdit ? `ویرایش نود ${node.name}` : 'نود جدید',
       subtitle: 'نود دستی در کاتالوگ ذخیره می‌شود و در همه سابلینک‌ها منتشر می‌شود.',
       body: `<div class="field-grid">
-          <div><label>نام نود</label><input id="ndName" dir="ltr" ${isEdit ? 'disabled' : ''} placeholder="railway-eu"></div>
+          <div><label>نام نود</label><input id="ndName" dir="ltr" ${isEdit ? 'disabled' : ''} placeholder="direct-eu"></div>
           <div><label>نوع</label><select id="ndKind"><option value="railway">مستقیم (Origin)</option><option value="cloudflare">آی‌پی تمیز (CDN)</option><option value="edge">دامنهٔ تمیز</option></select></div>
         </div>
         <div class="field-grid">
-          <div><label>سرور / IP</label><input id="ndServer" dir="ltr" placeholder="nexus.up.railway.app"></div>
+          <div><label>سرور / IP</label><input id="ndServer" dir="ltr" placeholder="panel.example.com"></div>
           <div><label>پورت</label><input id="ndPort" type="number" min="1" max="65535" value="443" dir="ltr"></div>
         </div>
         <div class="field-grid">
-          <div><label>SNI <span class="hint">اختیاری</span></label><input id="ndSni" dir="ltr" placeholder="nexus.up.railway.app"></div>
+          <div><label>SNI <span class="hint">اختیاری</span></label><input id="ndSni" dir="ltr" placeholder="panel.example.com"></div>
           <div><label>Host header <span class="hint">اختیاری</span></label><input id="ndHost" dir="ltr" placeholder="worker.example.workers.dev"></div>
         </div>
-        <div class="switch-row"><div class="txt"><b>TLS</b><span>لبه Railway/Cloudflare روی HTTPS است</span></div><div class="switch on" id="ndTls"></div></div>
+        <div class="switch-row"><div class="txt"><b>TLS</b><span>لبه (Worker/Cloudflare) روی HTTPS است</span></div><div class="switch on" id="ndTls"></div></div>
         <div class="switch-row"><div class="txt"><b>فعال</b><span>در سابلینک‌ها منتشر شود</span></div><div class="switch on" id="ndEnabled"></div></div>`,
       footer: `<div class="actions" style="margin:0"><button class="primary" id="ndSave">${isEdit ? 'ذخیره تغییرات' : 'افزودن نود'}</button><button class="secondary" data-close>انصراف</button></div>`,
     });

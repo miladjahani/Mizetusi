@@ -388,7 +388,7 @@ export class CloudflareView {
     const clear = $('#clearWorker');
     if (clear) {
       clear.onclick = () => this.app.safe(async () => {
-        const confirmed = await this.modals.ask('حذف Worker', 'نودهای Cloudflare حذف و پنل در حالت Railway-only ادامه می‌دهد.', { confirmLabel: 'حذف Worker' });
+        const confirmed = await this.modals.ask('حذف Worker', 'نودهای Cloudflare حذف و پنل فقط با نود مستقیم ادامه می‌دهد.', { confirmLabel: 'حذف Worker' });
         if (!confirmed) return;
         await this.api.post('/api/settings/cloudflare-worker', { url: '', api_key: '' });
         this.toasts.ok('Worker حذف شد');

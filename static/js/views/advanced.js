@@ -114,7 +114,7 @@ export class AdvancedView {
                 : (item.enabled ? '<span class="pill warn">بدون فوروارد</span>' : '<span class="pill">خاموش</span>')}</td>
             </tr>`).join('')}
           </tbody></table></div>
-          <p class="muted">هر پورت خام TCP (Reality، AnyTLS، MTProto، وب‌پروکسی) روی Railway باید TCP Proxy داشته باشد و پورت عمومی‌اش تصادفی است؛ این جدول همان نگاشت را نشان می‌دهد و لینک‌های پنل از ستون «پورت عمومی» ساخته می‌شوند — نه از پورتی که داخل کانتینر باز می‌شود.</p>`
+          <p class="muted">هر پورت خام TCP (Reality، AnyTLS، MTProto، وب‌پروکسی) باید از بیرون واقعاً باز باشد — روی Railway یک TCP Proxy (با پورت تصادفی)، روی سرور خودتان خودِ پورت؛ این جدول همان نگاشت را نشان می‌دهد و لینک‌های پنل از ستون «پورت عمومی» ساخته می‌شوند — نه از پورتی که داخل کانتینر باز می‌شود.</p>`
         : '<div class="empty">قابلیتی برای فوروارد پیدا نشد.</div>';
     }
     const ports = $('#adAutoPortsInfo');
