@@ -43,6 +43,23 @@
  * Every WebSocket path below is mirrored by the FastAPI edge and by
  * `app/subscriptions/transports.py`; `tests/worker_smoke.mjs` drives each one
  * through this file, and the panel's test suite fails if the two lists drift.
+ *
+ * Two shapes, one file
+ * --------------------
+ * "Python behind this Worker" is a URL in one deployment and a binding in the
+ * other, so the upstream is resolved in exactly one place:
+ *
+ *   NEXUS_ORIGIN set          → an HTTPS origin somewhere else (Railway, Render,
+ *                               a VPS). This is the paste-into-the-dashboard
+ *                               deployment, and it stays dependency-free.
+ *   NEXUS_CONTAINER bound     → the app itself runs in a Cloudflare Container on
+ *                               this account, and the Worker is its only address.
+ *                               See `cloudflare-containers/` and
+ *                               `docs/CLOUDFLARE-DEPLOY-FA.md`.
+ *
+ * A bound container wins, because that deployment has no other address at all —
+ * which also means a stale NEXUS_ORIGIN left in the environment cannot make the
+ * Worker call itself.
  */
 
 // The panel serves this file with ORIGIN_FALLBACK prefilled with your Railway
@@ -77,7 +94,12 @@ const EDGE_PATHS = [
 const EDGE_PREFIXES = ['/ws/', '/cdn/'];
 
 const HEALTH_PATHS = ['/health', '/diag'];
-const WORKER_VERSION = 'nexus-edge-5';
+const WORKER_VERSION = 'nexus-edge-6';
+
+// The Durable Object / Container instance this Worker fronts when the app runs on
+// Cloudflare itself. One name, so every request reaches the same panel (and the
+// same database) instead of a fresh container per path.
+const CONTAINER_NAME = 'nexus-panel';
 
 // Edge/Cloudflare internals must not leak into the origin request: they would
 // confuse Host/SNI handling and let a client spoof its own country or scheme.
@@ -100,6 +122,36 @@ function normalizeOrigin(value) {
   } catch (error) {
     return '';
   }
+}
+
+// The bound Container, or null when this Worker points at an HTTPS origin. A
+// missing binding is the normal edge deployment, not an error.
+function containerStub(env) {
+  const binding = env && env.NEXUS_CONTAINER;
+  if (!binding) return null;
+  if (typeof binding.getByName === 'function') return binding.getByName(CONTAINER_NAME);
+  // The same thing spelled with the older Durable Object API, so a binding from
+  // any wrangler version resolves to the one instance instead of no origin at all.
+  if (typeof binding.idFromName === 'function' && typeof binding.get === 'function') {
+    return binding.get(binding.idFromName(CONTAINER_NAME));
+  }
+  return null;
+}
+
+// One function that performs an upstream request, so the WebSocket edge, the
+// panel hop and the health probe share a single definition of "where the app
+// is". ``null`` means nothing is configured and every route answers 503.
+function upstreamFor(env, origin) {
+  const container = containerStub(env);
+  if (container) return (request) => container.fetch(request);
+  if (!origin) return null;
+  return (request) => fetch(request);
+}
+
+// Where a relative path is resolved from. A container has no public name of its
+// own, so the Worker's own host is the only base that exists there.
+function upstreamBase(origin, host) {
+  return origin || 'https://' + host;
 }
 
 function json(body, status = 200, extra = {}) {
@@ -140,15 +192,17 @@ function hostNotAllowed(request, env) {
   return allowed.length > 0 && !allowed.includes(hostOf(request));
 }
 
-// Probing the origin proves the Worker, the origin URL and the WebSocket route
-// in one call: this is what the panel's "تست ورکر" button shows.
-async function probeOrigin(origin) {
+// Probing the upstream proves the Worker, the upstream and the WebSocket route
+// in one call: this is what the panel's "تست ورکر" button shows. The probe goes
+// through the same function the real routes use, so a container deployment is
+// probed through its binding rather than through a URL it does not have.
+async function probeUpstream(upstream, base) {
   const started = Date.now();
   try {
-    const response = await fetch(origin + '/health', {
+    const response = await upstream(new Request(base + '/health', {
       headers: { 'user-agent': 'NEXUS-Worker-Probe', accept: 'application/json' },
       redirect: 'manual',
-    });
+    }));
     let body = null;
     try { body = await response.json(); } catch (error) { body = null; }
     return { reachable: true, status: response.status, latency_ms: Date.now() - started, health: body };
@@ -157,22 +211,25 @@ async function probeOrigin(origin) {
   }
 }
 
-async function handleHealth(request, env, origin) {
+async function handleHealth(request, env, origin, upstream) {
   const url = new URL(request.url);
   const wantsProbe = ['1', 'true', 'yes'].includes((url.searchParams.get('probe') || '').toLowerCase());
+  const container = Boolean(containerStub(env));
   const body = {
-    ok: Boolean(origin),
+    ok: Boolean(upstream),
     worker: WORKER_VERSION,
+    mode: container ? 'container' : 'origin',
+    container,
     origin: origin || null,
     paths: EDGE_PATHS,
-    panel: Boolean(origin),
+    panel: Boolean(upstream),
     colo: (request.cf && request.cf.colo) || null,
     country: (request.cf && request.cf.country) || null,
     time: new Date().toISOString(),
   };
-  if (!origin) return json({ ...body, error: 'NEXUS_ORIGIN is not configured' }, 503);
+  if (!upstream) return json({ ...body, error: 'NEXUS_ORIGIN is not configured and no NEXUS_CONTAINER is bound' }, 503);
   if (wantsProbe) {
-    body.origin_probe = await probeOrigin(origin);
+    body.origin_probe = await probeUpstream(upstream, upstreamBase(origin, hostOf(request)));
     if (!body.origin_probe.reachable) body.ok = false;
   }
   return json(body, body.ok ? 200 : 503);
@@ -208,13 +265,13 @@ function rewriteLocation(value, origin, host) {
   }
 }
 
-function originUnreachable(origin, error) {
+function originUnreachable(target, error) {
   // Without this the rejection escapes the handler and Cloudflare paints an
   // opaque error page, which is impossible to diagnose from a client.
   return json({
     ok: false,
     error: 'origin unreachable',
-    origin,
+    origin: target || null,
     detail: String(error && error.message || error),
   }, 502);
 }
@@ -224,12 +281,16 @@ export default {
     const url = new URL(request.url);
     const origin = normalizeOrigin((env && env.NEXUS_ORIGIN) || (env && env.ZEUS_ORIGIN) || ORIGIN_FALLBACK);
     const edgeHost = hostOf(request);
+    // Where the app really is, resolved once: a Container bound to this Worker,
+    // or an HTTPS origin somewhere else. Every route below uses this one value.
+    const sendUpstream = upstreamFor(env, origin);
+    const target = origin || (containerStub(env) ? 'container:' + CONTAINER_NAME : '');
 
-    if (HEALTH_PATHS.includes(url.pathname)) return handleHealth(request, env, origin);
+    if (HEALTH_PATHS.includes(url.pathname)) return handleHealth(request, env, origin, sendUpstream);
 
     // ---------------------------------------------------------- WebSocket edge
     if (EDGE_PATHS.includes(url.pathname)) {
-      if (!origin) return json({ ok: false, error: 'NEXUS_ORIGIN is not configured' }, 503);
+      if (!sendUpstream) return json({ ok: false, error: 'NEXUS_ORIGIN is not configured' }, 503);
       if (request.method !== 'GET') {
         return json({ ok: false, error: 'method not allowed', allow: 'GET' }, 405, { allow: 'GET' });
       }
@@ -256,13 +317,13 @@ export default {
 
       let upstream;
       try {
-        upstream = await fetch(new Request(origin + url.pathname + url.search, {
+        upstream = await sendUpstream(new Request(upstreamBase(origin, edgeHost) + url.pathname + url.search, {
           method: 'GET',
           headers,
           redirect: 'manual',
         }));
       } catch (error) {
-        return originUnreachable(origin, error);
+        return originUnreachable(target, error);
       }
 
       // 101 Switching Protocols must be returned untouched: rebuilding the
@@ -280,12 +341,13 @@ export default {
     // ------------------------------------------------------------------ panel
     // Everything else is the panel: pages, the API, subscription and portal
     // links, static assets, its own WebSockets, uploads and redirects.
-    if (!origin) return json({ ok: false, error: 'NEXUS_ORIGIN is not configured' }, 503);
+    if (!sendUpstream) return json({ ok: false, error: 'NEXUS_ORIGIN is not configured' }, 503);
 
     // Built *from* the incoming request, so method, query, body and a WebSocket
     // upgrade all ride through untouched (an upload must not be buffered here);
     // only the edge headers are replaced.
-    const forward = new Request(origin + url.pathname + url.search, request);
+    const upstreamBaseUrl = upstreamBase(origin, edgeHost);
+    const forward = new Request(upstreamBaseUrl + url.pathname + url.search, request);
     forward.headers.delete('host');
     for (const name of STRIP_HEADERS) forward.headers.delete(name);
     forward.headers.set('X-Forwarded-Proto', 'https');
@@ -300,9 +362,9 @@ export default {
 
     let upstream;
     try {
-      upstream = await fetch(manual);
+      upstream = await sendUpstream(manual);
     } catch (error) {
-      return originUnreachable(origin, error);
+      return originUnreachable(target, error);
     }
 
     // A panel WebSocket (the WEB proxy's same-origin socket, live status).
@@ -310,7 +372,7 @@ export default {
 
     const location = upstream.headers.get('location');
     if (location) {
-      const rewritten = rewriteLocation(location, origin, edgeHost);
+      const rewritten = rewriteLocation(location, upstreamBaseUrl, edgeHost);
       if (rewritten !== location) {
         const moved = new Response(upstream.body, upstream);
         moved.headers.set('location', rewritten);

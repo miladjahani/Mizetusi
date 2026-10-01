@@ -1,0 +1,70 @@
+{
+  // ===========================================================================
+  // NEXUS on Cloudflare: the whole panel, running on Cloudflare itself.
+  //
+  // This is the deployment where the app does not live anywhere else. The Docker
+  // image below is built from this repository's own `Dockerfile` (Xray, sing-box,
+  // mihomo, mtg, mtproto-proxy and the FastAPI panel), pushed to Cloudflare's
+  // registry, and started on Cloudflare's network; the Worker is the only public
+  // address it has, and it reaches the app through the `NEXUS_CONTAINER` binding.
+  //
+  // Deploy:   npm install  &&  npx wrangler login  &&  npm run deploy
+  // Guide:    docs/CLOUDFLARE-DEPLOY-FA.md   (Persian, end to end)
+  //
+  // The other shape — the app on Railway/a VPS, the Worker only in front of it —
+  // is `cloudflare-worker/wrangler.toml` and is unaffected by this file.
+  // ===========================================================================
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nexus-panel",
+  "main": "cloudflare-containers/worker.js",
+  "compatibility_date": "2026-09-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "containers": [
+    {
+      "class_name": "NexusContainer",
+      // Built on your machine and pushed by `wrangler deploy`, so Docker has to
+      // be running wherever you deploy from.
+      "image": "./Dockerfile",
+      // A panel is one stateful database, so it is exactly one instance. Two
+      // would be two panels with two sets of users.
+      "max_instances": 1,
+      // 1/2 vCPU · 4 GiB RAM · 8 GB disk. `basic` (1 GiB / 4 GB) is the cheaper
+      // one and is enough for a handful of users; `standard-2` (1 vCPU / 6 GiB)
+      // if you share it widely. The image must fit the disk of the type you pick.
+      "instance_type": "standard-1"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "NEXUS_CONTAINER",
+        "class_name": "NexusContainer"
+      }
+    ]
+  },
+  // The same declaration in the current form: a Durable Object class with SQLite
+  // storage. On an older wrangler, replace this block with
+  //   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["NexusContainer"] }]
+  "exports": {
+    "NexusContainer": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "vars": {
+    // NEXUS_ORIGIN is deliberately NOT set here: a bound container is the origin,
+    // and a URL left in this file could only ever point the Worker back at itself.
+    //
+    // Secrets are not written in this file either — set them as Worker secrets so
+    // they are encrypted and never land in the repository:
+    //   npx wrangler secret put ADMIN_PASSWORD
+    //   npx wrangler secret put JWT_SECRET
+    //   npx wrangler secret put DATABASE_URL
+    //
+    // Optional Host allow-list for the WebSocket edge (comma separated).
+    "ALLOWED_HOSTS": ""
+  }
+}

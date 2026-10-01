@@ -12,6 +12,20 @@ the Railway domain and its certificate name stop resolving, so the panel will no
 node the subscription hands out cannot connect. Serving the same deployment through Cloudflare
 gives the client an anycast IP it can reach.
 
+## Which Cloudflare deployment do you want?
+
+There are two, and this pair of files is the first one:
+
+* **The app runs somewhere else** (Railway, a VPS, Render) and this Worker is a clean address in front of
+  it — that is what the rest of this file describes. `NEXUS_ORIGIN` is a URL.
+* **The app runs on Cloudflare itself**, in a Cloudflare **Container** built from this repository's own
+  `Dockerfile`, with this same Worker in front of it. No Railway project, no VPS. A Worker cannot run
+  Python or Xray, so that deployment is a Worker *plus* a container: see
+  [`wrangler.jsonc`](../wrangler.jsonc), [`cloudflare-containers/`](../cloudflare-containers/) and
+  **[docs/CLOUDFLARE-DEPLOY-FA.md](../docs/CLOUDFLARE-DEPLOY-FA.md)** (Persian). The proxy code is byte
+  for byte the file below — it resolves its upstream once, and a bound `NEXUS_CONTAINER` wins over
+  `NEXUS_ORIGIN`.
+
 ## Deploy
 
 1. Workers & Pages → Create Worker → paste `worker.js` → Deploy.

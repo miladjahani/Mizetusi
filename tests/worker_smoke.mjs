@@ -250,6 +250,64 @@ for (const path of ADVERTISED) {
   check(without.status === 503, 'the Telegram prefix without an origin must be 503');
 }
 
+// --------------------------------------------------- the bound Container
+// The other deployment shape, and the one that has no other address at all: the
+// app runs in a Cloudflare Container on this account and the Worker is its only
+// public name. There is no NEXUS_ORIGIN to dial, so every route — the panel, the
+// subscription/portal links, the panel's own sockets and each transport path —
+// has to ride the binding instead of answering 503, and the whole deployment must
+// land on ONE container instance or a panel open would talk to a different
+// database than the one the subscription was minted in.
+{
+  const names = [];
+  const delivered = [];
+  const containerUp = { status: 101, webSocket: { fake: true }, headers: new Headers() };
+  const container = {
+    fetch: async (request) => {
+      delivered.push(request);
+      const upgrade = (request.headers.get('upgrade') || '').toLowerCase() === 'websocket';
+      return upgrade
+        ? containerUp
+        : new Response('{"ok":true,"service":"nexus-python"}', { status: 200 });
+    },
+  };
+  const binding = {
+    getByName: (name) => { names.push(name); return container; },
+  };
+  const env = { NEXUS_CONTAINER: binding };
+
+  const health = await call('/health', { env });
+  const healthBody = await health.json();
+  check(health.status === 200, 'a bound container must answer /health without NEXUS_ORIGIN');
+  check(healthBody.mode === 'container' && healthBody.container === true,
+    'health must say the app is served by a container');
+  check(healthBody.origin === null, 'a container deployment has no origin URL to report');
+  check(healthBody.paths.length >= EDGE_PATHS.length, 'health must still list every edge path');
+
+  const proxied = await call('/ws/vless', { env, headers: ws });
+  check(proxied.status === 101, 'a WS path must be proxied through the container binding');
+  check(delivered.some((request) => new URL(request.url).pathname === '/ws/vless'),
+    '/ws/vless never reached the container');
+  check(seen.length === 0, 'a container deployment must never dial an origin URL');
+
+  const home = await call('/', { env });
+  const homeRequest = delivered.find((request) => new URL(request.url).pathname === '/');
+  check(home.status === 200 && Boolean(homeRequest), 'the panel root must be proxied through the binding');
+  check(homeRequest && homeRequest.headers.get('x-forwarded-host') === 'nexus-edge.example.workers.dev',
+    'the container must be told which host the panel’s links have to be built from');
+  check(homeRequest && homeRequest.headers.get('x-forwarded-proto') === 'https',
+    'the container hop must be forwarded as https');
+
+  // A stale NEXUS_ORIGIN must not pull the deployment back out to a URL: the
+  // binding is the deployment, and an old variable is not a second origin.
+  const both = await call('/health', { env: { ...env, NEXUS_ORIGIN: ORIGIN } });
+  check((await both.json()).mode === 'container', 'a bound container must win over a stale NEXUS_ORIGIN');
+  check(seen.length === 0, 'a stale NEXUS_ORIGIN must not be dialled either');
+
+  check(names.length > 0 && names.every((name) => name === 'nexus-panel'),
+    `every request must reach the same container instance (got ${names.join(' ')})`);
+}
+
 if (failures.length) {
   console.error('FAILED');
   failures.forEach((line) => console.error(' -', line));

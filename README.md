@@ -80,6 +80,25 @@ a dedicated subscription per client.
   the `Dockerfile` and `scripts/install-vps.sh` publish the new ports so a VPS can actually reach
   them. See `tests/test_obfuscation.py` for the three ways the publish rule can be broken.
 
+- **The whole panel can now run on Cloudflare itself — Worker *and* Container — with no Railway
+  project and no VPS at all.** A Worker runs JavaScript only, so "the app inside the Worker" cannot
+  exist for a Python/Xray control plane; Cloudflare's **Containers** are what does exist, and this
+  release wires the app to them. `wrangler.jsonc` at the repository root builds this repo's own
+  `Dockerfile` (Xray, sing-box, mihomo, mtg, mtproto-proxy, the FastAPI panel), pushes it to
+  Cloudflare's registry and starts it as one instance, and `cloudflare-containers/worker.js` binds
+  that container to the same proxy file the paste-into-the-dashboard deployment uses — so there is
+  still exactly one proxy implementation and one test (`tests/worker_smoke.mjs` now drives *both*
+  shapes, and a bound `NEXUS_CONTAINER` deliberately outranks a stale `NEXUS_ORIGIN`, because a
+  container deployment has no other address for the Worker to reach). `app/runtime.py` learned the
+  platform (Cloudflare injects `CLOUDFLARE_DEPLOYMENT_ID`), which is what keeps the panel honest
+  about the one thing a container cannot do: it is reachable over HTTP and WebSocket only, so the
+  WebSocket transports (VLESS/VMess/Trojan/Shadowsocks/WARP) and the Telegram WEB proxy are live
+  while Reality, AnyTLS, TUIC, MTProto and the HTTP/SOCKS5 web proxies stay unpublished instead of
+  being handed to users as dead links. The guide — `docs/CLOUDFLARE-DEPLOY-FA.md`, with
+  `sh cloudflare-containers/deploy.sh --db 'postgresql://…'` as the one command — leads with the two
+  facts that decide whether this works at all: a container's disk is **ephemeral**, so the panel's
+  database has to be a real Postgres (`DATABASE_URL`), and the Worker still needs a **custom
+  domain**, because `*.workers.dev` is filtered in Iran.
 - **«The panel on the Cloudflare Worker, the app really on Railway» — now true for the links too,
   and the guide says the one thing that decides whether it opens at all.** A saved Worker URL is
   the address a filtered client can actually reach, so every link a user is handed — subscription,

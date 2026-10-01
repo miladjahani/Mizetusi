@@ -1,0 +1,19 @@
+{
+  "name": "nexus-cloudflare",
+  "version": "9.8.0",
+  "private": true,
+  "type": "module",
+  "description": "Deploy the NEXUS Xray control plane on Cloudflare: a Worker in front of the panel running in a Cloudflare Container.",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "containers": "wrangler containers list",
+    "logs": "wrangler tail"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "wrangler": "^4.145.0"
+  }
+}

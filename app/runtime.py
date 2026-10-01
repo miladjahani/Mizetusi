@@ -1,9 +1,9 @@
 """Where this deployment is actually running.
 
 NEXUS started life on Railway, so the origin hostname, the raw-TCP endpoint and
-the database directory were read from ``RAILWAY_*`` variables. Nothing in the
-proxy path is Railway-specific — the same image runs on Render, Fly.io, Koyeb,
-Heroku or a plain VPS — so this module answers the three questions the rest of
+the database directory were read from ``RAILWAY_*`` variables. Nothing inthe proxy path is Railway-specific — the same image runs on Render, Fly.io, Koyeb,
+Heroku, inside a Cloudflare Container behind a Worker, or on a plain VPS — so this
+module answers the three questions the rest of
 the app asks, for every platform:
 
 * **public host** — the hostname clients reach the panel on. Every PaaS injects
@@ -39,6 +39,12 @@ PLATFORMS = {
     'heroku': {'label': 'Heroku', 'tcp': 'none', 'udp': False},
     'vercel': {'label': 'Vercel', 'tcp': 'none', 'udp': False},
     'replit': {'label': 'Replit', 'tcp': 'none', 'udp': False},
+    # A Cloudflare Worker cannot run Python at all, so the app runs inside a
+    # Cloudflare *Container* and the Worker in front of it is the only public
+    # address. A container is reached through the Worker's own binding, which
+    # forwards HTTP and WebSocket upgrades only — there is no raw TCP port and no
+    # UDP, exactly like Render without a TCP port.
+    'cloudflare': {'label': 'Cloudflare (Worker + Container)', 'tcp': 'none', 'udp': False},
     'docker': {'label': 'VPS / Docker', 'tcp': 'always', 'udp': True},
     'local': {'label': 'Local', 'tcp': 'always', 'udp': True},
 }
@@ -52,6 +58,10 @@ PLATFORM_MARKERS = (
     ('heroku', ('DYNO', 'HEROKU_APP_NAME')),
     ('vercel', ('VERCEL', 'VERCEL_URL')),
     ('replit', ('REPL_ID', 'REPLIT_DEV_DOMAIN')),
+    # Cloudflare injects CLOUDFLARE_DEPLOYMENT_ID into a container (and
+    # CLOUDFLARE_CONTAINER_ID), so the deployment can name itself instead of
+    # being reported as a plain Docker host.
+    ('cloudflare', ('CLOUDFLARE_DEPLOYMENT_ID', 'CLOUDFLARE_CONTAINER_ID', 'NEXUS_CLOUDFLARE')),
 )
 
 # Hostnames the platforms inject. Ordered so an explicit operator override wins.
@@ -275,6 +285,10 @@ def _notes(pid, endpoint):
     if pid == 'railway':
         return (['پورت TCP پروکسی فعال است؛ Reality منتشر می‌شود.'] if endpoint
                 else ['برای Reality در Railway یک TCP Proxy بسازید (یا NEXUS_DIRECT_HOST/PORT را ست کنید).'])
+    if pid == 'cloudflare':
+        return ['این نسخه داخل Cloudflare Container اجرا می‌شود و فقط از طریق Worker در دسترس است؛ '
+                'همهٔ مسیرهای WebSocket (VLESS/VMess/Trojan/Shadowsocks/WARP) و خود پنل کار می‌کنند، '
+                'اما پورت TCP خام وجود ندارد، پس Reality و بقیهٔ ترنسپورت‌های پورت‌دار منتشر نمی‌شوند.']
     if pid in ('docker', 'local'):
         return (['پورت %s برای Reality در دسترس است.' % endpoint['port']] if endpoint
                 else ['آی‌پی عمومی قابل‌اتکا پیدا نشد (شاید پشت NAT باشید)؛ NEXUS_DIRECT_HOST و '

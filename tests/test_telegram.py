@@ -788,7 +788,12 @@ def test_the_worker_carries_the_telegram_path():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, 'cloudflare-worker', 'worker.js'), encoding='utf-8') as handle:
         worker = handle.read()
-    assert 'const forward = new Request(origin + url.pathname + url.search, request)' in worker
+    # The hop is built from the upstream the Worker resolved, not from a hardcoded
+    # origin: the same file also serves the deployment where the app runs in a
+    # Cloudflare Container (no origin URL exists there), and the panel route has to
+    # keep its path and query in both shapes.
+    assert 'const upstreamBaseUrl = upstreamBase(origin, edgeHost)' in worker
+    assert 'const forward = new Request(upstreamBaseUrl + url.pathname + url.search, request)' in worker
     assert "forward.headers.set('X-Forwarded-Proto', 'https')" in worker
     assert "forward.headers.set('X-Forwarded-Host', edgeHost)" in worker
     # The panel proxy must stay a panel proxy: the edge path table never claims

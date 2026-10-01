@@ -4,3 +4,5 @@ __pycache__/
 .env
 .env.*
 zeus.db
+node_modules/
+.wrangler/
