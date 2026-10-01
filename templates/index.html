@@ -109,6 +109,10 @@
 
       <div class="stats stagger" id="dashStats"></div>
 
+      <!-- Instruments: three health dials and the fleet's latency pulse, so the
+           state of the deployment reads as a shape before it reads as a number. -->
+      <div class="instr-grid" id="dashInstruments"></div>
+
       <div class="grid-2">
         <div class="panel glass">
           <div class="chart-head">
@@ -192,6 +196,16 @@
         <div id="nodeList" class="stagger"></div>
       </div>
 
+      <!-- The fleet as a picture: one bar per node (tallest = fastest) and one
+           chip per location, carrying the same flag a client shows. -->
+      <div class="panel glass" style="margin-top:13px">
+        <div class="panel-head">
+          <div><h3>نبض شبکه و لوکیشن‌ها</h3><p class="sub">هر ستون یک نود، از کم‌ترین تا بیش‌ترین تاخیر · هر چیپ یک لوکیشن با پرچم کشور</p></div>
+          <span class="pill" id="pulsePill">—</span>
+        </div>
+        <div id="nodePulse"></div>
+      </div>
+
       <div class="grid-2b">
         <div class="panel glass" data-acc="پوشش ترکیب‌ها|هر نود در برابر هر پروتکل و ترنسپورت|activity">
           <div class="panel-head"><div><h3>پوشش ترکیب‌ها</h3><p class="sub">هر نود در برابر هر پروتکل و ترنسپورت</p></div></div>
@@ -266,6 +280,16 @@
             <option value="expiry">نزدیک‌ترین انقضا</option>
           </select>
         </div>
+        <!-- The user base as one picture: the five states the filter row above
+             can narrow to, plus how much of the whole deployment's quota is gone. -->
+        <div class="panel glass" style="margin-top:13px">
+          <div class="panel-head">
+            <div><h3>نمای کلی کاربران</h3><p class="sub">توزیع وضعیت‌ها و سهمیهٔ مصرف‌شده، پیش از خواندن کارت‌ها</p></div>
+            <span class="pill" id="userOverviewPill">—</span>
+          </div>
+          <div id="userOverview"></div>
+        </div>
+
         <div class="card-grid stagger" id="userList"></div>
       </div>
 

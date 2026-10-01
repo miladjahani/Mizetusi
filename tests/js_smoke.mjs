@@ -131,6 +131,13 @@ const checks = [
   [typeof loaded['views/guide'].GuideView.prototype.load === 'function', 'guide loader'],
   [typeof loaded['views/guide'].GuideView.prototype.toggle === 'function', 'guide drawer'],
   [typeof loaded.ui.accordion === 'function', 'accordion helper'],
+  [typeof loaded.ui.Charts.gauge === 'function' && typeof loaded.ui.Charts.spectrum === 'function',
+    'instrument gauge and latency spectrum'],
+  [loaded.ui.flagOf('de') === '\u{1F1E9}\u{1F1EA}' && loaded.ui.flagOf('other') === '',
+    'a country code becomes its own flag'],
+  [typeof loaded['views/dashboard'].DashboardView.prototype.instruments === 'function', 'dashboard instruments'],
+  [typeof loaded['views/nodes'].NodesView.prototype.renderPulse === 'function', 'node latency pulse'],
+  [typeof loaded['views/users'].UsersView.prototype.overview === 'function', 'user status overview'],
   [!!window.nexus, 'app bootstrapped'],
   [window.nexus?.store?.get('section') === 'dashboard', 'router default section'],
   // The grouped navigation must really paint. It reads NAV_GROUPS off the router;
@@ -164,6 +171,56 @@ try {
   window.nexus.applyBrand();
 } catch (error) {
   failures.push(`render path threw: ${error.message}`);
+}
+
+// The graphical layer: dials and a bar spectrum are drawn from the same metrics
+// the figures come from, and a location is drawn as its own flag. A chart that
+// prints «undefined» or «NaN» is worse than no chart at all, so each of them is
+// asserted against a realistic payload rather than merely executed.
+try {
+  window.nexus.store.set('metrics', {
+    totals: {
+      users: 12, active_users: 8, disabled_users: 4, used_gb: 220, lifetime_gb: 900,
+      nodes: 6, nodes_enabled: 5, cloudflare_nodes: 4, railway_nodes: 1,
+      cf_ips_ok: 33, cf_ips_total: 40, requests: 512, active_ips_1h: 3, proxies: 0,
+    },
+    nodes: [
+      { name: 'de-cloudflare-01', kind: 'cloudflare', enabled: 1, latency_ms: 42 },
+      { name: 'direct-eu', kind: 'railway', enabled: 1, latency_ms: 88 },
+      { name: 'us-cloudflare-02', kind: 'cloudflare', enabled: 1, latency_ms: -1 },
+    ],
+    series_hourly: [{ t: 1, gb: 2, requests: 4 }, { t: 2, gb: 5, requests: 9 }],
+    top_users: [], started_at: 0, uptime_seconds: 3600,
+  });
+  window.nexus.store.set('nodes', [
+    { name: 'de-cloudflare-01', kind: 'cloudflare', enabled: 1, latency_ms: 42, location: 'de', server: '1.1.1.1', port: 443 },
+    { name: 'direct-eu', kind: 'railway', enabled: 1, latency_ms: 88, location: '', server: 'panel.example.com', port: 443 },
+    { name: 'us-cloudflare-02', kind: 'cloudflare', enabled: 1, latency_ms: -1, location: 'us', server: '1.0.0.1', port: 443 },
+  ]);
+  window.nexus.store.set('users', [
+    { username: 'a', uuid: 'u1', is_active: 1, used_gb: 5, limit_gb: 10, used_req: 1, lifetime_used_gb: 20 },
+    { username: 'b', uuid: 'u2', is_active: 0, used_gb: 0, limit_gb: 0, used_req: 0, lifetime_used_gb: 0 },
+  ]);
+  window.nexus.dashboard.render();
+  window.nexus.nodes.render();
+  window.nexus.users.render();
+  const dials = String(elements.get('dashInstruments')?.innerHTML || '');
+  if (!dials.includes('سلامت نودها') || !dials.includes('LATENCY PULSE')) {
+    failures.push('the dashboard must draw the health dials and the latency pulse');
+  }
+  // Three dials plus the pulse card — a dial that failed to build is not a shape.
+  if ((dials.match(/class="instr /g) || []).length !== 4) {
+    failures.push('the dashboard must draw three dials plus the pulse card');
+  }
+  if (dials.includes('undefined') || dials.includes('NaN')) failures.push('a dashboard instrument rendered an undefined figure');
+  const pulse = String(elements.get('nodePulse')?.innerHTML || '');
+  if (!pulse.includes('\u{1F1E9}\u{1F1EA}')) failures.push('a node location must render as its own flag');
+  if (pulse.includes('undefined') || pulse.includes('NaN')) failures.push('the node pulse rendered an undefined figure');
+  const overview = String(elements.get('userOverview')?.innerHTML || '');
+  if (!overview.includes('سهمیهٔ مصرف‌شده')) failures.push('the user overview must report the used quota');
+  if (overview.includes('undefined') || overview.includes('NaN')) failures.push('the user overview rendered an undefined figure');
+} catch (error) {
+  failures.push(`the graphical layer threw: ${error.message}`);
 }
 
 // The country a location really is: a Cloudflare range used to be labelled from

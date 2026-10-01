@@ -5,6 +5,19 @@
    ========================================================================== */
 import { $, $$, esc, ico, chev, Fmt } from './core.js';
 
+/* A country code is drawn as its own flag instead of a word.
+
+   The panel already stores a two-letter slug per location, and a flag is
+   exactly what the user's own client shows next to the same node — so a list
+   where every row carries it is scanned in one glance instead of read. The
+   regional-indicator letters are derived from the slug itself; anything that
+   is not a two-letter code (a hand-typed country name, "other") stays text. */
+export function flagOf(code) {
+  const text = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(text)) return '';
+  return String.fromCodePoint(...[...text].map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65));
+}
+
 /* ---------------------------------------------------------------- accordion */
 /**
  * One collapsible card: a summary line with an icon, a title, a hint and an
@@ -135,6 +148,57 @@ export class Charts {
     return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:100%">
       <path d="${this.sparkPath(values, w, h - 4)}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" transform="translate(0,2)"/>
     </svg>`;
+  }
+
+  /**
+   * A 270° instrument gauge — the shape a dashboard reads as «how healthy is
+   * this», not a number in a box. The arc is a stroked circle rotated so the
+   * sweep opens at the bottom, the value animates in on paint, and a dot marks
+   * where on the dial the reading sits. The percent line under the figure is
+   * what makes a gauge comparable to the other gauges beside it, since the
+   * four of them do not share a scale.
+   */
+  static gauge({ value = 0, max = 100, color = '#c9f24c', size = 116, valueText = null, digits = 0, unit = '' } = {}) {
+    const stroke = 9;
+    const r = (size - stroke * 2) / 2;
+    const cx = size / 2, cy = size / 2;
+    const circumference = 2 * Math.PI * r;
+    const arc = circumference * 0.75;                       // 270 of 360 degrees
+    const pct = max > 0 ? Fmt.clamp((Number(value) || 0) / max, 0, 1) : 0;
+    const dash = arc * pct;
+    const angle = (135 + pct * 270) * Math.PI / 180;
+    const dotX = (cx + r * Math.cos(angle)).toFixed(1);
+    const dotY = (cy + r * Math.sin(angle)).toFixed(1);
+    const shown = valueText != null
+      ? valueText
+      : `${Fmt.num(value, digits)}${unit ? `<tspan font-size="10.5" fill="#93a885"> ${esc(unit)}</tspan>` : ''}`;
+    return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle cx="${cx}" cy="${cy}" r="${r.toFixed(2)}" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="${stroke}"
+        stroke-linecap="round" stroke-dasharray="${arc.toFixed(2)} ${(circumference - arc).toFixed(2)}" transform="rotate(135 ${cx} ${cy})"/>
+      <circle cx="${cx}" cy="${cy}" r="${r.toFixed(2)}" fill="none" stroke="${color}" stroke-width="${stroke}"
+        stroke-linecap="round" transform="rotate(135 ${cx} ${cy})" stroke-dasharray="${dash.toFixed(2)} ${(circumference - dash).toFixed(2)}"
+        style="filter:drop-shadow(0 0 6px ${color}66)">
+        <animate attributeName="stroke-dasharray" from="0 ${circumference.toFixed(2)}" to="${dash.toFixed(2)} ${(circumference - dash).toFixed(2)}" dur="0.9s" fill="freeze"/></circle>
+      <circle cx="${dotX}" cy="${dotY}" r="3.4" fill="#0b1307" stroke="${color}" stroke-width="2"/>
+      <text x="${cx}" y="${cy - 1}" text-anchor="middle" fill="#eaf4dc" font-family="Vazirmatn" font-size="${Math.round(size * 0.2)}" font-weight="800">${shown}</text>
+      <text x="${cx}" y="${cy + 17}" text-anchor="middle" fill="#93a885" font-family="Vazirmatn" font-size="10">${Fmt.num(pct * 100, 0)}٪</text>
+    </svg>`;
+  }
+
+  /**
+   * A row of vertical bars, one per node — tallest is fastest, colour is the
+   * same latency tone the node rows use. The point is that the *shape* of the
+   * fleet's latency is readable before any number is: one sick node is a gap in
+   * the line, and the whole fleet degrading is the line flattening out.
+   */
+  static spectrum(items) {
+    if (!items?.length) return '';
+    const worst = Math.max(...items.map((item) => Number(item.value) || 0), 1);
+    return `<div class="spectrum">${items.map((item, index) => {
+      const value = Number(item.value) || 0;
+      const height = item.tone === 'off' ? 9 : Fmt.clamp(20 + (1 - value / worst) * 80, 14, 100);
+      return `<i class="${esc(item.tone || '')}" style="height:${height.toFixed(0)}%;animation-delay:${index * 22}ms" title="${esc(item.title || item.label || '')}"></i>`;
+    }).join('')}</div>`;
   }
 
   static smoothPath(points) {

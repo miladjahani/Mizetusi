@@ -119,9 +119,69 @@ export class UsersView {
   }
 
   /* --------------------------------------------------------------------- list */
+  /*
+   * How the whole user base is distributed, as one picture.
+   *
+   * The five segments are exactly the five states the filter row above can
+   * narrow the list to, in the same vocabulary — so a bar that looks alarming
+   * always has a filter that shows which users made it so. The figures under it
+   * are the one thing a per-card quota ring cannot show: how much of the whole
+   * deployment's quota is gone, and how many accounts are not metered at all.
+   */
+  overview() {
+    const host = $('#userOverview');
+    if (!host) return;
+    const users = this.store.get('users') || [];
+    const buckets = [
+      { label: STATUS.active.label, cls: 'ok', dot: '#3ee6a0' },
+      { label: STATUS.bootstrap.label, cls: 'info', dot: '#c9f24c' },
+      { label: 'اتمام حجم یا درخواست', cls: 'warn', dot: '#ffc85c' },
+      { label: STATUS.expired.label, cls: 'warn', dot: '#ffc85c' },
+      { label: STATUS.off.label, cls: 'bad', dot: '#ff6b81' },
+    ];
+    const counts = buckets.map(() => 0);
+    let used = 0;
+    let quota = 0;
+    let capped = 0;
+    users.forEach((user) => {
+      const status = StatusKit.of(user);
+      const index = status === STATUS.active ? 0
+        : status === STATUS.bootstrap ? 1
+          : status === STATUS.quota || status === STATUS.request ? 2
+            : status === STATUS.expired ? 3 : 4;
+      counts[index] += 1;
+      used += Number(user.used_gb) || 0;
+      if (user.limit_gb) { quota += Number(user.limit_gb) || 0; capped += 1; }
+    });
+    const pill = $('#userOverviewPill');
+    if (pill) {
+      const attention = counts[2] + counts[3] + counts[4];
+      pill.className = `pill ${attention ? 'warn' : 'ok'}`;
+      pill.textContent = attention ? `${Fmt.num(attention)} کاربر نیازمند رسیدگی` : 'همه سالم';
+    }
+    if (!users.length) {
+      host.innerHTML = `<div class="empty">${ico('users', 30)}<div>هنوز کاربری ساخته نشده</div>
+        <div class="muted" style="margin-top:6px">از «ساخت سریع کاربر» بالای همین صفحه شروع کنید.</div></div>`;
+      return;
+    }
+    const total = users.length;
+    const bar = buckets.map((bucket, index) => {
+      const pct = (counts[index] / total) * 100;
+      return pct <= 0 ? '' : `<i class="${bucket.cls}" style="width:${pct.toFixed(2)}%" title="${esc(`${bucket.label}: ${Fmt.num(counts[index])} از ${Fmt.num(total)}`)}"></i>`;
+    }).join('');
+    const legend = buckets.map((bucket, index) => `<span><i style="background:${bucket.dot}"></i>${esc(bucket.label)} · <b class="mono">${Fmt.num(counts[index])}</b></span>`).join('');
+    host.innerHTML = `<div class="stack">${bar}</div>
+      <div class="chart-legend">${legend}</div>
+      <div class="kv-list" style="margin-top:12px">
+        <div class="kv-line"><span>سهمیهٔ مصرف‌شده</span><b>${quota ? `${esc(Fmt.sizeText(used))} از ${esc(Fmt.sizeText(quota))} · ${Fmt.num((used / quota) * 100, 0)}٪` : 'هیچ کاربری سقف حجم ندارد'}</b></div>
+        <div class="kv-line"><span>کاربران بدون سقف حجم</span><b>${Fmt.num(total - capped)} از ${Fmt.num(total)} کاربر</b></div>
+      </div>`;
+  }
+
   render() {
     const host = $('#userList');
     if (!host) return;
+    this.overview();
     const list = this.visible();
     if (!list.length) {
       host.innerHTML = `<div class="empty">${ico('users', 36)}<div>کاربری با این فیلتر وجود ندارد</div>

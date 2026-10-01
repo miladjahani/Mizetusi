@@ -15,6 +15,7 @@ export class DashboardView {
   render() {
     this.heroChips();
     this.stats();
+    this.instruments();
     this.traffic();
     this.mix();
     this.latency();
@@ -65,16 +66,83 @@ export class DashboardView {
         </div>`).join('');
     }
     cards.forEach((card) => {
+      // The value cells are created by the innerHTML above, so a card whose cell
+      // is missing must not take the whole dashboard down with it.
       const valueEl = $(`#stat-${card.k}`);
-      if (card.uptime) {
-        valueEl.innerHTML = esc(Fmt.until(metrics.uptime_seconds));
-        valueEl.style.fontSize = '17px';
-      } else {
-        Charts.countUp(valueEl, card.value, card.digits || 0, card.unit || '');
+      if (valueEl) {
+        if (card.uptime) {
+          valueEl.innerHTML = esc(Fmt.until(metrics.uptime_seconds));
+          valueEl.style.fontSize = '17px';
+        } else {
+          Charts.countUp(valueEl, card.value, card.digits || 0, card.unit || '');
+        }
       }
       const footEl = $(`#stat-foot-${card.k}`);
       if (footEl) footEl.textContent = card.foot;
     });
+  }
+
+  /*
+   * Three health dials and the fleet's latency pulse.
+   *
+   * Every figure is derived from the same metrics payload the stat cards above
+   * use, and each dial names its own denominator in the caption underneath — a
+   * gauge whose scale is a mystery is worse than the number it replaced. The
+   * spectrum beside them is the same `metrics.nodes` the latency bars render,
+   * ordered fastest-first, so one sick node is a visible gap rather than a row
+   * somebody has to go looking for.
+   */
+  instruments() {
+    const host = $('#dashInstruments');
+    const metrics = this.store.get('metrics');
+    if (!host || !metrics) return;
+    const t = metrics.totals || {};
+    const nodes = (metrics.nodes || []).filter((node) => node.enabled);
+    const measured = nodes.filter((node) => node.latency_ms != null && Number(node.latency_ms) >= 0);
+    const dials = [
+      {
+        label: 'سلامت نودها',
+        value: measured.length,
+        max: Math.max(nodes.length, 1),
+        color: nodes.length && measured.length === nodes.length ? '#3ee6a0' : '#c9f24c',
+        caption: `${Fmt.num(measured.length)} از ${Fmt.num(nodes.length)} نود فعال پاسخ داد`,
+      },
+      {
+        label: 'آی‌پی‌های تمیز لبه',
+        value: t.cf_ips_ok,
+        max: Math.max(t.cf_ips_total, 1),
+        color: '#8ce07a',
+        caption: `${Fmt.num(t.cf_ips_total)} آدرس اسکن‌شده`,
+      },
+      {
+        label: 'کاربران فعال',
+        value: t.active_users,
+        max: Math.max(t.users, 1),
+        color: '#b7e77a',
+        caption: `${Fmt.num(t.disabled_users)} غیرفعال از ${Fmt.num(t.users)} کاربر`,
+      },
+    ];
+    const ordered = nodes.slice().sort((a, b) => (a.latency_ms ?? 1e9) - (b.latency_ms ?? 1e9));
+    const pulse = Charts.spectrum(ordered.slice(0, 40).map((node) => ({
+      value: node.latency_ms != null && Number(node.latency_ms) >= 0 ? Number(node.latency_ms) : 0,
+      tone: StatusKit.latencyTone(node.latency_ms),
+      title: `${node.name} · ${StatusKit.latencyText(node.latency_ms)}`,
+    })));
+    const fastest = ordered.find((node) => node.latency_ms != null && Number(node.latency_ms) >= 0);
+    host.innerHTML = dials.map((dial, index) => `
+      <div class="instr glass" style="--i:${index}">
+        <div>${Charts.gauge({ value: dial.value, max: dial.max, color: dial.color, valueText: Fmt.num(dial.value) })}</div>
+        <div class="g-label">${esc(dial.label)}</div>
+        <div class="g-caption">${esc(dial.caption)}</div>
+      </div>`).join('') + `
+      <div class="instr pulse glass" style="--i:3">
+        <div class="g-head">
+          <span class="mini-label">LATENCY PULSE</span>
+          <span class="muted">${fastest ? `سریع‌ترین: ${esc(fastest.name)} · ${esc(StatusKit.latencyText(fastest.latency_ms))}` : 'بدون اندازه‌گیری'}</span>
+        </div>
+        ${pulse || `<div class="empty" style="padding:18px 8px">${ico('server', 26)}<div>نود فعالی برای سنجش نیست</div></div>`}
+        <div class="g-caption">هر ستون یک نود است؛ بلندترین ستون سریع‌ترین، و رنگ‌ها همان رنگ ردیف نودها.</div>
+      </div>`;
   }
 
   traffic() {
@@ -182,15 +250,15 @@ export class DashboardView {
     pill.className = `pill ${core.running ? 'ok' : 'bad'}`;
     pill.innerHTML = `<i class="dot${core.running ? '' : ' bad'}"></i> ${core.running ? 'در حال اجرا' : 'متوقف'}`;
     const rows = [
-      ['وضعیت هسته', core.running ? `Running${core.pid ? ` (PID ${core.pid})` : ''}` : 'Stopped'],
-      ['پروتکل‌ها', (core.protocols || []).join(' / ')],
-      ['ترنسپورت', core.transport || '—'],
-      ['اندپوینت‌ها', (core.endpoints || []).join('  ')],
-      ['باینری', core.binary || '—'],
-      ['پورت‌های داخلی', `VLESS ${core.vless_listener ?? '—'} · Trojan ${core.trojan_listener ?? '—'}`],
+      ['وضعیت هسته', core.running ? `Running${core.pid ? ` (PID ${core.pid})` : ''}` : 'Stopped', 'server'],
+      ['پروتکل‌ها', (core.protocols || []).join(' / '), 'shield'],
+      ['ترنسپورت', core.transport || '—', 'activity'],
+      ['اندپوینت‌ها', (core.endpoints || []).join('  '), 'link'],
+      ['باینری', core.binary || '—', 'cog'],
+      ['پورت‌های داخلی', `VLESS ${core.vless_listener ?? '—'} · Trojan ${core.trojan_listener ?? '—'}`, 'globe'],
     ];
     const host = $('#coreInfo');
-    if (host) host.innerHTML = rows.map(([key, value]) => `<div class="kv-line"><span>${esc(key)}</span><b>${esc(value)}</b></div>`).join('');
+    if (host) host.innerHTML = rows.map(([key, value, icon]) => `<div class="kv-line"><span>${icon ? `${ico(icon, 13)} ` : ''}${esc(key)}</span><b>${esc(value)}</b></div>`).join('');
   }
 
   cloudflareSummary() {
@@ -208,13 +276,13 @@ export class DashboardView {
       else { pill.className = 'pill warn'; pill.innerHTML = 'بدون لبه'; }
     }
     const rows = [
-      ['حالت لبه', worker?.configured ? 'Worker' : cfNodes > 0 ? 'خودکار (دامنه پشت Cloudflare)' : 'فقط مستقیم'],
-      ['آدرس Worker', worker?.url ? worker.url.replace(/^https?:\/\//, '') : '—'],
-      ['IP سالم', totals ? `${Fmt.num(totals.cf_ips_ok)} از ${Fmt.num(totals.cf_ips_total)}` : '—'],
-      ['نود CF منتشرشده', totals ? `${Fmt.num(Math.max(totals.cloudflare_nodes, cfNodes))}` : '—'],
-      ['پروکسی خارجی', totals ? Fmt.num(totals.proxies) : '—'],
+      ['حالت لبه', worker?.configured ? 'Worker' : cfNodes > 0 ? 'خودکار (دامنه پشت Cloudflare)' : 'فقط مستقیم', 'cloud'],
+      ['آدرس Worker', worker?.url ? worker.url.replace(/^https?:\/\//, '') : '—', 'link'],
+      ['IP سالم', totals ? `${Fmt.num(totals.cf_ips_ok)} از ${Fmt.num(totals.cf_ips_total)}` : '—', 'globe'],
+      ['نود CF منتشرشده', totals ? `${Fmt.num(Math.max(totals.cloudflare_nodes, cfNodes))}` : '—', 'nodes'],
+      ['پروکسی خارجی', totals ? Fmt.num(totals.proxies) : '—', 'shield'],
     ];
-    host.innerHTML = `<div class="kv-list">${rows.map(([key, value]) => `<div class="kv-line"><span>${esc(key)}</span><b>${esc(value)}</b></div>`).join('')}</div>`;
+    host.innerHTML = `<div class="kv-list">${rows.map(([key, value, icon]) => `<div class="kv-line"><span>${ico(icon, 13)} ${esc(key)}</span><b>${esc(value)}</b></div>`).join('')}</div>`;
   }
 
   feedback() {
@@ -256,7 +324,7 @@ export class DashboardView {
       return;
     }
     host.innerHTML = `<div class="kv-list">${logs.map((log) => `
-      <div class="kv-line"><span>${esc(StatusKit.logLabel(log.action))}</span>
+      <div class="kv-line"><span>${ico('clock', 13)} ${esc(StatusKit.logLabel(log.action))}</span>
         <b title="${esc(log.detail || '')}">${esc(Fmt.truncate(log.detail || '—', 26))} · ${esc(Fmt.ago(log.created_at))}</b></div>`).join('')}</div>`;
   }
 

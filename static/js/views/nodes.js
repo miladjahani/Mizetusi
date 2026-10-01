@@ -3,7 +3,7 @@
    subscription explorer and the real ping actions.
    ========================================================================== */
 import { $, $$, ico, esc, Fmt, bindCopyButtons } from '../core.js';
-import { StatusKit } from '../ui.js';
+import { Charts, StatusKit, flagOf } from '../ui.js';
 
 // Node kinds are about *where* an entry comes from, independent of the platform:
 // 'railway' is this deployment's own hostname (the origin, on any provider),
@@ -95,6 +95,18 @@ export class NodesView {
    * smoke alarm for the cases the panel cannot fix by itself: a clean domain, or
    * a location an admin pinned.
    */
+  /* A location as its own flag chip rather than a bare slug: it is the same
+     flag the user's client shows beside the node this one generates, so a row
+     here and a row there agree. A label that is not a country code stays text. */
+  locPill(node) {
+    const code = String(node.location || '').trim().toLowerCase();
+    const country = String(node.geo?.country || '').trim().toLowerCase();
+    if (!code && !country) return '';
+    const flag = flagOf(code) || flagOf(country);
+    const label = /^[a-z]{2}$/.test(code) ? code.toUpperCase() : (code || country).toUpperCase();
+    return ` <span class="pill info" style="padding:2px 8px;font-size:9.5px;gap:5px">${flag ? `<span class="fl" style="font-size:12px;line-height:1">${esc(flag)}</span>` : ''}${esc(label)}</span>`;
+  }
+
   geoBadge(node) {
     const info = node.geo || {};
     if (!info.measured || !info.country || info.country === (node.location || '').toLowerCase()) return '';
@@ -128,7 +140,7 @@ export class NodesView {
         <input type="checkbox" data-candidate="${esc(node.name)}" ${this.candidateSelection.has(node.name) ? 'checked' : ''} style="width:auto;margin:0 6px 0 0">
         <span class="node-icon ${node.kind === 'cloudflare' ? 'cf' : ''}">${node.kind === 'cloudflare' ? '☁' : 'R'}</span>
         <div class="node-main">
-          <b>${esc(node.name)}${node.location ? ` <span class="pill info" style="padding:2px 8px;font-size:9.5px">${esc(node.location.toUpperCase())}</span>` : ''}${node.provider ? ` <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(node.provider)}</span>` : ''}</b>
+          <b>${esc(node.name)}${this.locPill(node)}${node.provider ? ` <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(node.provider)}</span>` : ''}</b>
           <span>${esc(node.kind)} · ${esc(node.server)}:${esc(node.port)}${node.sni ? ` · SNI ${esc(node.sni)}` : ''}</span>
         </div>
         <span class="lat ${StatusKit.latencyTone(node.latency_ms)}" title="${esc(this.probeTitle(node))}">${StatusKit.latencyText(node.latency_ms)}</span>
@@ -139,6 +151,61 @@ export class NodesView {
         else this.candidateSelection.delete(box.dataset.candidate);
       };
     });
+  }
+
+  /*
+   * The fleet as a picture: one bar per node (tallest = fastest) drawn with the
+   * same latency tone the node rows carry, plus one chip per location showing
+   * the flag a client will show for the same node.
+   *
+   * It deliberately reads the *whole* catalog, not the filtered, paged list —
+   * the shape of everything the deployment publishes is the point, and a filter
+   * that hides the sick half would hide exactly what this card exists to show.
+   */
+  renderPulse() {
+    const host = $('#nodePulse');
+    if (!host) return;
+    const nodes = this.store.get('nodes') || [];
+    const enabled = nodes.filter((node) => node.enabled).length;
+    const pill = $('#pulsePill');
+    if (pill) {
+      pill.className = `pill ${enabled ? 'ok' : 'warn'}`;
+      pill.innerHTML = `<i class="dot${enabled ? '' : ' warn'}"></i> ${Fmt.num(enabled)} از ${Fmt.num(nodes.length)} فعال`;
+    }
+    if (!nodes.length) {
+      host.innerHTML = `<div class="empty">${ico('server', 30)}<div>هنوز نودی در کاتالوگ نیست</div>
+        <div class="muted" style="margin-top:6px">از «نمونه‌های آماده» شروع کنید یا Sync بزنید.</div></div>`;
+      return;
+    }
+    const ordered = nodes.slice().sort((a, b) => (a.latency_ms ?? 1e9) - (b.latency_ms ?? 1e9));
+    const spectrum = Charts.spectrum(ordered.slice(0, 48).map((node) => ({
+      value: node.latency_ms != null && Number(node.latency_ms) >= 0 ? Number(node.latency_ms) : 0,
+      tone: StatusKit.latencyTone(node.latency_ms),
+      title: `${node.name} · ${StatusKit.latencyText(node.latency_ms)}`,
+    })));
+    const groups = new Map();
+    nodes.forEach((node) => {
+      const key = String(node.location || node.geo?.country || '').trim().toLowerCase() || 'other';
+      const entry = groups.get(key) || { key, count: 0, latency: [] };
+      entry.count += 1;
+      if (node.latency_ms != null && Number(node.latency_ms) >= 0) entry.latency.push(Number(node.latency_ms));
+      groups.set(key, entry);
+    });
+    const average = (values) => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null);
+    const tones = { good: '#3ee6a0', mid: '#c9f24c', bad: '#ffc85c', off: 'rgba(255,255,255,.28)' };
+    const chips = [...groups.values()]
+      .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
+      .map((group) => {
+        const ms = average(group.latency);
+        const tone = StatusKit.latencyTone(ms);
+        const flag = flagOf(group.key);
+        const label = /^[a-z]{2}$/.test(group.key) ? group.key.toUpperCase() : group.key;
+        return `<span class="loc-chip" title="${esc(`${label} · ${Fmt.num(group.count)} نود · میانگین تاخیر ${StatusKit.latencyText(ms)}`)}">
+          ${flag ? `<span class="fl">${esc(flag)}</span>` : ''}${esc(label)}
+          <span class="ld" style="background:${tones[tone]};color:${tones[tone]}"></span>
+          <b>${Fmt.num(group.count)}</b></span>`;
+      }).join('');
+    host.innerHTML = `${spectrum}<div class="loc-strip">${chips}</div>`;
   }
 
   candidateList() {
@@ -184,6 +251,7 @@ export class NodesView {
     const host = $('#nodeList');
     if (!host) return;
     this.renderCandidates();
+    this.renderPulse();
     const list = this.visible();
     if (!list.length) {
       host.innerHTML = `<div class="empty">${ico('server', 34)}<div>نودی با این فیلتر پیدا نشد</div>
@@ -195,7 +263,7 @@ export class NodesView {
       <div class="node-row" style="--i:${index};border-color:${node.enabled ? 'transparent' : 'rgba(255,107,129,.18)'}">
         <span class="node-icon ${node.kind === 'cloudflare' ? 'cf' : ''}">${node.kind === 'cloudflare' ? '☁' : 'R'}</span>
         <div class="node-main">
-          <b>${esc(node.name)} ${node.enabled ? '' : '<span class="pill bad" style="padding:2px 8px;font-size:9.5px">غیرفعال</span>'}${node.location ? ` <span class="pill info" style="padding:2px 8px;font-size:9.5px">${esc(node.location.toUpperCase())}</span>` : ''}${this.geoBadge(node)}${node.provider ? ` <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(node.provider)}</span>` : ''}</b>
+          <b>${esc(node.name)} ${node.enabled ? '' : '<span class="pill bad" style="padding:2px 8px;font-size:9.5px">غیرفعال</span>'        }${this.locPill(node)}${this.geoBadge(node)}${node.provider ? ` <span class="pill" style="padding:2px 8px;font-size:9.5px">${esc(node.provider)}</span>` : ''}</b>
           <span>${esc(node.kind)} · ${esc(node.server)}:${esc(node.port)}${node.sni ? ` · SNI ${esc(node.sni)}` : ''}${node.host && node.host !== node.server ? ` · HOST ${esc(node.host)}` : ''}${node.probe && node.probe.hint ? ` · <span class="muted">${esc(node.probe.hint)}</span>` : ''}</span>
         </div>
         <span class="lat ${StatusKit.latencyTone(node.latency_ms)}" title="${esc(this.probeTitle(node))}">${StatusKit.latencyText(node.latency_ms)}</span>
