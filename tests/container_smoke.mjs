@@ -140,6 +140,18 @@ check(/containerStub\(env\) \? 'container:' \+ CONTAINER_NAME/.test(workerSource
   check(/dev\.mjs/.test(dev), 'the dev script must run the guard in cloudflare-containers/dev.mjs');
   check(existsSync(join(ROOT, 'cloudflare-containers/dev.mjs')),
     'cloudflare-containers/dev.mjs is missing');
+  // The Worker's Build command cannot always be left empty, so the repository has
+  // to offer something that is both meaningful and *finite*. This check is the
+  // meaningful half: it fails the build before the deploy if the configuration
+  // below stops agreeing with itself.
+  const build = (pkg.scripts && pkg.scripts.build) || '';
+  check(Boolean(build),
+    'package.json needs a build script — a Worker build command cannot always be left empty');
+  check(!/wrangler\s+dev|dev\.mjs/.test(build),
+    'the build script must exit: a build command that starts a server never reaches the deploy step');
+  check(/container_smoke\.mjs/.test(build),
+    'the build script should run this deployment check, so a broken config fails before the deploy');
+
   const guard = read('cloudflare-containers/dev.mjs');
   check(/WORKERS_CI/.test(guard) && /process\.exit\(0\)/.test(guard),
     'the guard must exit successfully in a build environment so the deploy still runs');

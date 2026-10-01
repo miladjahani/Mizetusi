@@ -25,12 +25,14 @@
    |---|---|
    | Production branch | `main` |
    | Root directory | `/` (ریشهٔ مخزن) |
-   | **Build command** | **کاملاً خالی** — اگر کلودفلر خودش چیزی مثل `bun run dev` یا `npm run dev` گذاشته، پاکش کن |
+   | **Build command** | **`npm run build`** — اگر کلودفلر خودش چیزی مثل `bun run dev` یا `npm run dev` گذاشته، عوضش کن |
    | Deploy command | `npx wrangler deploy` (پیش‌فرض) |
 
-   > **چرا Build command باید خالی باشد:** `bun run dev` یا `npm run dev` معنی‌اش `wrangler dev` است — یک سرور محلی که **هیچ‌وقت تمام نمی‌شود**. بعد از آن کلودفلر منتظر می‌ماند تا build تمام شود، پس هیچ‌وقت به مرحلهٔ deploy نمی‌رسد؛ حتی وقتی تصویر Docker با موفقیت ساخته شده است. نشانه‌اش هم این خط در انتهای build است: `Ready on http://localhost:8787`.
+   > **چرا این خانه مهم است:** `bun run dev` یا `npm run dev` معنی‌اش `wrangler dev` است — یک سرور محلی که **هیچ‌وقت تمام نمی‌شود**. بعد از آن کلودفلر منتظر می‌ماند تا build تمام شود، پس هیچ‌وقت به مرحلهٔ deploy نمی‌رسد؛ حتی وقتی تصویر Docker با موفقیت ساخته شده است. نشانه‌اش هم این خط در انتهای build است: `Ready on http://localhost:8787`.
    >
-   > **ولی از این به بعد یک اشتباه در این خانه deploy را نمی‌خورد:** اسکریپت `dev` در پروژه به `cloudflare-containers/dev.mjs` وصل است و در محیط build (که `WORKERS_CI` ست شده) خودش را رد می‌کند و با موفقیت خارج می‌شود، پس مرحلهٔ deploy همان‌جا اجرا می‌شود. پاک‌کردن Build command هنوز درست‌تر و سریع‌تر است (چون دیگر یک build بی‌دلیل هم راه نمی‌افتد).
+   > `npm run build` به یک چک سریع وصل است (`tests/container_smoke.mjs`) که همین مخزن را می‌سنجد: نام کلاس و بایندینگ Container با فایل‌های ورکر یکی باشد، پورت داخل Container همان پورتی باشد که `Dockerfile` به uvicorn می‌دهد، و `max_instances` روی ۱ بماند. هیچ وابستگی و هیچ Dockerی لازم ندارد، در یک ثانیه تمام می‌شود، و اگر تنظیمات به‌هم ریخته باشد **قبل از deploy** با خطا می‌ایستد.
+   >
+   > یک محافظ هم هست: اسکریپت `dev` در پروژه به `cloudflare-containers/dev.mjs` وصل است و در محیط build (که `WORKERS_CI` ست شده) خودش را رد می‌کند و با موفقیت خارج می‌شود، پس حتی اگر آن خانه دوباره اشتباه پر شود deploy انجام می‌شود.
 
 5. **Save and Deploy**.
 
@@ -264,7 +266,8 @@ npm run deploy
 | خطای حجم تصویر | instance type کوچک است | `instance_type` را در `wrangler.jsonc` یک درجه بالا ببرید |
 | خطای architecture در build | روی مک Apple Silicon ایمیج باید amd64 باشد | در Docker Desktop گزینهٔ Rosetta/`linux/amd64` را فعال کنید |
 | build در کلودفلر با خطای نام شکست می‌خورد | نام Worker در داشبورد با `name` داخل `wrangler.jsonc` یکی نیست | Worker را دقیقاً `nexus-panel` نام‌گذاری کن (بخش ۰) |
-| build تمام نمی‌شود و آخرین خطش `Ready on http://localhost:8787` است | Build command روی `bun run dev` / `npm run dev` مانده — یک dev server که هیچ‌وقت خارج نمی‌شود | Settings → Builds → Build command را خالی کن، Deploy command را `npx wrangler deploy` بگذار، ذخیره و Retry |
+| build تمام نمی‌شود و آخرین خطش `Ready on http://localhost:8787` است | Build command روی `bun run dev` / `npm run dev` مانده — یک dev server که هیچ‌وقت خارج نمی‌شود | Settings → Builds → Build command را `npm run build` بگذار، Deploy command را `npx wrangler deploy`، ذخیره و Retry |
+| فیلد Build command خالی را قبول نمی‌کند | در بعضی مسیرهای ساخت پروژه این خانه اجباری است | `npm run build` را بگذار — سریع تمام می‌شود و همان چک تنظیمات است |
 | build روی نصب وابستگی‌ها شکست می‌خورد | نسخهٔ Node محیط build قدیمی است | در Settings → Builds نسخهٔ Node را ۲۰ یا بالاتر بگذار؛ `package-lock.json` در مخزن هست تا نصب قطعی باشد |
 | preview روی شاخه‌های غیر `main` کار نمی‌کند | Workerای که Durable Object/Container دارد Version URL نمی‌گیرد | Preview command را `npx wrangler versions upload` بگذار، یا فقط روی `main` کار کن |
 | سهمیهٔ تصاویر پر شده | هر build یک ایمیج جدید می‌سازد (سقف هر حساب ۵۰ گیگ) | `npx wrangler containers images list` و بعد `npx wrangler containers delete` |

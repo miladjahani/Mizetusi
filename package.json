@@ -6,6 +6,7 @@
   "description": "Deploy the NEXUS Xray control plane on Cloudflare: a Worker in front of the panel running in a Cloudflare Container.",
   "scripts": {
     "deploy": "wrangler deploy",
+    "build": "node tests/container_smoke.mjs",
     "dev": "node cloudflare-containers/dev.mjs",
     "containers": "wrangler containers list",
     "logs": "wrangler tail"
