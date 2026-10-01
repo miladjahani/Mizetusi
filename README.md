@@ -94,11 +94,19 @@ a dedicated subscription per client.
   about the one thing a container cannot do: it is reachable over HTTP and WebSocket only, so the
   WebSocket transports (VLESS/VMess/Trojan/Shadowsocks/WARP) and the Telegram WEB proxy are live
   while Reality, AnyTLS, TUIC, MTProto and the HTTP/SOCKS5 web proxies stay unpublished instead of
-  being handed to users as dead links. The guide — `docs/CLOUDFLARE-DEPLOY-FA.md`, with
-  `sh cloudflare-containers/deploy.sh --db 'postgresql://…'` as the one command — leads with the two
-  facts that decide whether this works at all: a container's disk is **ephemeral**, so the panel's
-  database has to be a real Postgres (`DATABASE_URL`), and the Worker still needs a **custom
-  domain**, because `*.workers.dev` is filtered in Iran.
+  being handed to users as dead links. Deploying it needs **no secret of any kind**: Cloudflare's own
+  Git integration (`Workers & Pages → Create application → Import a repository`) builds the image in
+  its own build environment and rolls the container out on every push to `main`, generating the
+  deploy token itself — the Worker just has to be named `nexus-panel`, the name this repository's
+  `wrangler.jsonc` declares, and `package-lock.json` is committed so the build resolves the same
+  `wrangler` and `@cloudflare/containers` every time. The panel signs its own sessions too
+  (`bootstrap()` in `app/main.py` mints and stores a `jwt_secret` on first boot), so what is left is
+  one login (`ADMIN_PASSWORD` unset means `admin`, changed from inside the panel) and the two facts
+  the guide — `docs/CLOUDFLARE-DEPLOY-FA.md` — leads with: a container's disk is **ephemeral**, so
+  the panel's database has to be a real Postgres (`DATABASE_URL`) to outlive a sleep or a deploy,
+  and the Worker still needs a **custom domain**, because `*.workers.dev` is filtered in Iran.
+  `sh cloudflare-containers/deploy.sh --db 'postgresql://…'` remains the manual path for a machine
+  that has Docker.
 - **«The panel on the Cloudflare Worker, the app really on Railway» — now true for the links too,
   and the guide says the one thing that decides whether it opens at all.** A saved Worker URL is
   the address a filtered client can actually reach, so every link a user is handed — subscription,

@@ -164,4 +164,9 @@ cat <<EOF
 
   Billed by Cloudflare as Containers + Workers (Workers Paid plan required).
 
+  From now on this deployment can keep itself up to date: connect the repository to
+  this Worker (Workers & Pages → the Worker → Settings → Builds → Connect) and every
+  push to main builds the image and rolls the container out — no token, no secret.
+  See docs/CLOUDFLARE-DEPLOY-FA.md, section 0.
+
 EOF
