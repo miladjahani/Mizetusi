@@ -97,8 +97,12 @@ a dedicated subscription per client.
   being handed to users as dead links. Deploying it needs **no secret of any kind**: Cloudflare's own
   Git integration (`Workers & Pages → Create application → Import a repository`) builds the image in
   its own build environment and rolls the container out on every push to `main`, generating the
-  deploy token itself — the Worker just has to be named `nexus-panel`, the name this repository's
-  `wrangler.jsonc` declares, and `package-lock.json` is committed so the build resolves the same
+  deploy token itself — the Worker just has to be named `mizetusi`, the name this repository's
+  `wrangler.jsonc` declares (change the two together if you called yours something else), and the
+  account has to be on the **Workers Paid** plan: Containers exist only there, and on Free the whole
+  build succeeds right up to the last second of the deploy and then dies on
+  `/accounts/<id>/containers/me` with a token-shaped error that has nothing to do with the token.
+  `package-lock.json` is committed so the build resolves the same
   `wrangler` and `@cloudflare/containers` every time. The panel signs its own sessions too
   (`bootstrap()` in `app/main.py` mints and stores a `jwt_secret` on first boot), so what is left is
   one login (`ADMIN_PASSWORD` unset means `admin`, changed from inside the panel) and the two facts
@@ -107,6 +111,22 @@ a dedicated subscription per client.
   and the Worker still needs a **custom domain**, because `*.workers.dev` is filtered in Iran.
   `sh cloudflare-containers/deploy.sh --db 'postgresql://…'` remains the manual path for a machine
   that has Docker.
+- **A free deployment that really runs the panel: any always-on Linux box, published through a
+  Cloudflare Tunnel.** Containers need the Workers Paid plan, and every free Docker host *sleeps*
+  after a few idle minutes — which for this product is fatal rather than annoying, because Xray runs
+  inside the same container, so a sleeping panel drops **every** user's tunnel, not just the
+  admin's. So the third shape is the one that needs no plan, no card and no public IP at all:
+  `cloudflared` dials *out* to Cloudflare and holds that connection open, so the host can sit behind
+  NAT on a normal home connection while clients still reach Cloudflare's anycast addresses on a
+  subdomain of a domain the account owns. `sh scripts/install-vps.sh --tunnel '<token>'` wires it in
+  one command (it writes the token and the platform into `.env` and starts the opt-in `tunnel`
+  profile in `docker-compose.yml`). `app/runtime.py` learned the matching platform, because the old
+  behaviour was a lie with consequences: a NAT'd host running plain Docker reported `tcp: 'always'`
+  and the panel published Reality and the other raw-TCP transports against an address no client
+  could dial. It now reports HTTP/WebSocket only and withholds those cards — while
+  `NEXUS_DIRECT_HOST`/`NEXUS_DIRECT_PORT` stay the deliberate opt-in for a machine that really does
+  own a public port. See `docs/FREE-DEPLOY-FA.md` for the walkthrough, including why a tunnel does
+  not carry raw TCP and what that leaves unavailable.
 - **«The panel on the Cloudflare Worker, the app really on Railway» — now true for the links too,
   and the guide says the one thing that decides whether it opens at all.** A saved Worker URL is
   the address a filtered client can actually reach, so every link a user is handed — subscription,

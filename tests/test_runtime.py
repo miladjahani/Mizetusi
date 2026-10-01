@@ -81,6 +81,64 @@ def test_an_explicit_port_wins_on_a_vps(clean_env):
     assert runtime.direct()['port'] == 9443
 
 
+def test_a_tunnel_deployment_never_publishes_a_raw_port_by_default(clean_env):
+    """The free deployment: a NAT'd machine published through a Cloudflare Tunnel.
+
+    The host runs plain Docker, so it *looks* like a VPS — but there is no port a
+    client can dial, and `tcp: 'always'` would hand every user a Reality link that
+    resolves to a LAN address behind the router. The platform therefore has to say
+    HTTP/WebSocket only, while still honouring an operator who really did forward
+    a port (`docs/FREE-DEPLOY-FA.md`).
+    """
+    clean_env.setenv('NEXUS_PLATFORM', 'tunnel')
+    clean_env.setenv('NEXUS_PUBLIC_DOMAIN', 'panel.example.com')
+    assert runtime.platform() == 'tunnel'
+    assert runtime.label() == 'Cloudflare Tunnel (self-hosted)'
+    assert runtime.host() == 'panel.example.com'
+    assert runtime.has_tcp() is False
+    assert runtime.direct() is None
+    assert runtime.info()['notes']  # the panel has to explain why the cards are missing
+
+    # Even a routable address is not enough: the tunnel is the only way in, so
+    # nothing direct may be advertised from detection alone.
+    clean_env.setenv('NEXUS_PUBLIC_IP', '93.184.216.34')
+    assert runtime.direct() is None
+
+    # An operator who forwarded a port on a machine with a public IP opts in.
+    clean_env.setenv('NEXUS_DIRECT_HOST', 'vpn.example.com')
+    clean_env.setenv('NEXUS_DIRECT_PORT', '8443')
+    assert runtime.has_tcp() is True
+    assert runtime.direct() == {'host': 'vpn.example.com', 'port': 8443, 'source': 'env'}
+
+
+def test_the_tunnel_profile_is_wired_end_to_end():
+    """`--tunnel <token>` is only real if the three files agree with each other.
+
+    The script writes the token and the platform, the compose file has to give
+    them to a `cloudflared` service on the same network as the app, and the app
+    has to be told which platform it is — otherwise the profile runs a tunnel
+    while the panel still promises ports the tunnel cannot carry.
+    """
+    root = Path(__file__).resolve().parents[1]
+    compose = (root / 'docker-compose.yml').read_text(encoding='utf-8')
+    script = (root / 'scripts' / 'install-vps.sh').read_text(encoding='utf-8')
+
+    assert 'cloudflare/cloudflared' in compose
+    assert "profiles: ['tunnel']" in compose
+    assert '${CLOUDFLARE_TUNNEL_TOKEN:-}' in compose
+    # The platform is a variable, not a constant: the same stack serves a VPS and
+    # a tunnel, and only the compose file can hand that choice to the container.
+    assert '${NEXUS_PLATFORM:-vps}' in compose
+
+    for token in ('--tunnel', 'CLOUDFLARE_TUNNEL_TOKEN=', 'NEXUS_PLATFORM=tunnel', '--profile tunnel'):
+        assert token in script, f'install-vps.sh must handle {token}'
+
+    # The one step that silently breaks a tunnel: pointing cloudflared at
+    # localhost (itself) instead of the compose service name.
+    guide = (root / 'docs' / 'FREE-DEPLOY-FA.md').read_text(encoding='utf-8')
+    assert 'nexus:8080' in guide, 'the tunnel guide must name the service, not localhost'
+
+
 def test_a_private_address_is_never_published_as_direct(clean_env, monkeypatch):
     """A NAT'd container resolves to 172.x/10.x: publishing it would be a dead link."""
     clean_env.setenv('NEXUS_PLATFORM', 'vps')

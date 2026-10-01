@@ -15,7 +15,13 @@
   // is `cloudflare-worker/wrangler.toml` and is unaffected by this file.
   // ===========================================================================
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "nexus-panel",
+  // This has to be the name the Worker already has in the dashboard, because a
+  // connected build deploys into the Worker that owns the Git integration. On a
+  // mismatch Cloudflare does not fail — it silently overrides the name with the
+  // dashboard one, prints a warning, and opens a pull request to "resolve" this
+  // line. If you created your Worker under a different name, change this line to
+  // that name; nothing else in the repository depends on it.
+  "name": "mizetusi",
   "main": "cloudflare-containers/worker.js",
   "compatibility_date": "2026-09-17",
   "compatibility_flags": ["nodejs_compat"],

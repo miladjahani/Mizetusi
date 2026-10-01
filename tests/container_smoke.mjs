@@ -81,6 +81,26 @@ if (config) {
       `${className} must be registered in a new_sqlite_classes migration`);
   }
 
+  // --------------------------------------------- the name Cloudflare deploys into
+  // A connected build deploys into the Worker that owns the Git integration, so a
+  // `name` that does not match the dashboard one is survivable — Cloudflare
+  // overrides it — but it prints a warning and opens a pull request against this
+  // file. The same name is what the guide tells the user to type into the
+  // dashboard, so the two have to move together.
+  const workerName = config.name || '';
+  check(/^[a-z0-9][a-z0-9-]*$/.test(workerName),
+    `wrangler.jsonc must declare a valid lowercase Worker name (got "${workerName}")`);
+  check(read('docs/CLOUDFLARE-DEPLOY-FA.md').includes('`' + workerName + '`'),
+    `docs/CLOUDFLARE-DEPLOY-FA.md must tell the user to name the Worker \`${workerName}\``);
+
+  // --------------------------------------------------------- the plan that exists
+  // Containers are not offered on the Free plan, and the failure that produces is
+  // the `/containers/me` error at the very end of the deploy — after the image has
+  // been built and the Worker uploaded — which reads like a token problem. The
+  // guide has to warn about it before the user starts, not in the cost appendix.
+  check(/Workers Paid/.test(read('docs/CLOUDFLARE-DEPLOY-FA.md')),
+    'docs/CLOUDFLARE-DEPLOY-FA.md must lead with the Workers Paid plan requirement');
+
   // ------------------------------------------------------ the image really exists
   const image = (declared && declared.image) || '';
   const dockerfilePath = image.replace(/^\.\//, '');

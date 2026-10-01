@@ -23,11 +23,19 @@
  * paths go through exactly one code path, covered by one test suite
  * (`tests/worker_smoke.mjs` drives both shapes).
  *
+ * The one thing that is not free
+ * ------------------------------
+ * Containers exist only on the **Workers Paid** plan ($5/month, usage included);
+ * a Free-plan account builds the image, uploads the Worker and then fails the
+ * deploy on `/accounts/<id>/containers/me`, which reads exactly like a bad API
+ * token. `docs/CLOUDFLARE-DEPLOY-FA.md` leads with that for the same reason.
+ *
  * One instance on purpose
  * -----------------------
  * A panel is stateful: users, quotas, subscription tokens and settings live in one
  * database. `max_instances: 1` in `wrangler.jsonc` and one fixed name here
- * (`nexus-panel`) mean every request lands on the same container, instead of a
+ * (`nexus-panel` — a Durable Object instance id, unrelated to the Worker's own
+ * name) mean every request lands on the same container, instead of a
  * fresh one per path — a container per path would hand a user a subscription that
  * the next request cannot find.
  *

@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
-# NEXUS on a fresh VPS — one command.
+# NEXUS on a fresh Linux host — one command.
 #
-# A VPS is the deployment where every transport is available (Reality, AnyTLS,
-# TUIC, MTProto, the HTTP/SOCKS5 web proxies), because the host owns its ports
-# instead of asking a platform for a TCP proxy. This script does the four things
-# that otherwise have to be done by hand:
+# Run this on any host you control: it installs Docker, fetches this repository,
+# writes a `.env` with a generated admin password and session secret, and starts
+# the stack. There are two shapes, and the difference is where the public address
+# comes from:
+#
+#   * a host with its own public IP (a VPS) serves every transport — Reality,
+#     AnyTLS, TUIC, MTProto and the HTTP/SOCKS5 web proxies — because the host
+#     owns its ports instead of asking a platform for a TCP proxy. Pass no flags
+#     and open the ports it prints.
+#   * a host behind NAT — a home connection, a Raspberry Pi, an old laptop — needs
+#     `--tunnel <token>`, which adds a Cloudflare Tunnel. `cloudflared` dials
+#     *out*, so nothing needs a public IP, a forwarded port or a firewall change,
+#     and it costs nothing (`docs/FREE-DEPLOY-FA.md`). Only HTTP(S) and WebSocket
+#     upgrades cross a tunnel, so the raw-TCP transports stay unpublished — that
+#     is not a misconfiguration, and `--tunnel` tells the panel so by setting
+#     NEXUS_PLATFORM=tunnel, which is what stops it publishing links a client
+#     could never dial.
+#
+# This script does the four things that otherwise have to be done by hand:
 #
 #   1. install Docker + the compose plugin (Debian/Ubuntu, via Docker's own
 #      convenience script — nothing else is assumed to be present);
@@ -19,11 +34,14 @@
 #   # …or, on an existing checkout:
 #   sudo bash scripts/install-vps.sh
 #   sudo bash scripts/install-vps.sh --domain panel.example.com --open-firewall
+#   sudo bash scripts/install-vps.sh --tunnel <token> --domain panel.example.com
 #
 # Flags:
 #   --domain <host>   the domain clients should use (default: the host's IP)
 #   --dir <path>      where the checkout lives / is cloned (default /opt/nexus)
 #   --repo <url>      repository to clone (default: this project)
+#   --tunnel <token>  publish through a Cloudflare Tunnel instead of opening ports
+#                     (the free path for a host with no public IP)
 #   --open-firewall   run the ufw rules for the published ports (default: print them)
 #   --no-build        skip `docker compose build` (reuse existing images)
 set -euo pipefail
@@ -31,6 +49,7 @@ set -euo pipefail
 REPO_URL="${NEXUS_REPO_URL:-https://github.com/miladjahani/Mizetusi.git}"
 TARGET_DIR="${NEXUS_DIR:-/opt/nexus}"
 DOMAIN=""
+TUNNEL_TOKEN=""
 OPEN_FIREWALL=0
 DO_BUILD=1
 
@@ -49,12 +68,20 @@ while [ $# -gt 0 ]; do
     --domain) DOMAIN="${2:-}"; shift 2 ;;
     --dir) TARGET_DIR="${2:-}"; shift 2 ;;
     --repo) REPO_URL="${2:-}"; shift 2 ;;
+    --tunnel) TUNNEL_TOKEN="${2:-}"; shift 2 ;;
     --open-firewall) OPEN_FIREWALL=1; shift ;;
     --no-build) DO_BUILD=0; shift ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -euo pipefail/p' "$0"; exit 0 ;;
     *) die "unknown flag: $1 (try --help)" ;;
   esac
 done
+
+# The profile is chosen by the flag, and an empty token would silently start a
+# tunnel that authenticates as nobody — so it is refused here rather than leaving
+# a container in a restart loop.
+if [ "${TUNNEL_TOKEN:-}" != "" ] && [ -z "${TUNNEL_TOKEN// /}" ]; then
+  die "--tunnel needs the token, not empty space"
+fi
 
 [ "$(id -u)" -eq 0 ] || die "run this as root (or: sudo bash $0)"
 
@@ -101,6 +128,17 @@ random_secret() {
 if [ -f .env ]; then
   log ".env already exists — left untouched (your password and secret stay)"
   grep -q '^ADMIN_PASSWORD=' .env || warn "ADMIN_PASSWORD is not set in .env; add it before exposing the panel"
+  # The tunnel flag is the one thing that *does* update an existing file: it is a
+  # new decision about how the host is published, not a secret to preserve. Both
+  # lines are rewritten in place so a re-run cannot leave the old platform (which
+  # would promise ports the tunnel does not carry) next to a fresh token.
+  if [ -n "$TUNNEL_TOKEN" ]; then
+    log "updating .env for the Cloudflare Tunnel"
+    cp .env .env.backup
+    sed -i '/^NEXUS_PLATFORM=/d;/^CLOUDFLARE_TUNNEL_TOKEN=/d' .env
+    printf 'NEXUS_PLATFORM=tunnel\nCLOUDFLARE_TUNNEL_TOKEN=%s\n' "$TUNNEL_TOKEN" >> .env
+    chmod 600 .env
+  fi
 else
   log "writing .env with a generated admin password and session secret"
   ADMIN_PASS="$(random_secret 24)"
@@ -116,21 +154,64 @@ PUBLIC_BASE_URL=${DOMAIN:+https://${DOMAIN}}
 SQLITE_PATH=/data/nexus.db
 XRAY_ENABLED=true
 EOF
+  if [ -n "$TUNNEL_TOKEN" ]; then
+    cat >> .env <<EOF
+# Cloudflare Tunnel: this host is published through Cloudflare, not on its own
+# ports, so the panel must not advertise a raw TCP endpoint it cannot serve.
+NEXUS_PLATFORM=tunnel
+CLOUDFLARE_TUNNEL_TOKEN=${TUNNEL_TOKEN}
+EOF
+  fi
   chmod 600 .env
   printf '\n    \033[1;36mADMIN_PASSWORD = %s\033[0m\n' "$ADMIN_PASS"
   printf '    (also saved in %s/.env — change it in the panel any time)\n\n' "$TARGET_DIR"
 fi
 
 # ------------------------------------------------------------------ 4. start
-log "building and starting the stack"
+# An empty array under `set -u` is a bash-version trap, so the profile list is
+# expanded through the ${arr[@]+...} form.
+PROFILE=()
+[ -n "$TUNNEL_TOKEN" ] && PROFILE=(--profile tunnel)
+
+log "building and starting the stack${TUNNEL_TOKEN:+ (with the Cloudflare Tunnel profile)}"
 if [ "$DO_BUILD" -eq 1 ]; then
-  docker compose up -d --build
+  docker compose ${PROFILE[@]+"${PROFILE[@]}"} up -d --build
 else
-  docker compose up -d
+  docker compose ${PROFILE[@]+"${PROFILE[@]}"} up -d
 fi
 
 # ------------------------------------------------------------------ 5. summary
 HOST="${DOMAIN:-$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo '<this-host>')}"
+
+if [ -n "$TUNNEL_TOKEN" ]; then
+cat <<EOF
+
+  NEXUS is up, behind a Cloudflare Tunnel.
+
+    panel : https://${DOMAIN:-<your-tunnel-hostname>}/admin
+              (the Public Hostname you set in Zero Trust → Networks → Tunnels →
+               your tunnel, with the service URL http://nexus:8080)
+
+  Nothing was forwarded and no port was opened: cloudflared keeps an outbound
+  connection to Cloudflare, so this host needs no public IP and can sit behind
+  NAT on a normal home connection.
+
+    live here : the panel, subscription and portal links, every WebSocket
+                transport (VLESS/VMess/Trojan/Shadowsocks/WARP) and the Telegram
+                WEB proxy
+    not here  : Reality, AnyTLS, TUIC, MTProto and the HTTP/SOCKS5 web proxies —
+                they need a raw TCP/UDP port, which a tunnel does not carry. The
+                panel knows (NEXUS_PLATFORM=tunnel) and withholds them rather
+                than handing users dead links. A machine that really has a public
+                IP and a forwarded port can serve them: set NEXUS_DIRECT_HOST
+                and NEXUS_DIRECT_PORT in .env.
+
+  Log in with the ADMIN_PASSWORD printed above (or the one already in .env).
+
+EOF
+fi
+
+if [ -z "$TUNNEL_TOKEN" ]; then
 cat <<EOF
 
   NEXUS is up.
@@ -165,4 +246,5 @@ else
   echo "    ${PORTS_TCP[*]}"
   echo "  (or re-run with --open-firewall to add the ufw rules now)"
   echo
+fi
 fi

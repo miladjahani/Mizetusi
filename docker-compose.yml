@@ -45,7 +45,12 @@ services:
       - '10106:10106' # Trojan · gRPC
     environment:
       PORT: '8080'
-      NEXUS_PLATFORM: vps
+      # Overridable because the same stack runs two ways. `vps` (the default) is
+      # the host that owns its ports. `tunnel` is the same host reached only
+      # through the ``tunnel`` profile below — see app/runtime.py, which then
+      # stops advertising a raw TCP endpoint a NAT'd machine cannot serve.
+      # scripts/install-vps.sh --tunnel sets it.
+      NEXUS_PLATFORM: '${NEXUS_PLATFORM:-vps}'
       # Set this to the domain clients should use; leave empty to fall back to
       # the machine's own public IP for the origin node.
       NEXUS_PUBLIC_DOMAIN: '${NEXUS_PUBLIC_DOMAIN:-}'
@@ -120,6 +125,44 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+
+  # -------------------------------------------------- the free public address
+  # Opt-in (``docker compose --profile tunnel up -d``) and the only way this
+  # stack gets a public HTTPS name without a public IP, an open port, a paid host
+  # or a credit card — which is what makes it the free deployment
+  # (docs/FREE-DEPLOY-FA.md).
+  #
+  # ``cloudflared`` dials *out* to Cloudflare and holds that connection open, so:
+  #   * nothing has to be forwarded on the router and no port has to be opened
+  #     on the host, so a machine behind NAT — a home connection, a Raspberry Pi,
+  #     an old laptop — is a valid place to run this;
+  #   * the public name is a subdomain of a domain the Cloudflare account owns,
+  #     so clients get Cloudflare's anycast IPs instead of the host's address;
+  #   * it is free. No plan to buy, no card to enter.
+  #
+  # Create the tunnel once (Cloudflare Zero Trust → Networks → Tunnels → Create),
+  # point its public hostname at ``http://nexus:8080`` — the *compose service
+  # name*, not localhost, because cloudflared resolves it on the compose network —
+  # and put the token in .env as ``CLOUDFLARE_TUNNEL_TOKEN``.
+  # ``scripts/install-vps.sh --tunnel <token>`` writes that and starts this profile.
+  #
+  # Only HTTP(S) and WebSocket upgrades cross this tunnel, so with it the panel
+  # and the WebSocket transports are live while the raw-TCP ones (Reality, AnyTLS,
+  # MTProto) are not — that is why --tunnel also sets NEXUS_PLATFORM=tunnel. If
+  # this machine really does have a public IP and a forwarded port, set
+  # NEXUS_DIRECT_HOST/NEXUS_DIRECT_PORT and the panel will publish it.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ['tunnel']
+    restart: unless-stopped
+    depends_on:
+      - nexus
+    command:
+      - tunnel
+      - --no-autoupdate
+      - run
+      - --token
+      - '${CLOUDFLARE_TUNNEL_TOKEN:-}'
 
 volumes:
   caddy-data:

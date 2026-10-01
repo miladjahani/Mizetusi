@@ -8,6 +8,14 @@
 
 > **یک واقعیت که باید اول بدانید:** Worker فقط JavaScript/WASM اجرا می‌کند؛ نه Python، نه پروسه، نه Xray. پس «کل برنامه داخل خود Worker» از نظر فنی وجود ندارد. آنچه وجود دارد **Container** است: ماشین لینوکس واقعیِ کلودفلر که از `Dockerfile` همین مخزن ساخته می‌شود و Worker جلوی آن می‌ایستد. این راهنما همان است، و از نظر نتیجه «همه‌چیز روی کلودفلر» می‌شود.
 
+> **پیش‌نیازی که باید قبل از هر کاری چک کنید: Container فقط روی پلن Workers Paid وجود دارد.** در پلن Free اصلاً ارائه نمی‌شود — جدول رسمی قیمت کلودفلر برای Free در ستون‌های Memory و CPU و Disk مقدار `N/A` می‌گذارد، و کل مصرف Containers داخل همان ۵ دلار در ماه Workers Paid حساب می‌شود. اگر حساب روی Free باشد، همه‌چیز تا آخرین لحظه پیش می‌رود (حتی تصویر Docker هم در محیط build کلودفلر ساخته و push می‌شود) و بعد deploy دقیقاً در آخرین ثانیه با این خطا می‌ایستد:
+>
+> ```
+> ✘ [ERROR] A request to the Cloudflare API (/accounts/<account-id>/containers/me) failed.
+> ```
+>
+> **این خطا دربارهٔ توکن نیست.** خطای واقعی توکن هم شکل مشابهی دارد و همین گمراه‌کننده است؛ اگر بدون تنظیم هیچ توکنی و با توکنی که خود کلودفلر برای build ساخته هم همین پیام را می‌گیرید، مسئله پلن است. اول این را چک کنید: Dashboard → **Workers & Pages** → بخش Plans → **Workers Paid** را فعال کنید، بعد در **Deployments → Retry build** همان build را دوباره اجرا کنید. (اگر مطمئنید پلن Paid فعال است و باز هم همین خطا را می‌گیرید، سراغ بخش ۱۲ بروید: آن‌جا حالت دوم — توکن دستی با دسترسی Containers — آمده است.)
+
 زمان کل: با راه صفر (وصل‌کردن مخزن) حدود ۵ دقیقه کار دستی، به‌علاوهٔ اولین build که چند دقیقه طول می‌کشد.
 
 ---
@@ -18,7 +26,7 @@
 
 1. Cloudflare Dashboard → **Workers & Pages** → **Create application** → کنار **Import a repository** روی **Get started** بزن.
 2. حساب GitHub را وصل کن و مخزن `miladjahani/Mizetusi` را انتخاب کن.
-3. نام Worker **باید** `nexus-panel` باشد — دقیقاً همان نامی که در `wrangler.jsonc` نوشته شده. (کلودفلر صریح گفته: اگر نام Worker در داشبورد با نام داخل فایل تنظیمات یکی نباشد، build شکست می‌خورد.)
+3. نام Worker را `mizetusi` بگذار — دقیقاً همان نامی که این مخزن در `wrangler.jsonc` نوشته است. اگر اسم دیگری انتخاب می‌کنی، همان یک خط `name` را به آن اسم عوض کن؛ هیچ جای دیگری در مخزن به آن وابسته نیست. (اگر نام‌ها یکی نباشند کلودفلر build را متوقف نمی‌کند: نام داشبورد را جای نام فایل می‌گذارد، یک هشدار می‌دهد و pull request باز می‌کند تا این خط را «اصلاح» کند — پس بهتر است از اول یکی باشند.)
 4. تنظیمات build را **دقیقاً** این‌طور بگذار:
 
    | تنظیم | مقدار |
@@ -164,11 +172,11 @@ sh cloudflare-containers/deploy.sh --domain panel.example.com --db 'postgresql:/
 
 ## ۶. دامنهٔ اختصاصی (مهم‌ترین قدم برای ایران)
 
-1. Workers & Pages → Worker شما (`nexus-panel`) → Settings → **Domains & Routes**.
+1. Workers & Pages → Worker شما (`mizetusi`) → Settings → **Domains & Routes**.
 2. **Add custom domain** → مثلاً `panel.example.com`.
 3. کلودفلر خودش گواهی TLS را صادر می‌کند.
 
-بدون این قدم، Worker روی `nexus-panel.<sub>.workers.dev` جواب می‌دهد و آن پسوند کل در ایران فیلتر است — یعنی یک آدرس دوم که فقط با VPN باز می‌شود.
+بدون این قدم، Worker روی `mizetusi.<sub>.workers.dev` جواب می‌دهد و آن پسوند کل در ایران فیلتر است — یعنی یک آدرس دوم که فقط با VPN باز می‌شود.
 
 ---
 
@@ -247,6 +255,10 @@ npm run deploy
 ## ۱۱. هزینه و محدودیت‌ها
 
 - **پلن Workers Paid** لازم است (۵ دلار در ماه) و مصرف Container جداگانه بر اساس vCPU-ثانیه، حافظه-ثانیه و دیسک حساب می‌شود.
+- **سهمیهٔ ماهانهٔ همان ۵ دلار را جدی بگیرید، چون انتخاب `instance_type` هزینه را چند برابر می‌کند.** Workers Paid در ماه ۲۵ GiB-ساعت حافظه، ۳۷۵ vCPU-دقیقه و ۲۰۰ GB-ساعت دیسک شامل می‌شود و بعد از آن مصرف حساب می‌شود (حافظه: ۰٫۰۰۰۰۰۲۵ دلار برای هر GiB-ثانیه). با این حساب:
+  - `basic` = ۱ GiB حافظه → سهمیه حدود **۲۵ ساعت** روشن‌بودن در ماه را پوشش می‌دهد و بعد از آن حدود **۰٫۰۰۹ دلار در ساعت**.
+  - `standard-1` (پیش‌فرض فعلی) = ۴ GiB → همان سهمیه فقط حدود **۶ ساعت** است و بعد از آن حدود **۰٫۰۳۶ دلار در ساعت**؛ اگر ۲۴/۷ روشن بماند حدود **۲۵ دلار در ماه**، تازه بدون vCPU.
+  یک پنل که تونلٔ زنده سرو می‌کند عملاً بیدار می‌ماند (`sleepAfter = '1h'` هم بعد از آخرین فعالیت یک ساعت دیگر روشن نگهش می‌دارد)، پس اگر تعداد کاربرانت کم است `instance_type` را در `wrangler.jsonc` روی `basic` بگذار: برای چند کاربر کافی است و چهار برابر ارزان‌تر در می‌آید.
 - **`sleepAfter = '1h'`** در `cloudflare-containers/worker.js`: یک ساعت بی‌کاری، Container خاموش می‌شود. هر تونل زنده همیشه فعالیت را تازه می‌کند، پس وسط دانلود چیزی قطع نمی‌شود؛ ولی یک نصب بی‌استفاده پول اضافه نمی‌دهد.
 - **تصویر باید در دیسک آن instance type جا شود** («Image size: Same as instance disk space»). دیسک `basic` چهار گیگ است و برای این تصویر کافی است.
 - **پورت ورودی خام و UDP وجود ندارد** — همان جدول بخش ۱.
@@ -265,7 +277,9 @@ npm run deploy
 | `docker info` خطا می‌دهد | Docker اجرا نیست | Docker Desktop / colima را بالا بیاورید؛ بدونش تصویر build نمی‌شود |
 | خطای حجم تصویر | instance type کوچک است | `instance_type` را در `wrangler.jsonc` یک درجه بالا ببرید |
 | خطای architecture در build | روی مک Apple Silicon ایمیج باید amd64 باشد | در Docker Desktop گزینهٔ Rosetta/`linux/amd64` را فعال کنید |
-| build در کلودفلر با خطای نام شکست می‌خورد | نام Worker در داشبورد با `name` داخل `wrangler.jsonc` یکی نیست | Worker را دقیقاً `nexus-panel` نام‌گذاری کن (بخش ۰) |
+| deploy با `[WARNING] Failed to match Worker name` و بعد یک pull request دربارهٔ `name` | نام Worker در داشبورد با `name` داخل `wrangler.jsonc` یکی نیست | نام داشبورد را بگذار (پیش‌فرض این مخزن `mizetusi` است)، یا همان یک خط `name` را عوض کن (بخش ۰) |
+| ایمیج Docker ساخته و push می‌شود و Worker هم آپلود می‌شود، ولی deploy آخر با `A request to the Cloudflare API (/accounts/<id>/containers/me) failed` می‌ایستد | **حساب روی پلن Free است.** Containers فقط در Workers Paid وجود دارد و خطای پلن دقیقاً شبیه خطای توکن دیده می‌شود | Workers & Pages → Plans → **Workers Paid** را فعال کن، بعد Retry build (بخش ۰) |
+| همان خطای `containers/me` روی حسابِ **Paid** | توکن Workers Builds دسترسی Containers ندارد | Settings → Builds → **API token**: یک توکن دستی بساز (My Profile → API Tokens) با `Workers Scripts: Edit` + `Workers Containers: Edit` + `Workers R2 Storage: Edit` و همان را برای build انتخاب کن، بعد Retry |
 | build تمام نمی‌شود و آخرین خطش `Ready on http://localhost:8787` است | Build command روی `bun run dev` / `npm run dev` مانده — یک dev server که هیچ‌وقت خارج نمی‌شود | Settings → Builds → Build command را `npm run build` بگذار، Deploy command را `npx wrangler deploy`، ذخیره و Retry |
 | فیلد Build command خالی را قبول نمی‌کند | در بعضی مسیرهای ساخت پروژه این خانه اجباری است | `npm run build` را بگذار — سریع تمام می‌شود و همان چک تنظیمات است |
 | build روی نصب وابستگی‌ها شکست می‌خورد | نسخهٔ Node محیط build قدیمی است | در Settings → Builds نسخهٔ Node را ۲۰ یا بالاتر بگذار؛ `package-lock.json` در مخزن هست تا نصب قطعی باشد |

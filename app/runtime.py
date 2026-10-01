@@ -45,6 +45,19 @@ PLATFORMS = {
     # forwards HTTP and WebSocket upgrades only — there is no raw TCP port and no
     # UDP, exactly like Render without a TCP port.
     'cloudflare': {'label': 'Cloudflare (Worker + Container)', 'tcp': 'none', 'udp': False},
+    # A Cloudflare Tunnel deployment: the app runs on a machine the operator owns,
+    # but ``cloudflared`` is the only way in. It dials *out* and carries HTTP(S)
+    # and WebSocket upgrades, so the host needs no public IP, no forwarded port
+    # and no firewall change — which is exactly what makes a home connection, a
+    # Raspberry Pi or an old laptop a valid host, and is what the free deployment
+    # is built on (`docs/FREE-DEPLOY-FA.md`).
+    #
+    # It is *not* the same as ``docker``: that platform promises ports are free,
+    # and behind NAT they are not, so ``tcp: 'none'`` is the only truthful answer.
+    # ``has_tcp()`` still honours an explicit NEXUS_DIRECT_HOST/NEXUS_DIRECT_PORT,
+    # so an operator who really did forward a port opts in deliberately instead of
+    # the panel publishing a Reality link nobody can dial.
+    'tunnel': {'label': 'Cloudflare Tunnel (self-hosted)', 'tcp': 'none', 'udp': False},
     'docker': {'label': 'VPS / Docker', 'tcp': 'always', 'udp': True},
     'local': {'label': 'Local', 'tcp': 'always', 'udp': True},
 }
@@ -289,6 +302,11 @@ def _notes(pid, endpoint):
         return ['این نسخه داخل Cloudflare Container اجرا می‌شود و فقط از طریق Worker در دسترس است؛ '
                 'همهٔ مسیرهای WebSocket (VLESS/VMess/Trojan/Shadowsocks/WARP) و خود پنل کار می‌کنند، '
                 'اما پورت TCP خام وجود ندارد، پس Reality و بقیهٔ ترنسپورت‌های پورت‌دار منتشر نمی‌شوند.']
+    if pid == 'tunnel':
+        return ['این نسخه روی ماشین خودتان اجرا می‌شود و فقط از طریق Cloudflare Tunnel در دسترس است؛ '
+                'پنل و همهٔ مسیرهای WebSocket (VLESS/VMess/Trojan/Shadowsocks/WARP) و پروکسی WEB تلگرام کار می‌کنند، '
+                'اما تونل پورت TCP خام و UDP را عبور نمی‌دهد، پس Reality و بقیهٔ ترنسپورت‌های پورت‌دار منتشر نمی‌شوند. '
+                'اگر این ماشین IP عمومی دارد و پورتی را هم فوروارد کرده‌اید، NEXUS_DIRECT_HOST و NEXUS_DIRECT_PORT را ست کنید.']
     if pid in ('docker', 'local'):
         return (['پورت %s برای Reality در دسترس است.' % endpoint['port']] if endpoint
                 else ['آی‌پی عمومی قابل‌اتکا پیدا نشد (شاید پشت NAT باشید)؛ NEXUS_DIRECT_HOST و '
