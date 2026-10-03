@@ -139,5 +139,35 @@ class Settings(BaseSettings):
     telegram_web_origin: str = 'https://web.telegram.org'
     xray_api_port: int = 10085
     xray_sync_interval: int = 10
+    # -------------------------------------------------- lightweight profile
+    # NEXUS_LIGHT=1 is for a small instance or a plan that meters usage: every
+    # background loop runs rarer and the clean-IP probe volume shrinks, so the
+    # panel idles close to zero CPU and sends far fewer outbound connects —
+    # the repo already treats aggressive probing as the thing that makes a
+    # host nervous. It trims the panel's own housekeeping only: Xray's
+    # listeners, every client's tunnel and every published link are untouched,
+    # and each stretched value still clears the max() floors the loops keep.
+    light: bool = False
     model_config = SettingsConfigDict(env_file='.env', extra='ignore', case_sensitive=False)
-settings=Settings()
+
+
+def _apply_light(s: Settings) -> Settings:
+    """Stretch the background cadence of a settings object in light mode.
+
+    A plain function rather than a pydantic validator, so the module singleton
+    and the tests run exactly one code path. ``max`` keeps an explicitly calmer
+    value an admin already set; ``min`` only ever tightens the probe volume.
+    """
+    if not s.light:
+        return s
+    s.xray_sync_interval = max(s.xray_sync_interval, 30)
+    s.cores_sync_interval = max(s.cores_sync_interval, 60)
+    s.telegram_sync_interval = max(s.telegram_sync_interval, 60)
+    s.auto_reset_interval = max(s.auto_reset_interval, 300)
+    s.cf_probe_interval = max(s.cf_probe_interval, 1800)
+    s.cf_probe_limit = min(s.cf_probe_limit, 32)
+    s.cf_probe_concurrency = min(s.cf_probe_concurrency, 4)
+    return s
+
+
+settings=_apply_light(Settings())

@@ -1112,11 +1112,19 @@ explicit:
 | `cf_probe_concurrency` | `8` | probes in flight at once |
 | `scan_on_boot` (`NEXUS_SCAN_ON_BOOT`) | `0` | never seed the pool automatically at boot |
 | `outbound_probe_enabled` (`NEXUS_OUTBOUND_PROBE_ENABLED`) | `1` | `0` stops every external probe and ping |
+| light profile (`NEXUS_LIGHT`) | `0` | `1` is the calmest idle a small host can get |
 
 With the defaults a fresh deploy publishes only the origin node — which is a complete
 subscription — and the admin scans a provider on demand from the panel (or presses
 «اسکن همه providerها»). The «منابع لبه و لوکیشن‌ها» card shows the active scan mode and the
 per-pass size, so the outbound footprint is visible rather than implicit.
+
+The **light profile** (`NEXUS_LIGHT=1`) is the one switch for a small or metered instance:
+the Xray/cores/Telegram sync loops stretch to 30s/60s/60s, the maintenance pass to five
+minutes, and the probe pass to every thirty minutes with half the pool and a quarter of the
+concurrency. It trims the panel's own housekeeping only — the listeners, every client's
+tunnel and every published link are untouched, and an explicitly calmer value an admin
+already set is never tightened.
 
 ### Edge sources (clean IPs, clean domains, locations)
 
