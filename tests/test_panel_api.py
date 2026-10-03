@@ -36,6 +36,13 @@ def h():
     return {'X-Admin-Password': _admin_password()}
 
 
+def browser():
+    """How a real browser asks for a module: Fetch Metadata saying the file
+    belongs to the page that asked for it — which is what keeps the panel's
+    own source private from callers that are not loading our pages."""
+    return {'Sec-Fetch-Site': 'same-origin'}
+
+
 def _seed_nodes():
     execute('DELETE FROM nodes')
     upsert('railway-direct', 'railway', 'railway.example.com', 443, True, 'railway.example.com', 'railway.example.com', 'railway', {})
@@ -50,7 +57,7 @@ def test_static_assets_are_served():
     assert 'text/css' in css.headers['content-type']
     assert 'Vazirmatn' in css.text
     for name in PANEL_MODULES:
-        js = client.get(f'/static/{name}')
+        js = client.get(f'/static/{name}', headers=browser())
         assert js.status_code == 200, name
         assert 'javascript' in js.headers['content-type']
     # The old five-script bundle is gone; a stale copy would shadow the modules.
@@ -120,7 +127,7 @@ def test_every_module_import_resolves():
     import re
     seen = set()
     for name in PANEL_MODULES:
-        source = client.get(f'/static/{name}').text
+        source = client.get(f'/static/{name}', headers=browser()).text
         for target in re.findall(r"from\s+'([^']+)'", source):
             if not target.startswith('.'):
                 continue
@@ -156,7 +163,7 @@ def test_dashboard_shell_references_assets():
 def test_panel_carries_no_legacy_brand():
     # The panel was renamed: no shipped asset may still carry the old codename.
     for name in PANEL_MODULES:
-        assert 'ZEUS' not in client.get(f'/static/{name}').text
+        assert 'ZEUS' not in client.get(f'/static/{name}', headers=browser()).text
 
 
 def test_pwa_assets_are_installable():
@@ -495,9 +502,13 @@ def test_panel_bootstraps_from_url_token():
     page = anonymous.get(f'/?token={token}')
     assert page.status_code == 200
     assert '/static/js/app.js' in page.text
-    # Without a session (bad token or no token at all) the shell must not render.
-    assert anonymous.get('/?token=bogus', follow_redirects=False).status_code == 303
-    assert anonymous.get('/', follow_redirects=False).headers['location'] == '/login'
+    # Without a session (bad token or no token at all) the shell must not
+    # render: the address shows its public face instead of a login bounce.
+    for path in ('/?token=bogus', '/'):
+        public = anonymous.get(path, follow_redirects=False)
+        assert public.status_code == 200
+        assert '/static/js/app.js' not in public.text
+        assert 'id="loginForm"' not in public.text
 
 
 def test_node_update_and_delete():

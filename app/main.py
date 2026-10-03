@@ -403,7 +403,26 @@ async def security_headers(request:Request,call_next):
     an embedded preview pane on another origin, and denying that would break the
     admin's own login instead of an attacker. The three below cost nothing and
     stop MIME sniffing, referrer leakage and device-API probing from any page.
+
+    The panel's own JavaScript is decided here, before routing, because it is
+    one directory (``/static/js/``) that a session-less caller has no business
+    reading: the whole interface — every section, every label — arrives as one
+    download. The two callers that legitimately need it without a session
+    cookie still pass: a browser loading its own document's scripts sends
+    ``Sec-Fetch-Site: same-origin`` (including inside an embedded pane that
+    refuses cookies), and a logged-in admin carries the session itself.
     """
+    if stealth.assets_on() and stealth.is_panel_js(request.url.path):
+        allowed=stealth.same_origin_browser(request)
+        if not allowed:
+            try: auth(request)
+            except HTTPException: allowed=False
+            else: allowed=True
+        if not allowed:
+            response=_decoy(request,not_found=True,status=404) if stealth.decoy_on() \
+                else JSONResponse({'detail':'Not Found'},status_code=404)
+            response.headers.setdefault('X-Content-Type-Options','nosniff')
+            return stealth.scrub(response)
     response=await call_next(request)
     response.headers.setdefault('X-Content-Type-Options','nosniff')
     response.headers.setdefault('Referrer-Policy','no-referrer')
@@ -468,14 +487,30 @@ async def home(request:Request,token:str=''):
         # Session bootstrap for clients whose browser refuses the session cookie
         # (embedded preview panes): a valid token renders the panel directly and
         # the front-end keeps using it as the X-Nexus-Session header.
-        # The login hop stays on whichever mount this request arrived through, so
-        # a panel opened at /admin lands on /admin/login rather than being bounced
-        # to the root address.
-        if not _valid_token(token): return RedirectResponse(f'{panel_root(request)}/login',303)
+        # Without one, the address shows its public face: an ordinary web app
+        # with a way in, rather than a redirect whose Location header names the
+        # login page — which is the first thing any probe reads. Switching
+        # ``stealth_decoy`` off restores the old bounce.
+        if not _valid_token(token):
+            if stealth.decoy_on(): return _decoy(request)
+            return RedirectResponse(f'{panel_root(request)}/login',303)
     _ensure_catalog(request)
     return templates.TemplateResponse(request,'index.html',{'users':len(list_users()),'proxies':len(list_proxies()),'nodes':len(active_nodes()),'brand':_brand()})
+
+
+def _decoy(request:Request,not_found=False,status=200):
+    """The public face (templates/decoy.html): one template for the front door
+    of an anonymous visit and for the 404 of a path this app does not have.
+
+    Self-contained on purpose — no panel stylesheet, no panel script — so
+    rendering it (or following it through a crawler) discovers nothing about
+    the product behind it.
+    """
+    return templates.TemplateResponse(request,'decoy.html',
+        {'brand':_brand(),'prefix':panel_root(request),'base':public_url(request),
+         'not_found':not_found,'year':time.gmtime().tm_year},status_code=status)
 @app.get('/login',response_class=HTMLResponse)
-def login_page(request:Request): return templates.TemplateResponse(request,'login.html',{'brand':_brand()})
+def login_page(request:Request): return templates.TemplateResponse(request,'login.html',{'brand':_brand(),'decoy':stealth.decoy_on()})
 @app.post('/api/login')
 async def login(request:Request):
     ip=_client_ip(request)
@@ -1972,7 +2007,13 @@ PWA_SHORTCUTS=[{'name':'کاربران','short_name':'کاربران','url':'/#u
 
 @app.get('/manifest.webmanifest')
 def manifest():
-    """Installable PWA manifest, generated from the panel's own brand settings."""
+    """Installable PWA manifest, generated from the panel's own brand settings.
+
+    Fetched before any session exists (the browser reads it on the login page,
+    a crawler reads it whenever it likes), so while the decoy is on it carries
+    only a name a stranger could read: no «control center», no subscription
+    vocabulary, and no shortcuts that map the panel's sections.
+    """
     brand=_brand()
     icons=PWA_ICONS
     body={'name':f"{brand['app_name']} • مرکز کنترل",'short_name':brand['app_name'][:12] or 'NEXUS',
@@ -1985,19 +2026,75 @@ def manifest():
                    {'src':icons['maskable'],'sizes':'512x512','type':'image/png','purpose':'maskable'},
                    {'src':icons['logo'],'sizes':'any','type':'image/svg+xml','purpose':'any'}],
           'shortcuts':PWA_SHORTCUTS}
+    if stealth.decoy_on():
+        body['name']=brand['app_name']
+        body['description']=f"{brand['app_name']} — وب‌اپ سبک، بدون نصب."
+        body.pop('shortcuts',None)
     return JSONResponse(body,media_type='application/manifest+json',headers={'Cache-Control':'no-store'})
+
+
+def _strip_js_comments(source:str)->str:
+    """Drop the full-line comments and the leading block a shipped file carries.
+
+    Only whole lines that *start* with a comment marker: inline ``//`` and any
+    string that happens to contain one (a URL) are left alone, so the code is
+    never touched — only the narration around it.
+    """
+    kept=[];inside_block=False
+    for line in source.splitlines():
+        stripped=line.strip()
+        if inside_block:
+            if '*/' in line: inside_block=False
+            continue
+        if stripped.startswith('/*'):
+            if '*/' not in stripped: inside_block=True
+            continue
+        if stripped.startswith('//'): continue
+        kept.append(line)
+    return '\n'.join(kept)
 
 @app.get('/sw.js')
 def service_worker():
     """Served from the root so the worker's scope can cover the whole panel.
 
     The build token is injected here, which is what makes the browser install a
-    fresh worker (and drop the old cache) after every deploy.
+    fresh worker (and drop the old cache) after every deploy. The file is
+    fetched before any session exists — from the login page, or by anything
+    curious enough to ask — so while the decoy is on it ships without the
+    comments that narrate what kind of app this is. The caching rules stay
+    byte-for-byte; only the prose leaves.
     """
     with open(os.path.join(BASE_DIR,'static','sw.js'),'r',encoding='utf-8') as fh: source=fh.read()
     source=source.replace("const VERSION = 'nexus-dev';",f"const VERSION = 'nexus-{BUILD_TOKEN}';",1)
+    if stealth.decoy_on(): source=_strip_js_comments(source)
     return Response(source,media_type='text/javascript',
                     headers={'Service-Worker-Allowed':'/','Cache-Control':'no-cache','X-Nexus-Build':BUILD_TOKEN})
+
+# ---------------------------------------------------------------- crawler face
+# Three routes a "curious robot" always asks for, and that a 404 on all three
+# would itself be the tell: an ordinary web app has a robots file, a sitemap
+# and a favicon. None of them may point at /admin — advertising the hidden
+# address would undo the point of having one.
+@app.get('/robots.txt',response_class=PlainTextResponse)
+def robots_txt(request:Request):
+    if not stealth.decoy_on(): raise HTTPException(404,'Not Found')
+    return PlainTextResponse(f"User-agent: *\nAllow: /\n\nSitemap: {public_url(request)}/sitemap.xml\n")
+
+@app.get('/sitemap.xml')
+def sitemap_xml(request:Request):
+    if not stealth.decoy_on(): raise HTTPException(404,'Not Found')
+    document=('<?xml version="1.0" encoding="UTF-8"?>\n'
+              '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+              f'<url><loc>{public_url(request)}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n'
+              '</urlset>\n')
+    return Response(document,media_type='application/xml')
+
+@app.get('/favicon.ico')
+def favicon():
+    """The one asset every browser and every crawler asks for unprompted."""
+    if not stealth.decoy_on(): raise HTTPException(404,'Not Found')
+    with open(os.path.join(BASE_DIR,'static','icons','favicon-32.png'),'rb') as fh: icon=fh.read()
+    return Response(icon,media_type='image/png',headers={'Cache-Control':'public, max-age=86400'})
 
 @app.get('/api/version')
 def version(): return {'version':APP_VERSION,'build':BUILD_TOKEN,'python':os.sys.version.split()[0]}
@@ -2024,6 +2121,22 @@ def version(): return {'version':APP_VERSION,'build':BUILD_TOKEN,'python':os.sys
 async def panel_root_route(request:Request):
     return await home(request)
 app.mount(PANEL_PREFIX,app)
+
+
+# Everything without a route of its own answers like an ordinary website: an
+# HTML 404 in the same face as the front door, not the ``{"detail":"Not
+# Found"}`` that names the framework behind the address. Registered last on
+# purpose — every real route, every asset and the /admin mount are matched
+# before this line is ever reached — and paths under /api/ keep the JSON a
+# client (or a test) expects, because an API answering in JSON is itself the
+# ordinary thing.
+@app.api_route('/{full_path:path}',
+               methods=['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'],
+               include_in_schema=False)
+async def not_found(request:Request,full_path:str):
+    if full_path.startswith('api/') or not stealth.decoy_on():
+        raise HTTPException(404,'Not Found')
+    return _decoy(request,not_found=True,status=404)
 
 
 @app.exception_handler(Exception)

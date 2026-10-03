@@ -24,6 +24,13 @@ also hides itself from its own operator:
 * **the subscription headers** — ``X-NEXUS-*`` on ``/sub/{token}`` are useful
   diagnostics and are kept by default; a deployment that wants every scrap of
   identifying header gone can drop them with one switch.
+* **the public face** — an anonymous ``/`` used to bounce to a login page whose
+  title said what this was; it now serves an ordinary web-app landing instead,
+  with a neutral login copy, a normal ``robots.txt``/``favicon.ico`` and an
+  HTML 404 instead of the framework's JSON (``stealth_decoy``).
+* **the panel's own source** — ``/static/js/*`` is the whole UI in one
+  download; unauthenticated callers now get a 404 unless the request really
+  came from a page on this origin (``stealth_assets``).
 
 Nothing here hides the transport: the disguise of the *traffic* is
 :mod:`app.subscriptions.obfuscation` and the TLS that terminates in front of it.
@@ -37,6 +44,8 @@ DOCS = 'stealth_docs'                  # serve /docs and /openapi.json (default 
 HEALTH = 'stealth_health'              # minimal public /health (default on)
 SUB_HEADERS = 'stealth_sub_headers'    # keep X-NEXUS-* on /sub (default on)
 SERVER_HEADER = 'stealth_server_header'  # plausible Server value ('' = send none)
+DECOY = 'stealth_decoy'                # ordinary web-app face for anonymous visitors (default on)
+ASSETS = 'stealth_assets'              # hide the panel's JS from callers with no session (default on)
 
 # Headers that name the stack, whatever put them there.
 IDENTIFYING = ('server', 'x-powered-by', 'x-aspnet-version', 'x-served-by',
@@ -44,7 +53,8 @@ IDENTIFYING = ('server', 'x-powered-by', 'x-aspnet-version', 'x-served-by',
 # The panel's own diagnostic prefix on a subscription response.
 SUB_PREFIX = 'x-nexus-'
 
-DEFAULTS = {HEADERS: '1', DOCS: '0', HEALTH: '1', SUB_HEADERS: '1', SERVER_HEADER: ''}
+DEFAULTS = {HEADERS: '1', DOCS: '0', HEALTH: '1', SUB_HEADERS: '1', SERVER_HEADER: '',
+            DECOY: '1', ASSETS: '1'}
 
 LABELS = {
     HEADERS: 'حذف هدرهای معرف (Server / X-Powered-By)',
@@ -52,6 +62,8 @@ LABELS = {
     HEALTH: 'پاسخ کوتاه برای /health عمومی',
     SUB_HEADERS: 'نگه‌داشتن هدرهای X-NEXUS-* روی سابلینک',
     SERVER_HEADER: 'مقدار هدر Server به‌جای حذف',
+    DECOY: 'چهرهٔ عمومی: صفحهٔ وب‌اپ،۴۰۴ HTML، robots.txt برای بازدیدکنندهٔ بی‌نشست',
+    ASSETS: 'پنهان‌کردن کد پنل (static/js) از درخواست‌های بی‌نشست',
 }
 
 
@@ -87,12 +99,51 @@ def server_header():
     return str(store.get(SERVER_HEADER, '') or '').strip()
 
 
+def decoy_on():
+    """Whether an anonymous visitor is shown an ordinary web app instead of
+    the way in: the front door, the login copy, robots.txt, the manifest and
+    the shape of a 404 all follow this one switch."""
+    return _on(DECOY)
+
+
+def assets_on():
+    """Whether the panel's own JavaScript is hidden from callers that neither
+    hold a session nor fetch the file from a page on this origin."""
+    return _on(ASSETS)
+
+
+def same_origin_browser(request):
+    """Whether the request carries Fetch Metadata of a same-origin page.
+
+    ``Sec-Fetch-Site`` is set by every current browser on a subresource it
+    loads for its own document — a ``<script>`` tag, an import — which is
+    exactly how the panel loads its modules, including inside an embedded
+    preview pane that refuses cookies. A scanner with curl or requests sends
+    nothing at all, and a headless probe that opens the file directly sends
+    ``none``.
+    """
+    site = str(request.headers.get('sec-fetch-site') or '').strip().lower()
+    return site in ('same-origin', 'same-site')
+
+
+def is_panel_js(path):
+    """Whether this path is one of the panel's own source files.
+
+    ``/static/js/*`` is the entire interface — every section, every label —
+    downloadable as a single anonymous request. ``static/sw.js`` is served raw
+    from the same directory besides the transformed copy at ``/sw.js``, so it
+    is gated with them.
+    """
+    path = str(path or '')
+    return '/static/js/' in path or path.endswith('/static/sw.js')
+
+
 def catalog():
     """The panel view: every switch, its state and what it changes."""
     return {
         'switches': [{'key': key, 'label': LABELS[key],
                       'on': _on(key), 'default': DEFAULTS.get(key, '1')}
-                     for key in (HEADERS, DOCS, HEALTH, SUB_HEADERS)],
+                     for key in (HEADERS, DOCS, HEALTH, SUB_HEADERS, DECOY, ASSETS)],
         'server_header': server_header(),
         'server_header_key': SERVER_HEADER,
     }
@@ -101,7 +152,7 @@ def catalog():
 def save(payload):
     """Write the switches, validating the one free-text value there is."""
     changed = []
-    for key in (HEADERS, DOCS, HEALTH, SUB_HEADERS):
+    for key in (HEADERS, DOCS, HEALTH, SUB_HEADERS, DECOY, ASSETS):
         if key not in (payload or {}):
             continue
         store.set(key, '1' if str(payload[key]).strip().lower() in

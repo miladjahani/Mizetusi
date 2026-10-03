@@ -72,6 +72,22 @@ token, so a standalone deployment never touches it.
     that needs the token) and one switch drops them. The three headers a *client* reads
     (`profile-update-interval`, `subscription-userinfo`, `profile-web-page-url`) are never touched —
     hiding those would break the user's own subscription screen.
+  * **an address with no session looks like an ordinary web app, not a door.** The anonymous front
+    door used to answer `303 → /login` — a Location header announcing exactly where the entrance
+    was, on a page whose title then named the product. `stealth_decoy` (on by default) replaces that
+    whole picture: `/` and `/admin` serve a self-contained landing page with no panel stylesheet, no
+    panel script and no vocabulary of ours (a crawler can index it; a human can sign in from it), the
+    login copy drops the «control center» line *and* the printed default password, the manifest loses
+    its subscription description and its section shortcuts, `/sw.js` ships without the comments that
+    narrate what kind of app this is (the caching rules stay byte-for-byte), `robots.txt`,
+    `sitemap.xml` and `favicon.ico` answer the way an ordinary site's do — never pointing at
+    `/admin`, because advertising the hidden address would undo it — and a missing *page* is an
+    HTML 404 instead of the framework's `{"detail": "Not Found"}`, while `/api/` keeps speaking JSON,
+    because an API answering in JSON is itself the ordinary thing. `stealth_assets`, the second new
+    switch, closes the loudest leak of all: `/static/js/*` is the entire interface in one anonymous
+    download, and it is now served only to a caller that holds a session or whose
+    `Sec-Fetch-Site` says the file belongs to a page on this origin — which is exactly how every
+    browser loads its modules, embedded preview panes included. See `tests/test_decoy.py`.
   * **The container itself** now drops every Linux capability except `NET_ADMIN` (which only the WARP
     exit asks for), runs with `no-new-privileges`, a `pids_limit` and a small `noexec` `/tmp`; and an
     opt-in `edge` service (`docker compose --profile tls up -d`, see the new **`Caddyfile`**) puts

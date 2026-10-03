@@ -27,6 +27,7 @@ os.environ.setdefault('DATABASE_URL', 'sqlite:////tmp/nexus-admin-path-test.db')
 from fastapi.testclient import TestClient
 
 from app.config import settings as cfg
+from app.core import stealth
 from app.db import execute, init_db
 from app.main import PANEL_PREFIX, _setting, app
 
@@ -54,27 +55,52 @@ def test_the_prefix_is_the_admin_address_and_not_just_a_page():
 
 def test_an_anonymous_visit_lands_on_the_prefixed_login():
     """A redirect to the root's /login would drop the browser on a page that
-    looks like a different site, and would make the address bar lie."""
+    looks like a different site, and would make the address bar lie.
+
+    The default face for an anonymous visit is now the decoy web app, but its
+    way in must stay on whichever address was opened — and with the face
+    switched off, the old bounce has to come back unchanged.
+    """
     for path in (PANEL_PREFIX, PANEL_PREFIX + '/'):
         response = client.get(path, follow_redirects=False)
-        assert response.status_code == 303
-        assert response.headers['location'] == PANEL_PREFIX + '/login'
+        assert response.status_code == 200
+        # The public face, with a sign-in link that stays on this prefix.
+        assert f'href="{PANEL_PREFIX}/login"' in response.text
+        assert 'id="loginForm"' not in response.text
     # …and that login page is the real one, not a 404 from the mount.
     login_page = client.get(PANEL_PREFIX + '/login').text
     assert 'id="loginForm"' in login_page and 'id="password"' in login_page
+    # The face is a switch: off brings the original redirect back.
+    client.post('/api/stealth', headers=h(), json={stealth.DECOY: '0'})
+    try:
+        for path in (PANEL_PREFIX, PANEL_PREFIX + '/'):
+            response = client.get(path, follow_redirects=False)
+            assert response.status_code == 303
+            assert response.headers['location'] == PANEL_PREFIX + '/login'
+    finally:
+        execute('DELETE FROM settings WHERE key=?', (stealth.DECOY,))
 
 
 def test_the_root_still_answers_because_it_is_not_ours_to_take_away():
     """Two things live there: the Telegram WEB proxy's carrier
     (``/?bridge=…``) and every subscription link already handed to a user."""
     assert client.get('/', headers=h()).status_code == 200
-    assert client.get('/', follow_redirects=False).headers['location'] == '/login'
+    # Anonymous, the root shows the public face instead of a redirect whose
+    # Location header announces where the door is.
+    face = client.get('/', follow_redirects=False)
+    assert face.status_code == 200 and 'href="/login"' in face.text
     assert client.get('/login').status_code == 200
     # The carrier is answered before the session check, at the root, exactly as
     # it was before the second address existed.
     assert client.get('/?bridge=nope', follow_redirects=False).status_code in (403, 404, 400)
     assert client.get('/health').status_code == 200
     assert client.get('/api/settings', headers=h()).status_code == 200
+    # And with the face switched off, the old bounce is back.
+    client.post('/api/stealth', headers=h(), json={stealth.DECOY: '0'})
+    try:
+        assert client.get('/', follow_redirects=False).headers['location'] == '/login'
+    finally:
+        execute('DELETE FROM settings WHERE key=?', (stealth.DECOY,))
 
 
 def test_both_addresses_are_the_same_panel():

@@ -9,7 +9,12 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="{{ brand.app_name or 'NEXUS' }}">
-<title>{{ brand.app_name or 'NEXUS' }} • ورود به مرکز کنترل</title>
+{#- The login page is reachable from the public face, so while the decoy is on
+    it never says what this deployment is: a title and a subtitle like any
+    other web app, and no default-password hint for a stranger to try. It is
+    noindex either way — a login page is not content. -#}
+<meta name="robots" content="noindex,nofollow">
+<title>{{ brand.app_name or 'NEXUS' }}{% if decoy %} · ورود{% else %} • ورود به مرکز کنترل{% endif %}</title>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/static/icons/nexus.svg" type="image/svg+xml">
@@ -31,7 +36,7 @@
   <div class="login-card glass">
     <div class="brand-mark"><img src="/static/icons/nexus.svg" alt="{{ brand.app_name or 'NEXUS' }}" width="38" height="38"></div>
     <h1>{{ brand.app_name or 'NEXUS' }}</h1>
-    <p class="sub">مرکز کنترل زیرساخت پروکسی · {{ brand.platform }}</p>
+    <p class="sub">{% if decoy %}خوش آمدید؛ برای ادامه وارد شوید{% else %}مرکز کنترل زیرساخت پروکسی · {{ brand.platform }}{% endif %}</p>
     <form id="loginForm">
       <label>رمز عبور مدیر</label>
       <div class="pw-wrap">
@@ -52,8 +57,8 @@
          title="کانال پشتیبانی: {{ brand.support_url }}"><svg width="13" height="13"><use href="#i-link"/></svg> پشتیبانی</a>
       <button class="tbtn" id="install" style="display:none">نصب برنامه</button>
     </div>
-    <div class="login-hint">رمز اولیه در نصب جدید: <b>admin</b> — پس از ورود آن را تغییر دهید.</div>
-    <div class="login-hint">تمدید، راهنمای کلاینت‌ها و اطلاع از تغییرات در <a href="{{ brand.support_url }}" target="_blank" rel="noopener">کانال پشتیبانی</a>.</div>
+    {% if not decoy %}<div class="login-hint">رمز اولیه در نصب جدید: <b>admin</b> — پس از ورود آن را تغییر دهید.</div>{% endif %}
+    <div class="login-hint">{% if decoy %}اطلاع از تغییرات در{% else %}تمدید، راهنمای کلاینت‌ها و اطلاع از تغییرات در{% endif %} <a href="{{ brand.support_url }}" target="_blank" rel="noopener">کانال پشتیبانی</a>.</div>
   </div>
 </main>
 

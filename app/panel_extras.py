@@ -53,10 +53,12 @@ SETTINGS_SECTIONS = {
                  'obfs_spider_x', 'obfs_flow', 'obfs_packet_encoding',
                  'obfs_vless-xhttp', 'obfs_vless-grpc', 'obfs_vless-httpupgrade',
                  'obfs_vmess-grpc', 'obfs_trojan-grpc',
-                 # What the deployment does not announce about itself
+                 # What the deployment does not announce about itself,
+                 # including the face it shows an anonymous visitor
                  # (app/core/stealth.py).
                  'stealth_headers', 'stealth_docs', 'stealth_health',
-                 'stealth_sub_headers', 'stealth_server_header'),
+                 'stealth_sub_headers', 'stealth_server_header',
+                 'stealth_decoy', 'stealth_assets'),
     'settings': ('public_base_url', 'session_days', 'ping_interval'),
 }
 

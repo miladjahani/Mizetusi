@@ -66,8 +66,12 @@ def test_journey_sign_in_reaches_every_tab(monkeypatch):
     assert client.get('/health').status_code == 200
     login_page = client.get('/login')
     assert login_page.status_code == 200 and 'loginForm' in login_page.text
-    # Signed out, the panel sends you to the login page instead of half-rendering.
-    assert client.get('/', follow_redirects=False).status_code in (303, 307)
+    # Signed out, the panel shows its public face instead of half-rendering:
+    # an ordinary web app page, no shell, no login form.
+    public = client.get('/', follow_redirects=False)
+    assert public.status_code == 200
+    assert 'id="section-dashboard"' not in public.text
+    assert 'loginForm' not in public.text
 
     browser, token = _panel()
     panel = browser.get('/')
